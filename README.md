@@ -1,6 +1,6 @@
 # @adaptive-ds/project-registry
 
-A small in-memory catalog of Adaptive projects. You hand it a folder name, it stores a record, and you can list or look one up without walking the filesystem again.
+A project model for the machine-wide Adaptive Project Registry.
 
 Package name follows the rest of the stack: `@adaptive-ds/` plus the folder name.
 
@@ -13,22 +13,19 @@ bun add @adaptive-ds/project-registry
 ## Usage
 
 ```typescript
-import { projectRegister, projectGet, projectList } from "@adaptive-ds/project-registry"
+import { projectList, projectNormalize } from "@adaptive-ds/project-registry"
 
-const created = projectRegister({
+const normalized = projectNormalize({
+  owner: "david",
   name: "project-registry",
-  description: "In-memory Adaptive project catalog",
+  description: "Adaptive project catalog",
 })
-if (!created.success) return created
+if (!normalized.success) return normalized
 
-const found = projectGet("project-registry")
-if (!found.success) return found
-
-console.log(found.data.name)
-console.log(projectList().data.map((p) => p.name))
+console.log(projectList([normalized.data]).data.map((project) => project.name))
 ```
 
-`projectRegister` fails if the name is empty or already taken. `projectGet` fails if the id is missing. Both return a `Result` from `@adaptive-ds/result`.
+Project identity is the `(owner, name)` pair. Normalization validates the combined registry and Caddy model, and listing applies deterministic Software-compatible ordering. Fallible operations return a `Result` from `@adaptive-ds/result`.
 
 ## Scripts
 
