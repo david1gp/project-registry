@@ -1,5 +1,8 @@
 {
   "$schema": "./node_modules/@biomejs/biome/configuration_schema.json",
+  "files": {
+    "includes": ["**", "!!ui"]
+  },
   "assist": {
     "actions": {
       "source": {
@@ -11,6 +14,11 @@
     "enabled": true,
     "indentStyle": "space",
     "lineWidth": 120
+  },
+  "css": {
+    "parser": {
+      "tailwindDirectives": true
+    }
   },
   "javascript": {
     "formatter": {

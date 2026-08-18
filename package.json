@@ -3,24 +3,48 @@
   "version": "0.1.0",
   "scripts": {
     "dev": "bun test --watch",
-    "build": "rm -rf ./dist && bun tsc -p ./tsconfig.lib.json",
+    "build": "bun run build:lib && bun run build:ui",
+    "build:lib": "rm -rf ./dist && bun tsc -p ./tsconfig.lib.json && chmod 755 ./dist/cli.js ./dist/daemon.js",
+    "build:ui": "vite build --config ./vite.config.ts",
+    "vite:dev": "vite dev --config ./vite.config.ts",
+    "vite:build": "vite build --config ./vite.config.ts",
+    "rsbuild:dev": "rsbuild dev --config ./rsbuild.config.ts",
+    "rsbuild:build": "rsbuild build --config ./rsbuild.config.ts",
     "test": "bun test",
+    "typecheck": "bun tsc -p ./tsconfig.json --noEmit",
+    "typecheck:ui": "bun tsc -p ./tsconfig.ui.json --noEmit",
     "test:w": "bun test --watch",
     "release": "bash ./ops/release.sh",
     "update": "bun update",
     "update:commit": "bun update && git add package.json && bun run tsc && git commit -m \"chore(deps): update dependencies\" && git push",
     "clean": "rm -rf ./dist",
     "reset": "rm -rf ./node_modules",
-    "format": "biome format --write src package.json tsconfig.json tsconfig.lib.json biome.json"
+    "format": "biome format --write src test package.json tsconfig.json tsconfig.lib.json tsconfig.ui.json vite.config.ts rsbuild.config.ts index.html rsbuild.html biome.json"
   },
   "peerDependencies": {
     "@adaptive-ds/result": "^0.6.0"
   },
+  "dependencies": {
+    "@adaptive-ds/git-store": "^0.1.0",
+    "@solidjs/router": "^0.15.4",
+    "clsx": "^2.1.1",
+    "solid-js": "^1.9.12",
+    "tailwind-merge": "^3.6.0",
+    "valibot": "^1.2.0"
+  },
   "devDependencies": {
     "@adaptive-ds/result": "^0.6.0",
     "@biomejs/biome": "^2.5.2",
+    "@rsbuild/core": "^2.0.15",
+    "@rsbuild/plugin-babel": "^1.2.1",
+    "@rsbuild/plugin-solid": "^1.2.2",
+    "@rsbuild/plugin-tailwindcss": "^2.0.3",
+    "@tailwindcss/vite": "^4.3.3",
     "@types/bun": "^1.3.13",
-    "typescript": "^6.0.3"
+    "tailwindcss": "^4.3.3",
+    "typescript": "^6.0.3",
+    "vite": "^8.2.1",
+    "vite-plugin-solid": "^2.11.14"
   },
   "prettier": {
     "semi": false,
@@ -29,9 +53,13 @@
   },
   "type": "module",
   "main": "dist/index.js",
+  "bin": {
+    "project-registry": "./dist/cli.js",
+    "project-registryd": "./dist/daemon.js"
+  },
   "private": false,
   "license": "MIT",
-  "description": "In-memory registry of Adaptive projects: register by folder name, look up by id, list what you have.",
+  "description": "Machine-wide Git-backed project registry with CLI and daemon entry points.",
   "keywords": [
     "typescript",
     "registry",
@@ -50,6 +78,10 @@
   "author": "David Siewert",
   "types": "./dist/index.d.ts",
   "imports": {
+    "#git-store": "@adaptive-ds/git-store",
+    "#ui/*.js": "./ui/*.ts",
+    "#ui/*.jsx": "./ui/*.tsx",
+    "#ui/*": "./ui/*",
     "#result": "@adaptive-ds/result"
   },
   "exports": {
@@ -57,9 +89,41 @@
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
     },
-    "./*.js": {
-      "types": "./dist/*.d.ts",
-      "import": "./dist/*.js"
+    "./Project.js": {
+      "types": "./dist/project/Project.d.ts",
+      "import": "./dist/project/Project.js"
+    },
+    "./projectGet.js": {
+      "types": "./dist/project/projectGet.d.ts",
+      "import": "./dist/project/projectGet.js"
+    },
+    "./projectList.js": {
+      "types": "./dist/project/projectList.d.ts",
+      "import": "./dist/project/projectList.js"
+    },
+    "./project/*.js": {
+      "types": "./dist/project/*.d.ts",
+      "import": "./dist/project/*.js"
+    },
+    "./project-store/*.js": {
+      "types": "./dist/project-store/*.d.ts",
+      "import": "./dist/project-store/*.js"
+    },
+    "./identity/*.js": {
+      "types": "./dist/identity/*.d.ts",
+      "import": "./dist/identity/*.js"
+    },
+    "./session/*.js": {
+      "types": "./dist/session/*.d.ts",
+      "import": "./dist/session/*.js"
+    },
+    "./zitadel/*.js": {
+      "types": "./dist/zitadel/*.d.ts",
+      "import": "./dist/zitadel/*.js"
+    },
+    "./web-server/*.js": {
+      "types": "./dist/web-server/*.d.ts",
+      "import": "./dist/web-server/*.js"
     }
   },
   "files": [

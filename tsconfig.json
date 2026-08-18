@@ -9,7 +9,9 @@
     //
     // dom
     //
-    "lib": ["esnext"],
+    "lib": ["esnext", "dom", "dom.iterable"],
+    "jsx": "preserve",
+    "jsxImportSource": "solid-js",
     "types": ["bun"],
     //
     // performance
@@ -46,7 +48,7 @@
     "noFallthroughCasesInSwitch": true,
     "forceConsistentCasingInFileNames": true
   },
-  "include": ["client", "src", "test"],
+  "include": ["src", "test"],
   "exclude": [
     ".github",
     ".roo",
