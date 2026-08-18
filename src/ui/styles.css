@@ -1,0 +1,16 @@
+@import "tailwindcss";
+
+@source "./**/*.{ts,tsx}";
+@source "../../ui/**/*.{ts,tsx}";
+
+@layer base {
+  :root {
+    font-family: ui-sans-serif, system-ui, sans-serif;
+  }
+
+  body {
+    margin: 0;
+    min-width: 320px;
+    min-height: 100vh;
+  }
+}
