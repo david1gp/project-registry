@@ -1,0 +1,14 @@
+[Unit]
+Description=project-registry frontend dev server (rsbuild, :3009)
+After=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/adaptive/project-registry
+Environment=PATH=%h/.local/bin:%h/.bun/bin:/usr/local/bin:/usr/bin:/bin
+ExecStart=/usr/bin/env bun run rsbuild:dev
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=default.target
