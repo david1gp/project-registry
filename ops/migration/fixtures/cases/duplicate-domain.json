@@ -1,0 +1,6 @@
+{
+  "port": 3110,
+  "domains": ["PROXY.EXAMPLE"],
+  "name": "duplicate-domain",
+  "user": "leo"
+}

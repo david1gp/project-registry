@@ -1,0 +1,11 @@
+github: https://github.com/example/proxy
+order: 7
+preview_port: 4101
+preview_url: https://preview.example/proxy
+production_url: https://proxy.example
+production_assets_url: https://assets.example/proxy
+services:
+  - proxy.service
+  - proxy.service
+  - invalid/service
+type: own

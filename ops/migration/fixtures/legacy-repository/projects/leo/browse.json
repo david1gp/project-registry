@@ -1,0 +1,8 @@
+{
+  "port": 3104,
+  "domains": ["browse.example"],
+  "name": "browse",
+  "user": "leo",
+  "browse": true,
+  "browseTemplate": "directory.html"
+}

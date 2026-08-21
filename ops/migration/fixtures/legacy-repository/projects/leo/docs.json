@@ -1,0 +1,8 @@
+{
+  "port": 3103,
+  "domains": ["docs.example"],
+  "name": "docs",
+  "user": "leo",
+  "docs": true,
+  "docsPath": "/srv/docs"
+}

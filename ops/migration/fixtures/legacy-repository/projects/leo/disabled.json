@@ -1,0 +1,7 @@
+{
+  "port": 3101,
+  "domains": ["proxy.example"],
+  "name": "disabled",
+  "user": "leo",
+  "disabled": true
+}

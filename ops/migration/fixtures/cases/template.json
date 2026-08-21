@@ -1,0 +1,7 @@
+{
+  "port": 3111,
+  "domains": ["template.example"],
+  "name": "template",
+  "user": "leo",
+  "template": true
+}

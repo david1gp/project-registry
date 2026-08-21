@@ -1,0 +1,30 @@
+[Unit]
+Description=Project Registry daemon
+Documentation=https://github.com/david1gp/project-registry
+After=network-online.target caddy.service
+Wants=network-online.target caddy.service
+
+[Service]
+Type=simple
+User=root
+Group=root
+Environment=HOME=/root
+EnvironmentFile=/etc/project-registry/project-registryd.env
+# The installer maps the host-local Leo file to this root-owned file with mode 0600.
+# Do not put OIDC values in project-registryd.env or this unit.
+EnvironmentFile=/etc/project-registry/leonardomora.oidc.env
+# Required task-4 Zitadel management/session runtime settings. Provision this
+# root-owned mode-0600 file separately; no credential values belong in Git.
+EnvironmentFile=/etc/project-registry/zitadel.env
+WorkingDirectory=/home/caddy/project-registry
+ExecStart=/usr/local/bin/project-registry-bun /home/caddy/project-registry/dist/daemon.js
+Restart=on-failure
+RestartSec=3
+UMask=0077
+RuntimeDirectory=project-registry
+# Mapped owners can traverse the directory; each owner socket is still mode 0600.
+RuntimeDirectoryMode=0755
+LimitNOFILE=1048576
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,6 @@
+{
+  "port": 3101,
+  "domains": ["duplicate-port.example"],
+  "name": "duplicate-port",
+  "user": "leo"
+}

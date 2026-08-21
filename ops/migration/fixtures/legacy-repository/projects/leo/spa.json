@@ -1,0 +1,7 @@
+{
+  "port": 3105,
+  "domains": ["spa.example"],
+  "name": "spa",
+  "user": "leo",
+  "spa": true
+}

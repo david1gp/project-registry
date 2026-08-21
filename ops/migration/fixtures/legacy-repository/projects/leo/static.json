@@ -1,0 +1,10 @@
+{
+  "port": 3102,
+  "domains": ["static.example"],
+  "name": "static",
+  "user": "leo",
+  "kind": "static",
+  "path": "/srv/static",
+  "staticAllow": ["/assets", "/index.html"],
+  "denyDotfiles": true
+}

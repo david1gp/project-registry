@@ -1,0 +1,18 @@
+{
+  "port": 3101,
+  "domains": ["Proxy.Example."],
+  "name": "proxy",
+  "user": "leo",
+  "kind": "proxy",
+  "access": "internal",
+  "docs": false,
+  "browse": false,
+  "headerUp": {
+    "Host": "proxy.internal",
+    "X-Forwarded-Proto": "https"
+  },
+  "oidcPaths": ["/private/*"],
+  "routed": "/api/*",
+  "flushInterval": 5,
+  "shared": true
+}

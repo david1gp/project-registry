@@ -1,0 +1,7 @@
+[Unit]
+Description=Authoritative Caddy service fixture
+
+[Service]
+User=caddy
+Group=caddy
+ExecStart=/usr/bin/true
