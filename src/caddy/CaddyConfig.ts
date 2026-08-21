@@ -5,6 +5,10 @@ export type CaddyConfig = {
         srv0: {
           listen: string[]
           routes: unknown[]
+          logs?: {
+            logger_names: Record<string, string[]>
+            should_log_credentials: false
+          }
         }
       }
     }
@@ -29,5 +33,8 @@ export type CaddyConfig = {
         }
       >
     }
+  }
+  logging?: {
+    logs: Record<string, unknown>
   }
 }

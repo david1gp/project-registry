@@ -1,0 +1,1 @@
+export const projectAccessLogRetentionMaximumActiveProjectIds = 1_024

@@ -1,5 +1,7 @@
 export type { Actor } from "./access/Actor.js"
 export type { ProjectAccess } from "./access/ProjectAccess.js"
+export type { ProjectAccessCreateOptions } from "./access/ProjectAccessCreateOptions.js"
+export { projectAccessCreate } from "./access/projectAccessCreate.js"
 export { projectAuthorize } from "./access/projectAuthorize.js"
 export type { Role } from "./access/Role.js"
 export { roleResolve } from "./access/roleResolve.js"
@@ -7,6 +9,35 @@ export type { SuperadminOperation } from "./access/SuperadminOperation.js"
 export { serviceAuthorize } from "./access/serviceAuthorize.js"
 export { superadminAuthorize } from "./access/superadminAuthorize.js"
 export { visibleUserList } from "./access/visibleUserList.js"
+export type {
+  ProjectAccessLogPage,
+  ProjectAccessLogReadOptions,
+  ProjectAccessLogRecord,
+  ProjectAccessLogSource,
+  ProjectAccessLogSourceError,
+  ProjectAccessLogSourceErrorCode,
+} from "./access-log/ProjectAccessLogSource.js"
+export type {
+  ProjectAccessLogCursorCodec,
+  ProjectAccessLogCursorInput,
+  ProjectAccessLogCursorPayload,
+} from "./access-log/projectAccessLogCursor.js"
+export { projectAccessLogCursorCreate } from "./access-log/projectAccessLogCursor.js"
+export { projectAccessLogId } from "./access-log/projectAccessLogId.js"
+export {
+  type ProjectAccessLogListErrorCode,
+  type ProjectAccessLogListInput,
+  type ProjectAccessLogListUseCaseOptions,
+  projectAccessLogListUseCase,
+} from "./access-log/projectAccessLogListUseCase.js"
+export { projectAccessLogParser } from "./access-log/projectAccessLogParser.js"
+export { projectAccessLogPath } from "./access-log/projectAccessLogPath.js"
+export { projectAccessLogRootSchema } from "./access-log/projectAccessLogRootSchema.js"
+export type {
+  ProjectAccessLogSourceFileCreateOptions,
+  ProjectAccessLogSourceLimits,
+} from "./access-log/projectAccessLogSourceFileCreate.js"
+export { projectAccessLogSourceFileCreate } from "./access-log/projectAccessLogSourceFileCreate.js"
 export type { CaddyAdminLoadOptions } from "./caddy/CaddyAdminLoadOptions.js"
 export type { CaddyApplication } from "./caddy/CaddyApplication.js"
 export type { CaddyApplicationOptions } from "./caddy/CaddyApplicationOptions.js"
@@ -47,6 +78,7 @@ export type { IdentityDirectory } from "./identity/IdentityDirectory.js"
 export type { IdentityDirectoryUser } from "./identity/IdentityDirectoryUser.js"
 export type { MappedUser } from "./identity/MappedUser.js"
 export type { PosixUserDirectory } from "./identity/PosixUserDirectory.js"
+export { posixUserDirectoryCreate } from "./identity/posixUserDirectoryCreate.js"
 export { preferredUsernameMap } from "./identity/preferredUsernameMap.js"
 export { userRoleResolve } from "./identity/userRoleResolve.js"
 export type { VisibleUser } from "./identity/VisibleUser.js"
@@ -92,8 +124,10 @@ export type { ProjectRepositoryReadiness } from "./project-store/ProjectReposito
 export type { ProjectRepositoryRevision } from "./project-store/ProjectRepositoryRevision.js"
 export type { ProjectRepositorySnapshot } from "./project-store/ProjectRepositorySnapshot.js"
 export { projectRepositoryOpen } from "./project-store/projectRepositoryOpen.js"
+export { projectRepositoryOwnerPath } from "./project-store/projectRepositoryOwnerPath.js"
 export { projectRepositoryPath } from "./project-store/projectRepositoryPath.js"
 export type { ProjectRegistryDaemon } from "./runtime/ProjectRegistryDaemon.js"
+export type { ProjectRegistryDaemonBrowserAuth } from "./runtime/ProjectRegistryDaemonBrowserAuth.js"
 export type { ProjectRegistryDaemonConfig } from "./runtime/ProjectRegistryDaemonConfig.js"
 export type { ProjectRegistryDaemonFileStat } from "./runtime/ProjectRegistryDaemonFileStat.js"
 export type { ProjectRegistryDaemonFilesystem } from "./runtime/ProjectRegistryDaemonFilesystem.js"
@@ -109,6 +143,7 @@ export type { ProjectRegistryDaemonServer } from "./runtime/ProjectRegistryDaemo
 export type { ProjectRegistryDaemonServerFactory } from "./runtime/ProjectRegistryDaemonServerFactory.js"
 export type { ProjectRegistryDaemonServerOptions } from "./runtime/ProjectRegistryDaemonServerOptions.js"
 export type { ProjectRegistryDaemonSignals } from "./runtime/ProjectRegistryDaemonSignals.js"
+export type { ProjectRegistryDaemonSocketAccessResolve } from "./runtime/ProjectRegistryDaemonSocketAccessResolve.js"
 export type { ProjectRegistryDaemonSocketRefresh } from "./runtime/ProjectRegistryDaemonSocketRefresh.js"
 export type { ProjectRegistryDaemonState } from "./runtime/ProjectRegistryDaemonState.js"
 export { projectRegistryDaemonConfigFromEnv } from "./runtime/projectRegistryDaemonConfigFromEnv.js"
@@ -158,6 +193,7 @@ export type { ZitadelDiscoveryDocument } from "./zitadel/ZitadelDiscoveryDocumen
 export type { ZitadelHttp } from "./zitadel/ZitadelHttp.js"
 export type { ZitadelHttpOptions } from "./zitadel/ZitadelHttpOptions.js"
 export type { ZitadelIdentityClaims } from "./zitadel/ZitadelIdentityClaims.js"
+export type { ZitadelIdentityDirectoryOptions } from "./zitadel/ZitadelIdentityDirectoryOptions.js"
 export type { ZitadelJwk } from "./zitadel/ZitadelJwk.js"
 export type { ZitadelJwks } from "./zitadel/ZitadelJwks.js"
 export type { ZitadelLoginStartOptions } from "./zitadel/ZitadelLoginStartOptions.js"
@@ -169,6 +205,7 @@ export type { ZitadelTokens } from "./zitadel/ZitadelTokens.js"
 export { zitadelCallbackHandle } from "./zitadel/zitadelCallbackHandle.js"
 export { zitadelConfigValidate } from "./zitadel/zitadelConfigValidate.js"
 export { zitadelDiscoveryFetch } from "./zitadel/zitadelDiscoveryFetch.js"
+export { zitadelIdentityDirectoryCreate } from "./zitadel/zitadelIdentityDirectoryCreate.js"
 export { zitadelIdTokenValidate } from "./zitadel/zitadelIdTokenValidate.js"
 export { zitadelJwksFetch } from "./zitadel/zitadelJwksFetch.js"
 export { zitadelJwksValidate } from "./zitadel/zitadelJwksValidate.js"

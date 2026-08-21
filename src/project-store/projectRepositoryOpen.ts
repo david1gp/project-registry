@@ -2,7 +2,15 @@ import { constants, type Dirent } from "node:fs"
 import { lstat, mkdir, open, readdir, realpath } from "node:fs/promises"
 import { join } from "node:path"
 import * as a from "valibot"
-import { type GitStore, gitStoreHistory, gitStoreList, gitStoreOpen, gitStoreRead, gitStoreRun } from "#git-store"
+import {
+  type GitStore,
+  type GitStoreCommitInfo,
+  gitStoreHistory,
+  gitStoreList,
+  gitStoreOpen,
+  gitStoreRead,
+  gitStoreRun,
+} from "#git-store"
 import { createResult, createResultError, type PromiseResult, type Result } from "#result"
 import type { Project } from "../project/Project.js"
 import { projectCollisions } from "../project/projectCollisions.js"
@@ -19,6 +27,7 @@ import type { ProjectRepositoryMutationOptions } from "./ProjectRepositoryMutati
 import { projectRepositoryOptionsSchema } from "./ProjectRepositoryOptions.js"
 import type { ProjectRepositoryReadiness } from "./ProjectRepositoryReadiness.js"
 import type { ProjectRepositorySnapshot } from "./ProjectRepositorySnapshot.js"
+import { projectRepositoryOwnerPath } from "./projectRepositoryOwnerPath.js"
 import { projectRepositoryPath } from "./projectRepositoryPath.js"
 
 const daemonAuthorName = "project-registry"
@@ -502,6 +511,18 @@ function projectRepositoryActor(options: ProjectRepositoryMutationOptions, op: s
   return createResult(actor)
 }
 
+function projectRepositoryHistoryDeduplicate(commits: GitStoreCommitInfo[], limit?: number): GitStoreCommitInfo[] {
+  const seen = new Set<string>()
+  const unique: GitStoreCommitInfo[] = []
+  for (const commit of commits) {
+    if (seen.has(commit.sha)) continue
+    seen.add(commit.sha)
+    unique.push(commit)
+    if (limit !== undefined && unique.length >= limit) break
+  }
+  return unique
+}
+
 function projectRepositoryMutationKey(key: ProjectKey): ProjectKey {
   return { owner: key.owner, name: key.name }
 }
@@ -891,6 +912,21 @@ export async function projectRepositoryOpen(options: unknown): PromiseResult<Pro
           path = pathR.data
         }
         return gitStoreHistory(store.git, path, limit)
+      }),
+    ownerHistory: (owner, limit) =>
+      projectRepositoryQueue(store, "projectRepositoryOwnerHistory", async () => {
+        const ownerPathR = projectRepositoryOwnerPath(owner)
+        if (!ownerPathR.success) return ownerPathR
+        if (limit !== undefined && (!Number.isInteger(limit) || limit < 1)) {
+          return createResultError("projectRepositoryOwnerHistory", "limit must be a positive integer")
+        }
+        const safeR = await projectRepositoryProjectsSafe(store)
+        if (!safeR.success) return safeR
+        const cleanR = await projectRepositoryRequireClean(store, "projectRepositoryOwnerHistory")
+        if (!cleanR.success) return cleanR
+        const historyR = await gitStoreHistory(store.git, ownerPathR.data, limit)
+        if (!historyR.success) return historyR
+        return createResult(projectRepositoryHistoryDeduplicate(historyR.data, limit))
       }),
     readiness: () =>
       projectRepositoryQueue(store, "projectRepositoryReadiness", () => projectRepositoryReadiness(store)),

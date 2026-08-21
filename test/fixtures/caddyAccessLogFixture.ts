@@ -1,0 +1,26 @@
+export const caddyAccessLogFixture = {
+  level: "info",
+  ts: 1_755_757_341.418,
+  logger: "http.log.access.5ad58d04ec07c62212cd3b5e4bc05bd8cc7df42f8c1aeb494986aa8561eb46f9",
+  msg: "handled request",
+  request: {
+    remote_ip: "198.51.100.0",
+    remote_port: "54321",
+    proto: "HTTP/2.0",
+    method: "GET",
+    host: "app.example",
+    uri: "/private/report",
+    tls: {
+      resumed: false,
+      version: "tls1.3",
+      cipher_suite: "TLS_AES_128_GCM_SHA256",
+      proto: "h2",
+      server_name: "app.example",
+    },
+  },
+  bytes_read: 0,
+  user_id: "",
+  duration: 0.012345,
+  size: 4096,
+  status: 200,
+} as const

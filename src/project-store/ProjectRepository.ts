@@ -18,6 +18,7 @@ export interface ProjectRepository {
   ): PromiseResult<ProjectRepositoryMutation>
   delete(key: ProjectKey, options: ProjectRepositoryMutationOptions): PromiseResult<ProjectRepositoryMutation>
   history(key?: ProjectKey, limit?: number): PromiseResult<GitStoreCommitInfo[]>
+  ownerHistory(owner: string, limit?: number): PromiseResult<GitStoreCommitInfo[]>
   readiness(): PromiseResult<ProjectRepositoryReadiness>
   recover(): PromiseResult<ProjectRepositoryReadiness>
 }

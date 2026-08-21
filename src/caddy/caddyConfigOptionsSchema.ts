@@ -1,4 +1,5 @@
 import * as a from "valibot"
+import { projectAccessLogRootSchema } from "../access-log/projectAccessLogRootSchema.js"
 
 const httpsListenerSchema = a.pipe(
   a.string(),
@@ -44,9 +45,11 @@ export type OidcOptions = {
 export const caddyConfigOptionsSchema = a.strictObject({
   httpsListener: a.optional(httpsListenerSchema, ":443"),
   oidc: a.optional(oidcOptionsSchema),
+  caddyAccessLogRoot: a.optional(projectAccessLogRootSchema),
 })
 
 export type CaddyConfigOptions = {
   httpsListener?: string
   oidc?: OidcOptions
+  caddyAccessLogRoot?: string
 }

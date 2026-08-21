@@ -12,8 +12,21 @@ export type ProjectRegistryDaemonConfig = {
   }
   caddyBinary: string
   caddyAdminUrl: string
+  caddyUser?: string
+  caddyGroup?: string
+  caddyAccessLogRoot?: string
   httpsListener: string
   oidc: CaddyConfigOptions["oidc"]
+  zitadel?: {
+    issuer: string
+    orgId: string
+    projectId: string
+    serviceToken: string
+  }
+  session: {
+    maxAgeSeconds?: number
+    maxEntries?: number
+  }
   portRange: ProjectPortRange
   gitPush: boolean
   regenerationIntervalMs: number
@@ -21,4 +34,5 @@ export type ProjectRegistryDaemonConfig = {
   validationTimeoutMs: number
   loadTimeoutMs: number
   shutdownTimeoutMs: number
+  initializeFromGeneratedConfig: boolean
 }

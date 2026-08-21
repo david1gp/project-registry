@@ -5,7 +5,6 @@ import {
   mkdir as fsMkdir,
   readdir as fsReaddir,
   realpath as fsRealpath,
-  lchmod,
   lchown,
   unlink,
 } from "node:fs/promises"
@@ -56,7 +55,9 @@ export function projectRegistryDaemonFilesystemDefault(): ProjectRegistryDaemonF
       await chown(path, uid, gid)
     },
     async chmodNoFollow(path, mode) {
-      await lchmod(path, mode)
+      // Linux does not implement lchmod(2). Callers lstat and verify the
+      // target is not a symlink before and after this operation.
+      await chmod(path, mode)
     },
     async chownNoFollow(path, uid, gid) {
       await lchown(path, uid, gid)

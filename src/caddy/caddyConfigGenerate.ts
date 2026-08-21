@@ -1,5 +1,8 @@
 import * as a from "valibot"
 import { createResult, createResultError, type Result } from "#result"
+import { projectAccessLogCaddyRetention } from "../access-log/projectAccessLogCaddyRetention.js"
+import { projectAccessLogId } from "../access-log/projectAccessLogId.js"
+import { projectAccessLogPath } from "../access-log/projectAccessLogPath.js"
 import type { Project } from "../project/Project.js"
 import { projectSchema } from "../project/projectSchema.js"
 import type { CaddyConfig } from "./CaddyConfig.js"
@@ -289,6 +292,63 @@ function projectRoute(project: Project, options: CaddyConfigOptions): Record<str
   }
 }
 
+function projectAccessLogEncoder(): Record<string, unknown> {
+  return {
+    format: "filter",
+    wrap: { format: "json" },
+    fields: {
+      "request>headers": { filter: "delete" },
+      resp_headers: { filter: "delete" },
+      "request>uri": { filter: "regexp", regexp: "\\?.*$", value: "" },
+      "request>remote_ip": { filter: "ip_mask", ipv4_cidr: 24, ipv6_cidr: 64 },
+      "request>client_ip": { filter: "ip_mask", ipv4_cidr: 24, ipv6_cidr: 64 },
+    },
+  }
+}
+
+function projectAccessLogConfig(
+  projects: readonly Project[],
+  root: string,
+): Result<{
+  logging: { logs: Record<string, unknown> }
+  serverLogs: { logger_names: Record<string, string[]>; should_log_credentials: false }
+}> {
+  const op = "caddyConfigGenerate"
+  const logs: Record<string, unknown> = {}
+  const loggerNames: Record<string, string[]> = {}
+  const exclusions: string[] = []
+
+  for (const project of projects) {
+    const id = projectAccessLogId(project)
+    const pathR = projectAccessLogPath(root, project)
+    if (!pathR.success) return createResultError(op, pathR.errorMessage)
+
+    const accessLogger = `http.log.access.${id}`
+    logs[id] = {
+      writer: {
+        output: "file",
+        filename: pathR.data,
+        mode: "0600",
+        dir_mode: "0700",
+        roll_size_mb: 25,
+        roll_at: ["00:00"],
+        roll_gzip: true,
+        roll_keep_days: projectAccessLogCaddyRetention.rollKeepDays,
+        roll_keep: projectAccessLogCaddyRetention.rollKeep,
+      },
+      encoder: projectAccessLogEncoder(),
+      include: [accessLogger],
+    }
+    exclusions.push(accessLogger)
+    for (const domain of project.caddy?.domains ?? []) loggerNames[domain] = [id]
+  }
+
+  return createResult({
+    logging: { logs: { default: { exclude: exclusions }, ...logs } },
+    serverLogs: { logger_names: loggerNames, should_log_credentials: false },
+  })
+}
+
 function projectDomainsValidate(projects: readonly Project[]): Result<void> {
   const op = "caddyConfigGenerate"
   const domains = new Set<string>()
@@ -334,6 +394,13 @@ export function caddyConfigGenerate(projects: unknown, options: unknown = {}): R
           },
         },
       },
+    }
+
+    if (optionsParsed.output.caddyAccessLogRoot !== undefined && active.length > 0) {
+      const accessLogR = projectAccessLogConfig(active, optionsParsed.output.caddyAccessLogRoot)
+      if (!accessLogR.success) return accessLogR
+      config.apps.http.servers.srv0.logs = accessLogR.data.serverLogs
+      config.logging = accessLogR.data.logging
     }
 
     if (optionsParsed.output.oidc !== undefined) {

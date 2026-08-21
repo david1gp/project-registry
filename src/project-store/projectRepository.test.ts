@@ -38,6 +38,10 @@ function project(name: string, port: number): Project {
   }
 }
 
+function ownedProject(owner: string, name: string, port: number): Project {
+  return { ...project(name, port), owner }
+}
+
 afterEach(() => {
   while (directories.length > 0) {
     const directory = directories.pop()
@@ -147,6 +151,100 @@ describe("projectRepositoryOpen", () => {
       "project-registry edit alice/catalog actor=admin",
       "project-registry create alice/catalog actor=alice",
     ])
+  })
+
+  test("returns one newest-first owner history with one global limit and isolates owners", async () => {
+    const openR = await projectRepositoryOpen({ dir: temporaryRepository() })
+    expect(openR.success).toBe(true)
+    if (!openR.success) return
+
+    const repository = openR.data
+    const firstR = await repository.create(ownedProject("alice", "first", 3000), {
+      actor: "alice",
+      expectedRevision: "",
+    })
+    expect(firstR.success).toBe(true)
+    if (!firstR.success) return
+
+    const otherR = await repository.create(ownedProject("bob", "other", 3001), {
+      actor: "bob",
+      expectedRevision: firstR.data.revision,
+    })
+    expect(otherR.success).toBe(true)
+    if (!otherR.success) return
+
+    const editR = await repository.edit({ owner: "alice", name: "first" }, ownedProject("alice", "first", 3002), {
+      actor: "alice",
+      expectedRevision: otherR.data.revision,
+    })
+    expect(editR.success).toBe(true)
+    if (!editR.success) return
+
+    const historyR = await repository.ownerHistory("alice")
+    expect(historyR.success).toBe(true)
+    if (!historyR.success) return
+    expect(historyR.data.map((commit) => commit.message)).toEqual([
+      "project-registry edit alice/first actor=alice",
+      "project-registry create alice/first actor=alice",
+    ])
+    expect(historyR.data.some((commit) => commit.message.includes("bob/other"))).toBe(false)
+
+    const limitedR = await repository.ownerHistory("alice", 1)
+    expect(limitedR.success).toBe(true)
+    if (!limitedR.success) return
+    expect(limitedR.data.map((commit) => commit.message)).toEqual(["project-registry edit alice/first actor=alice"])
+  })
+
+  test("uses one owner path history operation and returns a multi-file commit once", async () => {
+    const directory = temporaryRepository()
+    const openR = await projectRepositoryOpen({ dir: directory })
+    expect(openR.success).toBe(true)
+    if (!openR.success) return
+
+    const createR = await openR.data.create(ownedProject("alice", "first", 3000), {
+      actor: "alice",
+      expectedRevision: "",
+    })
+    expect(createR.success).toBe(true)
+    if (!createR.success) return
+
+    const gitR = await gitStoreOpen({ dir: directory })
+    expect(gitR.success).toBe(true)
+    if (!gitR.success) return
+
+    const secondPath = join(directory, "projects", "alice", "second.json")
+    const thirdPath = join(directory, "projects", "alice", "third.json")
+    writeFileSync(secondPath, `${JSON.stringify(ownedProject("alice", "second", 3001))}\n`, "utf8")
+    writeFileSync(thirdPath, `${JSON.stringify(ownedProject("alice", "third", 3002))}\n`, "utf8")
+    const addR = await gitStoreRun(gitR.data, ["add", "--", "projects/alice/second.json", "projects/alice/third.json"])
+    expect(addR.success).toBe(true)
+    if (!addR.success) return
+    const commitR = await gitStoreRun(gitR.data, ["commit", "-m", "multi-file alice update"])
+    expect(commitR.success).toBe(true)
+    if (!commitR.success) return
+
+    const historyR = await openR.data.ownerHistory("alice")
+
+    expect(historyR.success).toBe(true)
+    if (!historyR.success) return
+    expect(historyR.data.map((commit) => commit.message)).toEqual([
+      "multi-file alice update",
+      "project-registry create alice/first actor=alice",
+    ])
+    expect(new Set(historyR.data.map((commit) => commit.sha)).size).toBe(historyR.data.length)
+  })
+
+  test("rejects invalid owners before resolving an owner history path", async () => {
+    const openR = await projectRepositoryOpen({ dir: temporaryRepository() })
+    expect(openR.success).toBe(true)
+    if (!openR.success) return
+
+    for (const owner of ["", ".", "..", ".git", "../alice", "alice/other", "alice\\other", "alice\nother"]) {
+      const historyR = await openR.data.ownerHistory(owner)
+      expect(historyR.success).toBe(false)
+      if (historyR.success) return
+      expect(historyR.errorMessage).toContain("owner is not a safe path segment")
+    }
   })
 
   test("rejects malformed revisions at the repository mutation boundary", async () => {

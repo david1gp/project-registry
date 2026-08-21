@@ -20,4 +20,5 @@ export type CaddyApplicationOptions = {
   retryDelayMs?: number
   validationTimeoutMs?: CaddyConfigValidateOptions["timeoutMs"]
   loadTimeoutMs?: CaddyAdminLoadOptions["timeoutMs"]
+  initializeFromGeneratedConfig?: boolean
 }

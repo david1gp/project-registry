@@ -1,6 +1,13 @@
 import { describe, expect, test } from "bun:test"
+import { lstat, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
 import { createResult, createResultError, type Result } from "#result"
 import { caddyConfigGenerateFixtures } from "../../test/fixtures/caddyConfigGenerateFixtures.js"
+import { projectAccessLogCaddyRetention } from "../access-log/projectAccessLogCaddyRetention.js"
+import { projectAccessLogId } from "../access-log/projectAccessLogId.js"
+import { projectAccessLogRetentionMaximumActiveProjectIds } from "../access-log/projectAccessLogRetentionMaximumActiveProjectIds.js"
+import { projectAccessLogRetentionReconcile } from "../access-log/projectAccessLogRetentionReconcile.js"
 import type { Project } from "../project/Project.js"
 import type { ProjectRepositorySnapshot } from "../project-store/ProjectRepositorySnapshot.js"
 import { caddyAdminLoad } from "./caddyAdminLoad.js"
@@ -12,6 +19,10 @@ import { caddyProcessRun } from "./caddyProcessRun.js"
 
 function snapshot(revision: string, project: Project = caddyConfigGenerateFixtures.proxy): ProjectRepositorySnapshot {
   return { revision, projects: [structuredClone(project)] }
+}
+
+function snapshotProjects(revision: string, projects: readonly Project[]): ProjectRepositorySnapshot {
+  return { revision, projects: projects.map((project) => structuredClone(project)) }
 }
 
 function timerFake() {
@@ -460,6 +471,16 @@ describe("caddyApplication", () => {
       op: "caddyApplicationCreate",
       errorMessage: "Caddy application options are invalid",
     })
+    expect(
+      caddyApplicationCreate({
+        repository: { read: async () => createResult(snapshot("revision")) },
+        initializeFromGeneratedConfig: "true",
+      } as never),
+    ).toEqual({
+      success: false,
+      op: "caddyApplicationCreate",
+      errorMessage: "initializeFromGeneratedConfig must be a boolean",
+    })
   })
 
   test("does not invoke an application option accessor", () => {
@@ -516,6 +537,883 @@ describe("caddyApplication", () => {
     })
     expect(fakeTimer.intervals).toHaveLength(1)
     applicationR.data.stop()
+  })
+
+  test("reconciles inactive access-log directories only after a successful load", async () => {
+    const root = await mkdtemp(join(tmpdir(), "project-registry-caddy-retention-"))
+    const oldId = projectAccessLogId({ owner: "deleted-owner", name: "deleted-project" })
+    const oldDirectory = join(root, "projects", oldId)
+    try {
+      await mkdir(oldDirectory, { recursive: true })
+      await writeFile(join(oldDirectory, "access.jsonl"), "")
+      await projectAccessLogRetentionReconcile({ root, activeProjectIds: [], now: 0 })
+      const applicationR = caddyApplicationCreate({
+        repository: { read: async () => createResult(snapshot("revision-retention-success")) },
+        configOptions: { caddyAccessLogRoot: root },
+        clock: () => projectAccessLogCaddyRetention.rollKeepDays * 24 * 60 * 60 * 1_000 + 1,
+        timer: timerFake().timer,
+        processRunner: async () => createResult({ exitCode: 0, stdout: "", stderr: "" }),
+        fetch: async () => new Response("", { status: 200 }),
+      })
+      expect(applicationR.success).toBe(true)
+      if (!applicationR.success) return
+
+      expect((await applicationR.data.start()).success).toBe(true)
+      await expect(lstat(oldDirectory)).rejects.toMatchObject({ code: "ENOENT" })
+      await applicationR.data.stop()
+    } finally {
+      await rm(root, { force: true, recursive: true })
+    }
+  })
+
+  test("retries transient retention failure on an unchanged interval without reloading Caddy", async () => {
+    const root = await mkdtemp(join(tmpdir(), "project-registry-caddy-retention-retry-"))
+    const projectsPath = join(root, "projects")
+    const oldId = projectAccessLogId({ owner: "retry-owner", name: "retry-project" })
+    const oldDirectory = join(projectsPath, oldId)
+    const retentionNow = projectAccessLogCaddyRetention.rollKeepDays * 24 * 60 * 60 * 1_000 + 1
+    const fakeTimer = timerFake()
+    let validates = 0
+    let loads = 0
+    try {
+      await writeFile(projectsPath, "transient failure")
+      expect(
+        (await projectAccessLogRetentionReconcile({ root, activeProjectIds: [], now: retentionNow })).success,
+      ).toBe(false)
+      const applicationR = caddyApplicationCreate({
+        repository: { read: async () => createResult(snapshot("revision-retention-retry")) },
+        configOptions: { caddyAccessLogRoot: root },
+        clock: () => retentionNow,
+        timer: fakeTimer.timer,
+        processRunner: async () => {
+          validates += 1
+          return createResult({ exitCode: 0, stdout: "", stderr: "" })
+        },
+        fetch: async () => {
+          loads += 1
+          return new Response("", { status: 200 })
+        },
+      })
+      expect(applicationR.success).toBe(true)
+      if (!applicationR.success) return
+
+      expect((await applicationR.data.start()).success).toBe(true)
+      expect(validates).toBe(1)
+      expect(loads).toBe(1)
+
+      await rm(projectsPath)
+      await mkdir(oldDirectory, { recursive: true })
+      await writeFile(join(oldDirectory, "access.jsonl"), "")
+      await writeFile(
+        join(oldDirectory, ".project-registry-retention.json"),
+        '{"version":1,"state":"inactive","inactiveAt":0}',
+      )
+      fakeTimer.intervals[0]?.()
+      let quarantined = false
+      for (let attempt = 0; attempt < 20; attempt += 1) {
+        try {
+          quarantined = (await lstat(join(root, "quarantine", oldId))).isDirectory()
+        } catch {
+          quarantined = false
+        }
+        if (quarantined) break
+        await new Promise((resolve) => setTimeout(resolve, 0))
+      }
+
+      expect(validates).toBe(1)
+      expect(loads).toBe(1)
+      expect(quarantined).toBe(true)
+      await expect(lstat(oldDirectory)).rejects.toMatchObject({ code: "ENOENT" })
+      await applicationR.data.stop()
+    } finally {
+      await rm(root, { force: true, recursive: true })
+    }
+  })
+
+  test("does not pass a partial active set when Caddy has over-limit active projects", async () => {
+    const root = await mkdtemp(join(tmpdir(), "project-registry-caddy-retention-over-limit-"))
+    const oldId = projectAccessLogId({ owner: "over-limit-owner", name: "deleted-project" })
+    const oldDirectory = join(root, "projects", oldId)
+    const projects = Array.from({ length: projectAccessLogRetentionMaximumActiveProjectIds + 1 }, (_, index) => ({
+      ...structuredClone(caddyConfigGenerateFixtures.proxy),
+      name: `retention-${index}`,
+      caddy: {
+        ...structuredClone(caddyConfigGenerateFixtures.proxy.caddy),
+        domains: [`retention-${index}.example`],
+        port: 4096 + index,
+      },
+    }))
+    try {
+      await mkdir(oldDirectory, { recursive: true })
+      await writeFile(join(oldDirectory, "access.jsonl"), "")
+      await projectAccessLogRetentionReconcile({ root, activeProjectIds: [], now: 0 })
+      const applicationR = caddyApplicationCreate({
+        repository: { read: async () => createResult(snapshotProjects("revision-retention-over-limit", projects)) },
+        configOptions: { caddyAccessLogRoot: root },
+        clock: () => projectAccessLogCaddyRetention.rollKeepDays * 24 * 60 * 60 * 1_000 + 1,
+        timer: timerFake().timer,
+        processRunner: async () => createResult({ exitCode: 0, stdout: "", stderr: "" }),
+        fetch: async () => new Response("", { status: 200 }),
+      })
+      expect(applicationR.success).toBe(true)
+      if (!applicationR.success) return
+
+      expect((await applicationR.data.start()).success).toBe(true)
+      expect((await lstat(oldDirectory)).isDirectory()).toBe(true)
+      expect(await readFile(join(oldDirectory, ".project-registry-retention.json"), "utf8")).toBe(
+        '{"version":1,"state":"inactive","inactiveAt":0}',
+      )
+      await applicationR.data.stop()
+    } finally {
+      await rm(root, { force: true, recursive: true })
+    }
+  })
+
+  test("does not reconcile after a failed Caddy load", async () => {
+    const root = await mkdtemp(join(tmpdir(), "project-registry-caddy-retention-failed-"))
+    const oldId = projectAccessLogId({ owner: "failed-owner", name: "failed-project" })
+    const oldDirectory = join(root, "projects", oldId)
+    try {
+      await mkdir(oldDirectory, { recursive: true })
+      await writeFile(join(oldDirectory, "access.jsonl"), "")
+      await projectAccessLogRetentionReconcile({ root, activeProjectIds: [], now: 0 })
+      const applicationR = caddyApplicationCreate({
+        repository: { read: async () => createResult(snapshot("revision-retention-failed")) },
+        configOptions: { caddyAccessLogRoot: root },
+        maxRetries: 0,
+        clock: () => projectAccessLogCaddyRetention.rollKeepDays * 24 * 60 * 60 * 1_000 + 1,
+        timer: timerFake().timer,
+        processRunner: async () => createResult({ exitCode: 0, stdout: "", stderr: "" }),
+        fetch: async () => new Response("", { status: 503 }),
+      })
+      expect(applicationR.success).toBe(true)
+      if (!applicationR.success) return
+
+      expect((await applicationR.data.start()).success).toBe(false)
+      expect((await lstat(oldDirectory)).isDirectory()).toBe(true)
+      await applicationR.data.stop()
+    } finally {
+      await rm(root, { force: true, recursive: true })
+    }
+  })
+
+  test("does not reconcile after Caddy validation fails", async () => {
+    const root = await mkdtemp(join(tmpdir(), "project-registry-caddy-retention-validation-"))
+    const oldId = projectAccessLogId({ owner: "validation-owner", name: "validation-project" })
+    const oldDirectory = join(root, "projects", oldId)
+    try {
+      await mkdir(oldDirectory, { recursive: true })
+      await writeFile(join(oldDirectory, "access.jsonl"), "")
+      await projectAccessLogRetentionReconcile({ root, activeProjectIds: [], now: 0 })
+      let loads = 0
+      const applicationR = caddyApplicationCreate({
+        repository: { read: async () => createResult(snapshot("revision-retention-validation")) },
+        configOptions: { caddyAccessLogRoot: root },
+        maxRetries: 0,
+        clock: () => projectAccessLogCaddyRetention.rollKeepDays * 24 * 60 * 60 * 1_000 + 1,
+        timer: timerFake().timer,
+        processRunner: async () => createResult({ exitCode: 1, stdout: "", stderr: "" }),
+        fetch: async () => {
+          loads += 1
+          return new Response("", { status: 200 })
+        },
+      })
+      expect(applicationR.success).toBe(true)
+      if (!applicationR.success) return
+
+      expect((await applicationR.data.start()).success).toBe(false)
+      expect(loads).toBe(0)
+      expect((await lstat(oldDirectory)).isDirectory()).toBe(true)
+      await applicationR.data.stop()
+    } finally {
+      await rm(root, { force: true, recursive: true })
+    }
+  })
+
+  test("does not reconcile an older successful load while a newer desired revision is pending", async () => {
+    const root = await mkdtemp(join(tmpdir(), "project-registry-caddy-retention-stale-"))
+    const latestProject = caddyConfigGenerateFixtures.static
+    const latestProjectDirectory = join(root, "projects", projectAccessLogId(latestProject))
+    const retentionNow = projectAccessLogCaddyRetention.rollKeepDays * 24 * 60 * 60 * 1_000 + 1
+    const firstLoad = deferred<Response>()
+    const firstLoadStarted = deferred<void>()
+    const snapshots = [
+      snapshot("revision-retention-old", caddyConfigGenerateFixtures.proxy),
+      snapshot("revision-retention-pending", { ...caddyConfigGenerateFixtures.proxy, description: "metadata only" }),
+      snapshotProjects("revision-retention-latest", [caddyConfigGenerateFixtures.proxy, latestProject]),
+    ]
+    let loads = 0
+    try {
+      await mkdir(latestProjectDirectory, { recursive: true })
+      await writeFile(join(latestProjectDirectory, "access.jsonl"), "")
+      await projectAccessLogRetentionReconcile({ root, activeProjectIds: [], now: 0 })
+
+      const applicationR = caddyApplicationCreate({
+        repository: { read: async () => createResult(snapshots.shift() ?? snapshots[2]) },
+        configOptions: { caddyAccessLogRoot: root },
+        clock: () => retentionNow,
+        timer: timerFake().timer,
+        processRunner: async () => createResult({ exitCode: 0, stdout: "", stderr: "" }),
+        fetch: async () => {
+          loads += 1
+          if (loads === 1) {
+            firstLoadStarted.resolve()
+            return firstLoad.promise
+          }
+          return new Response("", { status: 200 })
+        },
+      })
+      expect(applicationR.success).toBe(true)
+      if (!applicationR.success) return
+
+      const first = applicationR.data.projectChange()
+      await firstLoadStarted.promise
+      const second = applicationR.data.projectChange()
+      await new Promise((resolve) => setTimeout(resolve, 0))
+      expect(applicationR.data.status()).toMatchObject({
+        desiredRevision: "revision-retention-pending",
+        pendingRevision: "revision-retention-pending",
+        pending: true,
+      })
+
+      firstLoad.resolve(new Response("", { status: 200 }))
+      const results = await Promise.all([first, second])
+      expect(results[0]).toMatchObject({ success: true, data: { revision: "revision-retention-pending" } })
+      expect(results[1]).toEqual(results[0])
+      expect((await lstat(latestProjectDirectory)).isDirectory()).toBe(true)
+      expect(await readFile(join(latestProjectDirectory, ".project-registry-retention.json"), "utf8")).toBe(
+        '{"version":1,"state":"inactive","inactiveAt":0}',
+      )
+
+      expect((await applicationR.data.projectChange()).success).toBe(true)
+      expect(await readFile(join(latestProjectDirectory, ".project-registry-retention.json"), "utf8")).toBe(
+        '{"version":1,"state":"active"}',
+      )
+      await applicationR.data.stop()
+    } finally {
+      await rm(root, { force: true, recursive: true })
+    }
+  })
+
+  test("does not reconcile while a newer repository read is pending and reconciles its snapshot", async () => {
+    const root = await mkdtemp(join(tmpdir(), "project-registry-caddy-retention-pending-read-"))
+    const project = caddyConfigGenerateFixtures.proxy
+    const projectId = projectAccessLogId(project)
+    const projectDirectory = join(root, "projects", projectId)
+    const metadataPath = join(projectDirectory, ".project-registry-retention.json")
+    const retentionNow = projectAccessLogCaddyRetention.rollKeepDays * 24 * 60 * 60 * 1_000 + 1
+    const newerRead = deferred<Result<ProjectRepositorySnapshot>>()
+    const newerReadStarted = deferred<void>()
+    let application: (() => void) | undefined
+    let reads = 0
+    let loads = 0
+    try {
+      await mkdir(projectDirectory, { recursive: true })
+      await writeFile(join(projectDirectory, "access.jsonl"), "")
+
+      const applicationR = caddyApplicationCreate({
+        repository: {
+          read: async () => {
+            reads += 1
+            if (reads === 1) return createResult(snapshotProjects("revision-retention-old-pending-read", []))
+            newerReadStarted.resolve()
+            return newerRead.promise
+          },
+        },
+        configOptions: { caddyAccessLogRoot: root },
+        clock: () => retentionNow,
+        timer: timerFake().timer,
+        processRunner: async () => createResult({ exitCode: 0, stdout: "", stderr: "" }),
+        fetch: async () => {
+          loads += 1
+          if (loads === 1) application?.()
+          return new Response("", { status: 200 })
+        },
+      })
+      expect(applicationR.success).toBe(true)
+      if (!applicationR.success) return
+      application = () => {
+        void applicationR.data.projectChange()
+      }
+
+      const resultPromise = applicationR.data.start()
+      await newerReadStarted.promise
+      await new Promise((resolve) => setTimeout(resolve, 0))
+      expect(reads).toBe(2)
+      expect(loads).toBe(1)
+      expect(applicationR.data.status()).toMatchObject({
+        desiredRevision: "revision-retention-old-pending-read",
+        appliedRevision: "revision-retention-old-pending-read",
+        pending: false,
+      })
+      await projectAccessLogRetentionReconcile({
+        root,
+        activeProjectIds: [projectId],
+        now: retentionNow,
+        stillCurrent: () => false,
+      })
+      await expect(readFile(metadataPath)).rejects.toMatchObject({ code: "ENOENT" })
+
+      newerRead.resolve(createResult(snapshot("revision-retention-new-pending-read", project)))
+      const result = await resultPromise
+
+      expect(result).toMatchObject({
+        success: true,
+        data: { revision: "revision-retention-new-pending-read", applied: true },
+      })
+      expect(await readFile(metadataPath, "utf8")).toBe('{"version":1,"state":"active"}')
+      expect(reads).toBe(2)
+      expect(loads).toBe(2)
+      await applicationR.data.stop()
+    } finally {
+      await rm(root, { force: true, recursive: true })
+    }
+  })
+
+  test("abandons stale retention for a reactivation that arrives during reconciliation and drains it", async () => {
+    const root = await mkdtemp(join(tmpdir(), "project-registry-caddy-retention-await-race-"))
+    const project = caddyConfigGenerateFixtures.proxy
+    const projectId = projectAccessLogId(project)
+    const projectDirectory = join(root, "projects", projectId)
+    const retentionNow = projectAccessLogCaddyRetention.rollKeepDays * 24 * 60 * 60 * 1_000 + 1
+    const noiseCount = 256
+    let application: (() => void) | undefined
+    let reads = 0
+    let loads = 0
+    try {
+      await mkdir(join(root, "projects"), { recursive: true })
+      for (let index = 0; index < noiseCount; index += 1) {
+        const noiseDirectory = join(root, "projects", projectAccessLogId({ owner: "noise", name: `project-${index}` }))
+        await mkdir(noiseDirectory)
+        await writeFile(join(noiseDirectory, "access.jsonl"), "")
+        await writeFile(
+          join(noiseDirectory, ".project-registry-retention.json"),
+          '{"version":1,"state":"inactive","inactiveAt":0}',
+        )
+      }
+      await mkdir(projectDirectory)
+      await writeFile(join(projectDirectory, "access.jsonl"), "")
+      await writeFile(
+        join(projectDirectory, ".project-registry-retention.json"),
+        '{"version":1,"state":"inactive","inactiveAt":0}',
+      )
+
+      const applicationR = caddyApplicationCreate({
+        repository: {
+          read: async () => {
+            reads += 1
+            return reads === 1
+              ? createResult(snapshotProjects("revision-retention-await-old", []))
+              : createResult(snapshot("revision-retention-await-reactivated", project))
+          },
+        },
+        configOptions: { caddyAccessLogRoot: root },
+        clock: () => retentionNow,
+        timer: timerFake().timer,
+        processRunner: async () => createResult({ exitCode: 0, stdout: "", stderr: "" }),
+        fetch: async () => {
+          loads += 1
+          if (loads === 1) setTimeout(() => application?.(), 0)
+          return new Response("", { status: 200 })
+        },
+      })
+      expect(applicationR.success).toBe(true)
+      if (!applicationR.success) return
+      application = () => {
+        void applicationR.data.projectChange()
+      }
+
+      const result = await applicationR.data.start()
+
+      expect(result).toMatchObject({
+        success: true,
+        data: { revision: "revision-retention-await-reactivated", applied: true },
+      })
+      expect(reads).toBe(2)
+      expect((await lstat(projectDirectory)).isDirectory()).toBe(true)
+      expect(await readFile(join(projectDirectory, ".project-registry-retention.json"), "utf8")).toBe(
+        '{"version":1,"state":"active"}',
+      )
+      await expect(lstat(join(root, "quarantine", projectId))).rejects.toMatchObject({ code: "ENOENT" })
+      await applicationR.data.stop()
+    } finally {
+      await rm(root, { force: true, recursive: true })
+    }
+  })
+
+  test("does not write stale live metadata when a newer desired state arrives during reconciliation", async () => {
+    const root = await mkdtemp(join(tmpdir(), "project-registry-caddy-retention-write-race-"))
+    const project = caddyConfigGenerateFixtures.proxy
+    const projectId = projectAccessLogId(project)
+    const projectDirectory = join(root, "projects", projectId)
+    const retentionNow = projectAccessLogCaddyRetention.rollKeepDays * 24 * 60 * 60 * 1_000 + 1
+    const secondLoad = deferred<Response>()
+    const secondLoadStarted = deferred<void>()
+    const noiseCount = 256
+    let application: (() => void) | undefined
+    let reads = 0
+    let loads = 0
+    try {
+      await mkdir(join(root, "projects"), { recursive: true })
+      for (let index = 0; index < noiseCount; index += 1) {
+        const noiseDirectory = join(
+          root,
+          "projects",
+          projectAccessLogId({ owner: "write-noise", name: `project-${index}` }),
+        )
+        await mkdir(noiseDirectory)
+        await writeFile(join(noiseDirectory, "access.jsonl"), "")
+        await writeFile(
+          join(noiseDirectory, ".project-registry-retention.json"),
+          '{"version":1,"state":"inactive","inactiveAt":0}',
+        )
+      }
+      await mkdir(projectDirectory)
+      await writeFile(join(projectDirectory, "access.jsonl"), "")
+
+      const applicationR = caddyApplicationCreate({
+        repository: {
+          read: async () => {
+            reads += 1
+            return reads === 1
+              ? createResult(snapshotProjects("revision-retention-write-old", []))
+              : createResult(snapshot("revision-retention-write-new", project))
+          },
+        },
+        configOptions: { caddyAccessLogRoot: root },
+        clock: () => retentionNow,
+        timer: timerFake().timer,
+        processRunner: async () => createResult({ exitCode: 0, stdout: "", stderr: "" }),
+        fetch: async () => {
+          loads += 1
+          if (loads === 1) {
+            setTimeout(() => application?.(), 0)
+            return new Response("", { status: 200 })
+          }
+          secondLoadStarted.resolve()
+          return secondLoad.promise
+        },
+      })
+      expect(applicationR.success).toBe(true)
+      if (!applicationR.success) return
+      application = () => {
+        void applicationR.data.projectChange()
+      }
+
+      const resultPromise = applicationR.data.start()
+      await secondLoadStarted.promise
+      await expect(readFile(join(projectDirectory, ".project-registry-retention.json"))).rejects.toMatchObject({
+        code: "ENOENT",
+      })
+
+      secondLoad.resolve(new Response("", { status: 200 }))
+      const result = await resultPromise
+      expect(result).toMatchObject({
+        success: true,
+        data: { revision: "revision-retention-write-new", applied: true },
+      })
+      expect(await readFile(join(projectDirectory, ".project-registry-retention.json"), "utf8")).toBe(
+        '{"version":1,"state":"active"}',
+      )
+      await applicationR.data.stop()
+    } finally {
+      await rm(root, { force: true, recursive: true })
+    }
+  })
+
+  test("defers retention reconciliation until a queued reactivation is applied", async () => {
+    const root = await mkdtemp(join(tmpdir(), "project-registry-caddy-retention-reactivation-validation-"))
+    const project = caddyConfigGenerateFixtures.proxy
+    const projectId = projectAccessLogId(project)
+    const projectDirectory = join(root, "projects", projectId)
+    const retentionNow = projectAccessLogCaddyRetention.rollKeepDays * 24 * 60 * 60 * 1_000 + 1
+    const firstValidation = deferred<Result<ProcessResult>>()
+    const firstValidationStarted = deferred<void>()
+    const secondValidation = deferred<Result<ProcessResult>>()
+    const secondValidationStarted = deferred<void>()
+    const secondRead = deferred<Result<ProjectRepositorySnapshot>>()
+    const secondReadStarted = deferred<void>()
+    let reads = 0
+    let validations = 0
+    try {
+      await mkdir(projectDirectory, { recursive: true })
+      await writeFile(join(projectDirectory, "access.jsonl"), "")
+      await projectAccessLogRetentionReconcile({ root, activeProjectIds: [], now: 0 })
+
+      const applicationR = caddyApplicationCreate({
+        repository: {
+          read: async () => {
+            reads += 1
+            if (reads === 2) {
+              secondReadStarted.resolve()
+              return secondRead.promise
+            }
+            return createResult(snapshotProjects("revision-reactivation-inactive", []))
+          },
+        },
+        configOptions: { caddyAccessLogRoot: root },
+        clock: () => retentionNow,
+        timer: timerFake().timer,
+        processRunner: async () => {
+          validations += 1
+          if (validations === 1) {
+            firstValidationStarted.resolve()
+            return firstValidation.promise
+          }
+          secondValidationStarted.resolve()
+          return secondValidation.promise
+        },
+        fetch: async () => new Response("", { status: 200 }),
+      })
+      expect(applicationR.success).toBe(true)
+      if (!applicationR.success) return
+
+      const first = applicationR.data.projectChange()
+      await firstValidationStarted.promise
+
+      const second = applicationR.data.projectChange()
+      await secondReadStarted.promise
+      secondRead.resolve(createResult(snapshot("revision-reactivation-active", project)))
+      await new Promise((resolve) => setTimeout(resolve, 0))
+      expect(applicationR.data.status()).toMatchObject({
+        pendingRevision: "revision-reactivation-active",
+        pending: true,
+      })
+
+      firstValidation.resolve(createResult({ exitCode: 0, stdout: "", stderr: "" }))
+      await secondValidationStarted.promise
+      expect((await lstat(projectDirectory)).isDirectory()).toBe(true)
+      expect(await readFile(join(projectDirectory, ".project-registry-retention.json"), "utf8")).toBe(
+        '{"version":1,"state":"inactive","inactiveAt":0}',
+      )
+
+      secondValidation.resolve(createResult({ exitCode: 0, stdout: "", stderr: "" }))
+      const results = await Promise.all([first, second])
+      expect(results[0]).toMatchObject({ success: true, data: { revision: "revision-reactivation-active" } })
+      expect(results[1]).toEqual(results[0])
+      expect(await readFile(join(projectDirectory, ".project-registry-retention.json"), "utf8")).toBe(
+        '{"version":1,"state":"active"}',
+      )
+      await applicationR.data.stop()
+    } finally {
+      await rm(root, { force: true, recursive: true })
+    }
+  })
+
+  test("defers retention reconciliation while a queued reactivation waits for Caddy load", async () => {
+    const root = await mkdtemp(join(tmpdir(), "project-registry-caddy-retention-reactivation-load-"))
+    const project = caddyConfigGenerateFixtures.proxy
+    const projectId = projectAccessLogId(project)
+    const projectDirectory = join(root, "projects", projectId)
+    const firstLoad = deferred<Response>()
+    const secondLoad = deferred<Response>()
+    const firstLoadStarted = deferred<void>()
+    const secondLoadStarted = deferred<void>()
+    const secondRead = deferred<Result<ProjectRepositorySnapshot>>()
+    const secondReadStarted = deferred<void>()
+    const retentionNow = projectAccessLogCaddyRetention.rollKeepDays * 24 * 60 * 60 * 1_000 + 1
+    let reads = 0
+    let loads = 0
+    try {
+      await mkdir(projectDirectory, { recursive: true })
+      await writeFile(join(projectDirectory, "access.jsonl"), "")
+      await projectAccessLogRetentionReconcile({ root, activeProjectIds: [], now: 0 })
+
+      const applicationR = caddyApplicationCreate({
+        repository: {
+          read: async () => {
+            reads += 1
+            if (reads === 2) {
+              secondReadStarted.resolve()
+              return secondRead.promise
+            }
+            return createResult(snapshotProjects("revision-reactivation-inactive-load", []))
+          },
+        },
+        configOptions: { caddyAccessLogRoot: root },
+        clock: () => retentionNow,
+        timer: timerFake().timer,
+        processRunner: async () => createResult({ exitCode: 0, stdout: "", stderr: "" }),
+        fetch: async () => {
+          loads += 1
+          if (loads === 1) {
+            firstLoadStarted.resolve()
+            return firstLoad.promise
+          }
+          secondLoadStarted.resolve()
+          return secondLoad.promise
+        },
+      })
+      expect(applicationR.success).toBe(true)
+      if (!applicationR.success) return
+
+      const first = applicationR.data.projectChange()
+      await firstLoadStarted.promise
+      const second = applicationR.data.projectChange()
+      await secondReadStarted.promise
+      secondRead.resolve(createResult(snapshot("revision-reactivation-active-load", project)))
+      await new Promise((resolve) => setTimeout(resolve, 0))
+
+      firstLoad.resolve(new Response("", { status: 200 }))
+      await secondLoadStarted.promise
+      expect((await lstat(projectDirectory)).isDirectory()).toBe(true)
+      expect(await readFile(join(projectDirectory, ".project-registry-retention.json"), "utf8")).toBe(
+        '{"version":1,"state":"inactive","inactiveAt":0}',
+      )
+
+      secondLoad.resolve(new Response("", { status: 200 }))
+      const results = await Promise.all([first, second])
+      expect(results[0]).toMatchObject({ success: true, data: { revision: "revision-reactivation-active-load" } })
+      expect(results[1]).toEqual(results[0])
+      expect(await readFile(join(projectDirectory, ".project-registry-retention.json"), "utf8")).toBe(
+        '{"version":1,"state":"active"}',
+      )
+      await applicationR.data.stop()
+    } finally {
+      await rm(root, { force: true, recursive: true })
+    }
+  })
+
+  test("initializes from a validated configuration without loading Caddy", async () => {
+    let currentProject: Project = caddyConfigGenerateFixtures.proxy
+    let validates = 0
+    let loads = 0
+    const fakeTimer = timerFake()
+    const applicationR = caddyApplicationCreate({
+      repository: { read: async () => createResult(snapshot("revision-1", currentProject)) },
+      initializeFromGeneratedConfig: true,
+      timer: fakeTimer.timer,
+      processRunner: async () => {
+        validates += 1
+        return createResult({ exitCode: 0, stdout: "", stderr: "" })
+      },
+      fetch: async () => {
+        loads += 1
+        return new Response("", { status: 200 })
+      },
+    })
+    expect(applicationR.success).toBe(true)
+    if (!applicationR.success) return
+
+    const initialized = await applicationR.data.startup()
+
+    expect(initialized).toEqual({
+      success: true,
+      data: { revision: "revision-1", changed: false, applied: true, attempts: 1 },
+    })
+    expect(validates).toBe(1)
+    expect(loads).toBe(0)
+    expect(applicationR.data.status()).toMatchObject({
+      desiredRevision: "revision-1",
+      appliedRevision: "revision-1",
+      pending: false,
+    })
+
+    fakeTimer.intervals[0]?.()
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(validates).toBe(1)
+    expect(loads).toBe(0)
+
+    currentProject = caddyConfigGenerateFixtures.static
+    fakeTimer.intervals[0]?.()
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(validates).toBe(2)
+    expect(loads).toBe(1)
+
+    expect((await applicationR.data.regenerate()).success).toBe(true)
+    expect(validates).toBe(3)
+    expect(loads).toBe(2)
+    await applicationR.data.stop()
+  })
+
+  test("reconciles expired access-log directories after startup initialization without loading Caddy", async () => {
+    const root = await mkdtemp(join(tmpdir(), "project-registry-caddy-retention-startup-"))
+    const oldId = projectAccessLogId({ owner: "startup-deleted-owner", name: "startup-deleted-project" })
+    const oldDirectory = join(root, "projects", oldId)
+    const retentionNow = projectAccessLogCaddyRetention.rollKeepDays * 24 * 60 * 60 * 1_000 + 1
+    let validates = 0
+    let loads = 0
+    try {
+      await mkdir(oldDirectory, { recursive: true })
+      await writeFile(join(oldDirectory, "access.jsonl"), "")
+      await projectAccessLogRetentionReconcile({ root, activeProjectIds: [], now: 0 })
+      const applicationR = caddyApplicationCreate({
+        repository: { read: async () => createResult(snapshot("revision-retention-startup")) },
+        configOptions: { caddyAccessLogRoot: root },
+        initializeFromGeneratedConfig: true,
+        clock: () => retentionNow,
+        timer: timerFake().timer,
+        processRunner: async () => {
+          validates += 1
+          return createResult({ exitCode: 0, stdout: "", stderr: "" })
+        },
+        fetch: async () => {
+          loads += 1
+          return new Response("", { status: 200 })
+        },
+      })
+      expect(applicationR.success).toBe(true)
+      if (!applicationR.success) return
+
+      expect(await applicationR.data.startup()).toMatchObject({
+        success: true,
+        data: { revision: "revision-retention-startup", changed: false, applied: true },
+      })
+      expect(validates).toBe(1)
+      expect(loads).toBe(0)
+      await expect(lstat(oldDirectory)).rejects.toMatchObject({ code: "ENOENT" })
+      expect((await lstat(join(root, "quarantine", oldId))).isDirectory()).toBe(true)
+      await applicationR.data.stop()
+    } finally {
+      await rm(root, { force: true, recursive: true })
+    }
+  })
+
+  test("retries failed startup retention on an unchanged interval without loading Caddy", async () => {
+    const root = await mkdtemp(join(tmpdir(), "project-registry-caddy-retention-startup-retry-"))
+    const projectsPath = join(root, "projects")
+    const oldId = projectAccessLogId({ owner: "startup-retry-owner", name: "startup-retry-project" })
+    const oldDirectory = join(projectsPath, oldId)
+    const retentionNow = projectAccessLogCaddyRetention.rollKeepDays * 24 * 60 * 60 * 1_000 + 1
+    const fakeTimer = timerFake()
+    let validates = 0
+    let loads = 0
+    try {
+      await writeFile(projectsPath, "transient startup failure")
+      const applicationR = caddyApplicationCreate({
+        repository: { read: async () => createResult(snapshot("revision-retention-startup-retry")) },
+        configOptions: { caddyAccessLogRoot: root },
+        initializeFromGeneratedConfig: true,
+        clock: () => retentionNow,
+        timer: fakeTimer.timer,
+        processRunner: async () => {
+          validates += 1
+          return createResult({ exitCode: 0, stdout: "", stderr: "" })
+        },
+        fetch: async () => {
+          loads += 1
+          return new Response("", { status: 200 })
+        },
+      })
+      expect(applicationR.success).toBe(true)
+      if (!applicationR.success) return
+
+      expect((await applicationR.data.startup()).success).toBe(true)
+      expect(validates).toBe(1)
+      expect(loads).toBe(0)
+
+      await rm(projectsPath)
+      await mkdir(oldDirectory, { recursive: true })
+      await writeFile(join(oldDirectory, "access.jsonl"), "")
+      await writeFile(
+        join(oldDirectory, ".project-registry-retention.json"),
+        '{"version":1,"state":"inactive","inactiveAt":0}',
+      )
+      fakeTimer.intervals[0]?.()
+      let quarantined = false
+      for (let attempt = 0; attempt < 20; attempt += 1) {
+        try {
+          quarantined = (await lstat(join(root, "quarantine", oldId))).isDirectory()
+        } catch {
+          quarantined = false
+        }
+        if (quarantined) break
+        await new Promise((resolve) => setTimeout(resolve, 0))
+      }
+
+      expect(validates).toBe(1)
+      expect(loads).toBe(0)
+      expect(quarantined).toBe(true)
+      await expect(lstat(oldDirectory)).rejects.toMatchObject({ code: "ENOENT" })
+      await applicationR.data.stop()
+    } finally {
+      await rm(root, { force: true, recursive: true })
+    }
+  })
+
+  test("keeps an invalid initialization pending for interval retry", async () => {
+    let validates = 0
+    let loads = 0
+    const fakeTimer = timerFake()
+    const applicationR = caddyApplicationCreate({
+      repository: { read: async () => createResult(snapshot("revision-invalid")) },
+      initializeFromGeneratedConfig: true,
+      maxRetries: 0,
+      timer: fakeTimer.timer,
+      processRunner: async () => {
+        validates += 1
+        return createResult({ exitCode: validates === 1 ? 1 : 0, stdout: "", stderr: "" })
+      },
+      fetch: async () => {
+        loads += 1
+        return new Response("", { status: 200 })
+      },
+    })
+    expect(applicationR.success).toBe(true)
+    if (!applicationR.success) return
+
+    const initialized = await applicationR.data.startup()
+
+    expect(initialized).toEqual({
+      success: true,
+      data: { revision: "revision-invalid", changed: false, applied: false, attempts: 1 },
+    })
+    expect(loads).toBe(0)
+    expect(applicationR.data.status()).toMatchObject({
+      desiredRevision: "revision-invalid",
+      pendingRevision: "revision-invalid",
+      pending: true,
+      error: "caddy validate failed (exit code 1)",
+    })
+    expect(applicationR.data.status().appliedRevision).toBeUndefined()
+
+    fakeTimer.intervals[0]?.()
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(validates).toBe(2)
+    expect(loads).toBe(1)
+    expect(applicationR.data.status()).toMatchObject({
+      appliedRevision: "revision-invalid",
+      pending: false,
+      error: undefined,
+    })
+    await applicationR.data.stop()
+  })
+
+  test("does not reload unchanged interval configurations but applies real changes", async () => {
+    let currentProject: Project = caddyConfigGenerateFixtures.proxy
+    let validates = 0
+    let loads = 0
+    const fakeTimer = timerFake()
+    const applicationR = caddyApplicationCreate({
+      repository: { read: async () => createResult(snapshot("revision-1", currentProject)) },
+      timer: fakeTimer.timer,
+      processRunner: async () => {
+        validates += 1
+        return createResult({ exitCode: 0, stdout: "", stderr: "" })
+      },
+      fetch: async () => {
+        loads += 1
+        return new Response("", { status: 200 })
+      },
+    })
+    expect(applicationR.success).toBe(true)
+    if (!applicationR.success) return
+
+    expect((await applicationR.data.start()).success).toBe(true)
+    expect(validates).toBe(1)
+    expect(loads).toBe(1)
+
+    fakeTimer.intervals[0]?.()
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(validates).toBe(1)
+    expect(loads).toBe(1)
+
+    currentProject = caddyConfigGenerateFixtures.static
+    fakeTimer.intervals[0]?.()
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(validates).toBe(2)
+    expect(loads).toBe(2)
+    await applicationR.data.stop()
   })
 
   test("retries validation and then loads once", async () => {
@@ -1061,6 +1959,43 @@ describe("caddyApplication", () => {
       pending: false,
       error: undefined,
     })
+  })
+
+  test("retries an unchanged interval configuration after an application failure", async () => {
+    let validates = 0
+    let loads = 0
+    const fakeTimer = timerFake()
+    const applicationR = caddyApplicationCreate({
+      repository: { read: async () => createResult(snapshot("revision-1")) },
+      maxRetries: 0,
+      timer: fakeTimer.timer,
+      processRunner: async () => {
+        validates += 1
+        return createResult({ exitCode: validates === 1 ? 1 : 0, stdout: "", stderr: "" })
+      },
+      fetch: async () => {
+        loads += 1
+        return new Response("", { status: 200 })
+      },
+    })
+    expect(applicationR.success).toBe(true)
+    if (!applicationR.success) return
+
+    expect((await applicationR.data.start()).success).toBe(false)
+    expect(validates).toBe(1)
+    expect(loads).toBe(0)
+
+    fakeTimer.intervals[0]?.()
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    expect(validates).toBe(2)
+    expect(loads).toBe(1)
+    expect(applicationR.data.status()).toMatchObject({
+      appliedRevision: "revision-1",
+      pending: false,
+      error: undefined,
+    })
+    await applicationR.data.stop()
   })
 
   test("records interval scheduling failures in status", async () => {

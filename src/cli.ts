@@ -1,3 +1,5 @@
 #!/usr/bin/env bun
 
-process.stdout.write("project-registry CLI is not implemented yet\n")
+import { projectRegistryCliRun } from "./cli/projectRegistryCliRun.js"
+
+process.exitCode = await projectRegistryCliRun(Bun.argv.slice(2))

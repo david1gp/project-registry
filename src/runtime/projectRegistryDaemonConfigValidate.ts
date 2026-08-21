@@ -1,5 +1,6 @@
 import * as a from "valibot"
 import { createResult, createResultError, type Result } from "#result"
+import { projectAccessLogRootValidate } from "../access-log/projectAccessLogRootValidate.js"
 import type { ProjectRegistryDaemonConfig } from "./ProjectRegistryDaemonConfig.js"
 import { projectRegistryDaemonConfigSchema } from "./projectRegistryDaemonConfigSchema.js"
 
@@ -9,18 +10,47 @@ export function projectRegistryDaemonConfigValidate(input: unknown): Result<Proj
     const parsed = a.safeParse(projectRegistryDaemonConfigSchema, input)
     if (!parsed.success) return createResultError(op, a.summarize(parsed.issues))
 
+    if (
+      parsed.output.oidc !== undefined &&
+      parsed.output.zitadel !== undefined &&
+      parsed.output.oidc.issuer !== parsed.output.zitadel.issuer
+    ) {
+      return createResultError(op, "OIDC and Zitadel identity issuers must match")
+    }
+
+    if ((parsed.output.caddyUser === undefined) !== (parsed.output.caddyGroup === undefined)) {
+      return createResultError(op, "Caddy service User and Group must be configured together")
+    }
+
     let adminUrl: URL
     try {
       adminUrl = new URL(parsed.output.caddyAdminUrl)
     } catch {
       return createResultError(op, "caddy admin URL is invalid")
     }
-    if (!["http:", "https:"].includes(adminUrl.protocol) || adminUrl.username !== "" || adminUrl.password !== "") {
-      return createResultError(op, "caddy admin URL must be an HTTP URL without credentials")
+    const adminHostname =
+      adminUrl.hostname.startsWith("[") && adminUrl.hostname.endsWith("]")
+        ? adminUrl.hostname.slice(1, -1)
+        : adminUrl.hostname
+    if (
+      !["http:", "https:"].includes(adminUrl.protocol) ||
+      !["localhost", "127.0.0.1", "::1"].includes(adminHostname) ||
+      adminUrl.username !== "" ||
+      adminUrl.password !== ""
+    ) {
+      return createResultError(op, "caddy admin URL must be an HTTP(S) loopback URL without credentials")
     }
 
     if (parsed.output.portRange.from > parsed.output.portRange.to) {
       return createResultError(op, "port range start must not exceed its end")
+    }
+
+    if (parsed.output.caddyAccessLogRoot !== undefined) {
+      const accessLogRootR = projectAccessLogRootValidate(
+        parsed.output.caddyAccessLogRoot,
+        parsed.output.repositoryPath,
+      )
+      if (!accessLogRootR.success) return createResultError(op, accessLogRootR.errorMessage)
     }
 
     return createResult({
@@ -30,6 +60,8 @@ export function projectRegistryDaemonConfigValidate(input: unknown): Result<Proj
         parsed.output.oidc === undefined
           ? undefined
           : { ...parsed.output.oidc, scope: parsed.output.oidc.scope?.slice() },
+      zitadel: parsed.output.zitadel === undefined ? undefined : { ...parsed.output.zitadel },
+      session: { ...parsed.output.session },
       portRange: { ...parsed.output.portRange },
       webListener: { ...parsed.output.webListener },
     })

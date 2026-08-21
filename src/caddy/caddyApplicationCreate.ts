@@ -1,6 +1,9 @@
 import { types } from "node:util"
 import * as a from "valibot"
 import { createResult, createResultError, type PromiseResult, type Result } from "#result"
+import { projectAccessLogId } from "../access-log/projectAccessLogId.js"
+import { projectAccessLogRetentionMaximumActiveProjectIds } from "../access-log/projectAccessLogRetentionMaximumActiveProjectIds.js"
+import { projectAccessLogRetentionReconcile } from "../access-log/projectAccessLogRetentionReconcile.js"
 import { projectSchema } from "../project/projectSchema.js"
 import type { ProjectRepositorySnapshot } from "../project-store/ProjectRepositorySnapshot.js"
 import type { CaddyApplication } from "./CaddyApplication.js"
@@ -21,16 +24,20 @@ const defaultRetryDelayMs = 1_000
 type QueuedSnapshot = {
   snapshot: ProjectRepositorySnapshot
   force: boolean
+  initialize: boolean
   sequence: number
 }
 
 type TriggerOperation = {
   sequence: number
   force: boolean
+  initialize: boolean
   promise: PromiseResult<CaddyApplicationResult>
   resolve: (result: Result<CaddyApplicationResult>) => void
   settled: boolean
 }
+
+type SuccessfulCaddyLoadHandler = (snapshot: ProjectRepositorySnapshot, now: number, sequence: number) => void
 
 function caddyTimerDefault(): CaddyTimer {
   return {
@@ -97,6 +104,7 @@ function caddyApplicationOptionsValues(options: unknown): CaddyApplicationOption
     "retryDelayMs",
     "validationTimeoutMs",
     "loadTimeoutMs",
+    "initializeFromGeneratedConfig",
   ]
   for (const key of Reflect.ownKeys(options)) {
     if (typeof key !== "string" || !names.includes(key)) throw new Error("invalid options")
@@ -286,6 +294,9 @@ function caddyApplicationOptionsValidate(options: unknown): Result<CaddyApplicat
   ) {
     return createResultError(op, "loadTimeoutMs must be a positive integer")
   }
+  if (values.initializeFromGeneratedConfig !== undefined && typeof values.initializeFromGeneratedConfig !== "boolean") {
+    return createResultError(op, "initializeFromGeneratedConfig must be a boolean")
+  }
 
   if (values.caddyBin !== undefined && typeof values.caddyBin !== "string") {
     return createResultError(op, "caddyBin must be a string")
@@ -317,6 +328,8 @@ function caddyApplicationOptionsValidate(options: unknown): Result<CaddyApplicat
     retryDelayMs,
     validationTimeoutMs: values.validationTimeoutMs as CaddyApplicationOptions["validationTimeoutMs"],
     loadTimeoutMs: values.loadTimeoutMs as CaddyApplicationOptions["loadTimeoutMs"],
+    initializeFromGeneratedConfig:
+      values.initializeFromGeneratedConfig as CaddyApplicationOptions["initializeFromGeneratedConfig"],
   })
 }
 
@@ -333,6 +346,7 @@ export function caddyApplicationCreate(options: unknown): Result<CaddyApplicatio
   const maxRetries = applicationOptions.maxRetries ?? defaultMaxRetries
   const retryDelayMs = applicationOptions.retryDelayMs ?? defaultRetryDelayMs
   const intervalMs = applicationOptions.intervalMs ?? defaultIntervalMs
+  const initializeFromGeneratedConfig = applicationOptions.initializeFromGeneratedConfig ?? false
   let status: CaddyApplicationStatus = { pending: false }
   let lastAppliedSerialized: string | undefined
   let reloadRequired = false
@@ -343,6 +357,7 @@ export function caddyApplicationCreate(options: unknown): Result<CaddyApplicatio
   let stopped = false
   let stopPromise: Promise<void> | undefined
   const stopController = new AbortController()
+  let retentionReconciliationDirty = false
   let triggerSequence = 0
   let latestTrigger: TriggerOperation | undefined
   let statusSequence = 0
@@ -439,7 +454,9 @@ export function caddyApplicationCreate(options: unknown): Result<CaddyApplicatio
   async function snapshotApply(
     snapshot: ProjectRepositorySnapshot,
     force: boolean,
+    initialize: boolean,
     sequence: number,
+    successfulCaddyLoad: SuccessfulCaddyLoadHandler,
   ): PromiseResult<CaddyApplicationResult> {
     if (stopped) return stoppedResult()
     status = {
@@ -461,7 +478,7 @@ export function caddyApplicationCreate(options: unknown): Result<CaddyApplicatio
       return statusError(serializedR.errorMessage, snapshot, sequence)
     }
 
-    if (!force && !reloadRequired && lastAppliedSerialized === serializedR.data) {
+    if (!initialize && !force && !reloadRequired && lastAppliedSerialized === serializedR.data) {
       if (statusSequence === sequence) {
         status = {
           ...status,
@@ -472,6 +489,7 @@ export function caddyApplicationCreate(options: unknown): Result<CaddyApplicatio
           error: undefined,
         }
       }
+      if (retentionReconciliationDirty) successfulCaddyLoad(snapshot, clock(), sequence)
       return createResult({ revision: snapshot.revision, changed: false, applied: true, attempts: 0 })
     }
 
@@ -496,6 +514,21 @@ export function caddyApplicationCreate(options: unknown): Result<CaddyApplicatio
       if (stopped) return stoppedResult()
       if (!validateR.success) {
         lastError = validateR.errorMessage
+      } else if (initialize) {
+        const now = clock()
+        status = {
+          ...status,
+          desiredRevision: snapshot.revision,
+          appliedRevision: snapshot.revision,
+          pendingRevision: undefined,
+          pending: false,
+          lastSuccess: now,
+          error: undefined,
+        }
+        lastAppliedSerialized = serializedR.data
+        reloadRequired = false
+        successfulCaddyLoad(snapshot, now, sequence)
+        return createResult({ revision: snapshot.revision, changed: false, applied: true, attempts: retry + 1 })
       } else {
         const loadR = await caddyAdminLoad(generatedR.data, {
           adminUrl: applicationOptions.adminUrl,
@@ -530,6 +563,7 @@ export function caddyApplicationCreate(options: unknown): Result<CaddyApplicatio
           }
           lastAppliedSerialized = serializedR.data
           reloadRequired = false
+          successfulCaddyLoad(snapshot, now, sequence)
           return createResult({ revision: snapshot.revision, changed: true, applied: true, attempts: retry + 1 })
         }
         lastError = loadR.errorMessage
@@ -542,6 +576,19 @@ export function caddyApplicationCreate(options: unknown): Result<CaddyApplicatio
         if (!waitR.success) return stopped ? stoppedResult() : statusError(waitR.errorMessage, snapshot, sequence)
         if (pending !== undefined) break
       }
+    }
+
+    if (initialize) {
+      reloadRequired = true
+      if (statusSequence === sequence) {
+        status = {
+          ...status,
+          pending: true,
+          pendingRevision: status.desiredRevision ?? snapshot.revision,
+          error: lastError,
+        }
+      }
+      return createResult({ revision: snapshot.revision, changed: false, applied: false, attempts: maxRetries + 1 })
     }
 
     reloadRequired = true
@@ -558,29 +605,85 @@ export function caddyApplicationCreate(options: unknown): Result<CaddyApplicatio
 
   async function queueDrain(): PromiseResult<CaddyApplicationResult> {
     let result: Result<CaddyApplicationResult> = createResultError("caddyApplication", "no Caddy application queued")
-    while (pending !== undefined && !stopped) {
-      const queued = pending
-      pending = undefined
-      try {
-        result = await snapshotApply(queued.snapshot, queued.force, queued.sequence)
-      } catch {
-        result = stopped ? stoppedResult() : statusError("Caddy application failed", queued.snapshot, queued.sequence)
+    while (!stopped) {
+      let latestSuccessfulCaddyLoad: { snapshot: ProjectRepositorySnapshot; now: number; sequence: number } | undefined
+      while (pending !== undefined && !stopped) {
+        const queued = pending
+        pending = undefined
+        try {
+          result = await snapshotApply(
+            queued.snapshot,
+            queued.force,
+            queued.initialize,
+            queued.sequence,
+            (snapshot, now, sequence) => {
+              latestSuccessfulCaddyLoad = { snapshot, now, sequence }
+            },
+          )
+        } catch {
+          result = stopped ? stoppedResult() : statusError("Caddy application failed", queued.snapshot, queued.sequence)
+        }
       }
+
+      if (stopped) {
+        pending = undefined
+        return stoppedResult()
+      }
+      const accessLogRoot = applicationOptions.configOptions?.caddyAccessLogRoot
+      const successfulRevision = latestSuccessfulCaddyLoad?.snapshot.revision
+      const successfulSequence = latestSuccessfulCaddyLoad?.sequence
+      if (result.success && latestSuccessfulCaddyLoad !== undefined && accessLogRoot !== undefined) {
+        const stillCurrent = () =>
+          !stopped &&
+          latestTrigger?.sequence === successfulSequence &&
+          !status.pending &&
+          status.pendingRevision === undefined &&
+          status.desiredRevision === successfulRevision &&
+          status.appliedRevision === successfulRevision
+        if (stillCurrent()) {
+          try {
+            const activeProjectIds = latestSuccessfulCaddyLoad.snapshot.projects
+              .filter((project) => project.caddy !== undefined && project.caddy !== null && !project.caddy.disabled)
+              .map(projectAccessLogId)
+            // An over-limit snapshot is not reconciled. Never truncate it: a partial active set could delete live logs.
+            if (activeProjectIds.length <= projectAccessLogRetentionMaximumActiveProjectIds) {
+              const reconciliationR = await projectAccessLogRetentionReconcile({
+                root: accessLogRoot,
+                activeProjectIds,
+                now: latestSuccessfulCaddyLoad.now,
+                stillCurrent,
+              })
+              if (reconciliationR.success) {
+                if (stillCurrent()) retentionReconciliationDirty = false
+              } else if (stillCurrent()) {
+                retentionReconciliationDirty = true
+              }
+            }
+          } catch {
+            if (stillCurrent()) retentionReconciliationDirty = true
+            // Caddy has already accepted the configuration; retention is best effort and must not change that result.
+          }
+        }
+      }
+      if (pending === undefined) return result
     }
-    if (stopped) {
-      pending = undefined
-      return stoppedResult()
-    }
-    return result
+    pending = undefined
+    return stoppedResult()
   }
 
   function snapshotQueue(
     snapshot: ProjectRepositorySnapshot,
     force: boolean,
+    initialize: boolean,
     sequence: number,
   ): PromiseResult<CaddyApplicationResult> {
     if (stopped) return Promise.resolve(stoppedResult())
-    pending = { snapshot, force: force || pending?.force === true, sequence }
+    pending = {
+      snapshot,
+      force: force || pending?.force === true,
+      initialize,
+      sequence,
+    }
     if (running !== undefined) return running
 
     running = queue.enqueue(queueDrain)
@@ -618,12 +721,12 @@ export function caddyApplicationCreate(options: unknown): Result<CaddyApplicatio
       return latestTrigger?.promise ?? createResultError("caddyApplication", "project registry read failed")
 
     statusDesired(snapshot, operation.sequence)
-    const queued = snapshotQueue(snapshot, operation.force, operation.sequence)
+    const queued = snapshotQueue(snapshot, operation.force, operation.initialize, operation.sequence)
     const result = await queued
     return triggerResultLatest(operation, result)
   }
 
-  function trigger(force: boolean): PromiseResult<CaddyApplicationResult> {
+  function trigger(force: boolean, initialize = false): PromiseResult<CaddyApplicationResult> {
     if (stopped) return Promise.resolve(stoppedResult())
     const sequence = triggerSequence + 1
     triggerSequence = sequence
@@ -631,7 +734,14 @@ export function caddyApplicationCreate(options: unknown): Result<CaddyApplicatio
     const promise: PromiseResult<CaddyApplicationResult> = new Promise((resolve) => {
       resolveTrigger = resolve
     })
-    const operation: TriggerOperation = { sequence, force, promise, resolve: resolveTrigger, settled: false }
+    const operation: TriggerOperation = {
+      sequence,
+      force,
+      initialize,
+      promise,
+      resolve: resolveTrigger,
+      settled: false,
+    }
     latestTrigger = operation
     triggerOperations.add(operation)
     void triggerRead(operation).then(
@@ -656,7 +766,7 @@ export function caddyApplicationCreate(options: unknown): Result<CaddyApplicatio
     intervalStarted = true
     try {
       intervalHandle = timer.setInterval(() => {
-        if (!stopped) void trigger(true)
+        if (!stopped) void trigger(false)
       }, intervalMs)
     } catch (error) {
       intervalStarted = false
@@ -676,6 +786,10 @@ export function caddyApplicationCreate(options: unknown): Result<CaddyApplicatio
     return createResultError("caddyApplication", error)
   }
 
+  function startupTrigger(): PromiseResult<CaddyApplicationResult> {
+    return trigger(!initializeFromGeneratedConfig, initializeFromGeneratedConfig)
+  }
+
   const application: CaddyApplication = {
     start: async () => {
       if (stopped) return stoppedResult()
@@ -684,7 +798,7 @@ export function caddyApplicationCreate(options: unknown): Result<CaddyApplicatio
       } catch {
         return intervalSchedulingFailure()
       }
-      return trigger(true)
+      return startupTrigger()
     },
     startup: async () => {
       if (stopped) return stoppedResult()
@@ -693,7 +807,7 @@ export function caddyApplicationCreate(options: unknown): Result<CaddyApplicatio
       } catch {
         return intervalSchedulingFailure()
       }
-      return trigger(true)
+      return startupTrigger()
     },
     regenerate: () => trigger(true),
     projectChange: () => trigger(false),

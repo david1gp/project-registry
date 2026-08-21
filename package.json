@@ -10,7 +10,8 @@
     "vite:build": "vite build --config ./vite.config.ts",
     "rsbuild:dev": "rsbuild dev --config ./rsbuild.config.ts",
     "rsbuild:build": "rsbuild build --config ./rsbuild.config.ts",
-    "test": "bun test",
+    "test": "bun --conditions=browser test",
+    "test:ui": "bun --conditions=browser test src/ui",
     "typecheck": "bun tsc -p ./tsconfig.json --noEmit",
     "typecheck:ui": "bun tsc -p ./tsconfig.ui.json --noEmit",
     "test:w": "bun test --watch",
@@ -108,6 +109,10 @@
     "./project-store/*.js": {
       "types": "./dist/project-store/*.d.ts",
       "import": "./dist/project-store/*.js"
+    },
+    "./access-log/*.js": {
+      "types": "./dist/access-log/*.d.ts",
+      "import": "./dist/access-log/*.js"
     },
     "./identity/*.js": {
       "types": "./dist/identity/*.d.ts",

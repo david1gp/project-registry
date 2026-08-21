@@ -19,14 +19,20 @@ export function caddyConfigOptionsFromEnv(environment: unknown = Bun.env): Resul
 
     const values = environment as Environment
     const issuer = environmentValue(values, "PROJECT_REGISTRY_OIDC_ISSUER", "CADDY_PROJECTS_OIDC_ISSUER")
+    const caddyAccessLogRoot =
+      values.PROJECT_REGISTRY_CADDY_ACCESS_LOG_ROOT?.trim() === ""
+        ? undefined
+        : values.PROJECT_REGISTRY_CADDY_ACCESS_LOG_ROOT
+    const accessLogOptions = caddyAccessLogRoot === undefined ? {} : { caddyAccessLogRoot }
     if (!issuer) {
-      const defaults = a.safeParse(caddyConfigOptionsSchema, {})
+      const defaults = a.safeParse(caddyConfigOptionsSchema, accessLogOptions)
       if (!defaults.success)
         return createResultError(op, `invalid Caddy configuration: ${a.summarize(defaults.issues)}`)
       return createResult(defaults.output)
     }
 
     const options = {
+      ...accessLogOptions,
       oidc: {
         providerName:
           environmentValue(values, "PROJECT_REGISTRY_OIDC_PROVIDER", "CADDY_PROJECTS_OIDC_PROVIDER") ?? "zitadel",

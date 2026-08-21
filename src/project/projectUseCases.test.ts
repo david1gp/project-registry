@@ -27,6 +27,7 @@ type RepositoryFake = ProjectRepository & {
     edit: { key: ProjectKey; project: unknown; options: ProjectMutationOptions & { actor: string } }[]
     delete: { key: ProjectKey; options: ProjectMutationOptions & { actor: string } }[]
     history: { key: ProjectKey | undefined; limit: number | undefined }[]
+    ownerHistory: { owner: string; limit: number | undefined }[]
   }
   revision: string
   projects: Project[]
@@ -79,7 +80,7 @@ function repositoryCreate(initialProjects: Project[] = []): RepositoryFake {
   const repository = {} as RepositoryFake
   repository.projects = [...initialProjects]
   repository.revision = currentRevision
-  repository.calls = { create: [], edit: [], delete: [], history: [] }
+  repository.calls = { create: [], edit: [], delete: [], history: [], ownerHistory: [] }
   repository.read = async () => {
     if (repository.readResult !== undefined) return repository.readResult
     return createResult({ projects: repository.projects, revision: repository.revision })
@@ -115,6 +116,11 @@ function repositoryCreate(initialProjects: Project[] = []): RepositoryFake {
   }
   repository.history = async (key, limit) => {
     repository.calls.history.push({ key, limit })
+    if (repository.historyResult !== undefined) return repository.historyResult
+    return createResult([])
+  }
+  repository.ownerHistory = async (owner, limit) => {
+    repository.calls.ownerHistory.push({ owner, limit })
     if (repository.historyResult !== undefined) return repository.historyResult
     return createResult([])
   }

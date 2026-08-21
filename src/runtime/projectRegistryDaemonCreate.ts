@@ -1,7 +1,15 @@
 import { join, relative, resolve } from "node:path"
 import { createResult, createResultError, type PromiseResult, type Result } from "#result"
+import type { Actor } from "../access/Actor.js"
+import type { ProjectAccess } from "../access/ProjectAccess.js"
+import { projectAccessCreate } from "../access/projectAccessCreate.js"
+import { projectAccessLogSourceFileCreate } from "../access-log/projectAccessLogSourceFileCreate.js"
+import { projectRegistryApiHandlerCreate } from "../api/projectRegistryApiHandlerCreate.js"
 import type { ProjectRepository } from "../project-store/ProjectRepository.js"
+import { sessionActorResolve } from "../session/sessionActorResolve.js"
+import { sessionRequestResolve } from "../session/sessionRequestResolve.js"
 import type { ProjectRegistryDaemon } from "./ProjectRegistryDaemon.js"
+import type { ProjectRegistryDaemonBrowserAuth } from "./ProjectRegistryDaemonBrowserAuth.js"
 import type { ProjectRegistryDaemonConfig } from "./ProjectRegistryDaemonConfig.js"
 import type { ProjectRegistryDaemonFileStat } from "./ProjectRegistryDaemonFileStat.js"
 import type { ProjectRegistryDaemonHealth } from "./ProjectRegistryDaemonHealth.js"
@@ -9,7 +17,6 @@ import type { ProjectRegistryDaemonMappedUser } from "./ProjectRegistryDaemonMap
 import type { ProjectRegistryDaemonOptions } from "./ProjectRegistryDaemonOptions.js"
 import type { ProjectRegistryDaemonReadiness } from "./ProjectRegistryDaemonReadiness.js"
 import type { ProjectRegistryDaemonRequestContext } from "./ProjectRegistryDaemonRequestContext.js"
-import type { ProjectRegistryDaemonRequestHandler } from "./ProjectRegistryDaemonRequestHandler.js"
 import type { ProjectRegistryDaemonServer } from "./ProjectRegistryDaemonServer.js"
 import type { ProjectRegistryDaemonServerFactory } from "./ProjectRegistryDaemonServerFactory.js"
 import type { ProjectRegistryDaemonSignals } from "./ProjectRegistryDaemonSignals.js"
@@ -22,7 +29,7 @@ import { projectRegistryDaemonServerDefault } from "./projectRegistryDaemonServe
 import { projectRegistryDaemonSignalsDefault } from "./projectRegistryDaemonSignalsDefault.js"
 
 const socketMode = 0o600
-const directoryMode = 0o700
+const directoryMode = 0o755
 const maximumPosixId = 0xffffffff
 const maximumUsernameLength = 255
 
@@ -175,10 +182,6 @@ function defaultTimer(): RuntimeTimer {
   }
 }
 
-function defaultHandler(): ProjectRegistryDaemonRequestHandler {
-  return () => new Response("Not found", { status: 404 })
-}
-
 function serverStop(server: ProjectRegistryDaemonServer): Promise<void> {
   return Promise.resolve().then(() => server.stop({ closeActiveConnections: true }))
 }
@@ -190,6 +193,9 @@ export function projectRegistryDaemonCreate(options: ProjectRegistryDaemonOption
   let configInput: unknown
   let repositoryOption: ProjectRepository | undefined
   let caddyApplicationOption: ProjectRegistryDaemonOptions["caddyApplication"]
+  let accessLogSourceOption: ProjectRegistryDaemonOptions["projectAccessLogSource"]
+  let browserAuthOption: ProjectRegistryDaemonOptions["browserAuth"]
+  let socketAccessResolveOption: ProjectRegistryDaemonOptions["socketAccessResolve"]
   let mappedUsersResolveOption: ProjectRegistryDaemonOptions["mappedUsersResolve"]
   let requestHandlerOption: ProjectRegistryDaemonOptions["requestHandler"]
   let filesystemOption: ProjectRegistryDaemonOptions["filesystem"]
@@ -202,6 +208,9 @@ export function projectRegistryDaemonCreate(options: ProjectRegistryDaemonOption
     configInput = options.config
     repositoryOption = options.repository
     caddyApplicationOption = options.caddyApplication
+    accessLogSourceOption = options.projectAccessLogSource
+    browserAuthOption = options.browserAuth
+    socketAccessResolveOption = options.socketAccessResolve
     mappedUsersResolveOption = options.mappedUsersResolve
     requestHandlerOption = options.requestHandler
     filesystemOption = options.filesystem
@@ -230,7 +239,6 @@ export function projectRegistryDaemonCreate(options: ProjectRegistryDaemonOption
   const serverFactory = serverFactoryOption ?? projectRegistryDaemonServerDefault()
   const signals: ProjectRegistryDaemonSignals = signalsOption ?? projectRegistryDaemonSignalsDefault()
   const timer: RuntimeTimer = timerOption ?? defaultTimer()
-  const handler = requestHandlerOption ?? defaultHandler()
   const mappedUsersResolve = mappedUsersResolveOption
   const socketRecords = new Map<string, SocketRecord>()
   const cleanupRecords = new Map<string, SocketRecord>()
@@ -800,6 +808,61 @@ export function projectRegistryDaemonCreate(options: ProjectRegistryDaemonOption
     return current
   }
 
+  function browserProjectAccessCreate(
+    actor: Actor,
+    sessionId: string,
+    request: Request,
+    browserAuth: ProjectRegistryDaemonBrowserAuth,
+  ): ProjectAccess {
+    const sharedAccess = projectAccessCreate({
+      identityDirectory: browserAuth.identityDirectory,
+      posixUsers: browserAuth.posixUsers,
+      transport: {
+        transport: "browser",
+        sessionId,
+        sessions: browserAuth.sessions,
+        tokenReferences: browserAuth.tokenReferences,
+        signal: request.signal,
+        timeoutMs: browserAuth.timeoutMs,
+      },
+    })
+    return {
+      actorResolve: async () => createResult(actor),
+      ownerRoleResolve: sharedAccess.ownerRoleResolve,
+    }
+  }
+
+  async function browserRequestContextResolve(
+    request: Request,
+    context: Extract<ProjectRegistryDaemonRequestContext, { transport: "http" }>,
+    browserAuth: ProjectRegistryDaemonBrowserAuth,
+  ): Promise<ProjectRegistryDaemonRequestContext> {
+    if (context.access !== undefined) return context
+    const sessionR = await sessionRequestResolve(
+      request.headers.get("cookie"),
+      browserAuth.sessions,
+      browserAuth.cookie,
+      {
+        signal: request.signal,
+        timeoutMs: browserAuth.timeoutMs,
+      },
+    )
+    if (!sessionR.success) return context
+    const actorR = await sessionActorResolve(sessionR.data.id, {
+      sessions: browserAuth.sessions,
+      tokenReferences: browserAuth.tokenReferences,
+      identityDirectory: browserAuth.identityDirectory,
+      posixUsers: browserAuth.posixUsers,
+      signal: request.signal,
+      timeoutMs: browserAuth.timeoutMs,
+    })
+    if (!actorR.success) return context
+    return {
+      ...context,
+      access: browserProjectAccessCreate(actorR.data, sessionR.data.id, request, browserAuth),
+    }
+  }
+
   function handleRequest(request: Request, context: ProjectRegistryDaemonRequestContext): Response | Promise<Response> {
     if (request.method === "GET" && new URL(request.url).pathname === "/health/live") {
       return Response.json(healthLive(), { status: healthLive().live ? 200 : 503 })
@@ -821,11 +884,19 @@ export function projectRegistryDaemonCreate(options: ProjectRegistryDaemonOption
       })
     }
     if (state !== "running") return new Response("Service unavailable", { status: 503 })
-    try {
-      return handler(request, context)
-    } catch {
-      return new Response("Internal server error", { status: 500 })
+    const handleResolvedRequest = (
+      requestContext: ProjectRegistryDaemonRequestContext,
+    ): Response | Promise<Response> => {
+      try {
+        return handler(request, requestContext)
+      } catch {
+        return new Response("Internal server error", { status: 500 })
+      }
     }
+    if (context.transport !== "http" || browserAuthOption === undefined) return handleResolvedRequest(context)
+    return browserRequestContextResolve(request, context, browserAuthOption)
+      .then(handleResolvedRequest)
+      .catch(() => new Response("Internal server error", { status: 500 }))
   }
 
   async function awaitBeforeDeadline<T>(operation: Promise<T>, deadline: number): Promise<boolean> {
@@ -974,9 +1045,35 @@ export function projectRegistryDaemonCreate(options: ProjectRegistryDaemonOption
     delete: (key, mutationOptions) =>
       gitQueueRun("projectRegistryRepositoryDelete", () => repository.delete(key, mutationOptions)),
     history: (key, limit) => gitQueueRun("projectRegistryRepositoryHistory", () => repository.history(key, limit)),
+    ownerHistory: (owner, limit) =>
+      gitQueueRun("projectRegistryRepositoryOwnerHistory", () => repository.ownerHistory(owner, limit)),
     readiness: () => repository.readiness(),
     recover: () => gitQueueRun("projectRegistryRepositoryRecover", () => repository.recover()),
   }
+  const accessLogSourceR =
+    accessLogSourceOption !== undefined
+      ? createResult(accessLogSourceOption)
+      : config.caddyAccessLogRoot === undefined
+        ? undefined
+        : projectAccessLogSourceFileCreate({ root: config.caddyAccessLogRoot, maxRecords: 1_000 })
+  const socketAccessResolve =
+    socketAccessResolveOption ??
+    (async (username: string) =>
+      createResultError("projectRegistryDaemonSocketAccessResolve", "socket actor role is unavailable", username))
+  const handler =
+    requestHandlerOption ??
+    projectRegistryApiHandlerCreate({
+      repository: guardedRepository,
+      caddyApplication,
+      ...(accessLogSourceR?.success === true ? { projectAccessLogSource: accessLogSourceR.data } : {}),
+      socketAccessResolve,
+      configOptions: {
+        httpsListener: config.httpsListener,
+        oidc: config.oidc,
+        ...(config.caddyAccessLogRoot === undefined ? {} : { caddyAccessLogRoot: config.caddyAccessLogRoot }),
+      },
+      portRange: config.portRange,
+    })
 
   function caddyStop(): Promise<string[]> {
     if (!caddyStartAttempted) return Promise.resolve([])
