@@ -1,7 +1,6 @@
-import { createHmac, randomBytes, timingSafeEqual } from "node:crypto"
 import { createResult, type Result } from "#result"
 
-const cursorVersion = 1
+const cursorVersion = 2
 const defaultLifetimeMs = 15 * 60 * 1000
 const maximumLifetimeMs = 24 * 60 * 60 * 1000
 const maximumCursorLength = 4096
@@ -16,7 +15,7 @@ export type ProjectAccessLogCursorInput = {
 }
 
 export type ProjectAccessLogCursorPayload = ProjectAccessLogCursorInput & {
-  version: 1
+  version: 2
   expiresAt: number
 }
 
@@ -33,7 +32,7 @@ type CursorBody = {
   o?: number
   p: string
   s: string
-  v: 1
+  v: 2
 }
 
 function base64UrlEncode(value: Uint8Array): string {
@@ -106,16 +105,10 @@ function bodyIsValid(value: unknown): value is CursorBody {
 }
 
 export function projectAccessLogCursorCreate(
-  options: { secret?: string | Uint8Array; clock?: () => number; lifetimeMs?: number } = {},
+  options: { clock?: () => number; lifetimeMs?: number } = {},
 ): ProjectAccessLogCursorCodec {
-  const secret =
-    typeof options.secret === "string" ? Buffer.from(options.secret, "utf8") : (options.secret ?? randomBytes(32))
   const clock = options.clock ?? Date.now
   const lifetimeMs = options.lifetimeMs ?? defaultLifetimeMs
-
-  function signature(value: string): Buffer {
-    return createHmac("sha256", secret).update(value, "utf8").digest()
-  }
 
   return {
     encode(input) {
@@ -131,10 +124,13 @@ export function projectAccessLogCursorCreate(
       }
       if (!Number.isSafeInteger(now) || now < 0)
         return cursorError("access-log.invalid-input", "access log cursor clock is invalid")
+      const expiresAt = now + lifetimeMs
+      if (!Number.isSafeInteger(expiresAt))
+        return cursorError("access-log.invalid-input", "access log cursor clock is invalid")
       const body: CursorBody = {
         v: cursorVersion,
         a: input.anchorDigest,
-        e: now + lifetimeMs,
+        e: expiresAt,
         p: input.projectId,
         s: input.source,
         f: input.sourceFingerprint,
@@ -142,32 +138,22 @@ export function projectAccessLogCursorCreate(
         o: input.offset,
       }
       const encodedBody = base64UrlEncode(Buffer.from(JSON.stringify(body), "utf8"))
-      const unsigned = `v${cursorVersion}.${encodedBody}`
-      return createResult(`${unsigned}.${base64UrlEncode(signature(unsigned))}`)
+      return createResult(`v${cursorVersion}.${encodedBody}`)
     },
     decode(value) {
       if (typeof value !== "string" || value.length === 0 || value.length > maximumCursorLength) {
         return cursorError("access-log.invalid-cursor", "access log cursor is invalid")
       }
       const parts = value.split(".")
-      if (parts.length !== 3 || parts[0] !== `v${cursorVersion}`) {
+      if (parts.length !== 2 || parts[0] !== `v${cursorVersion}`) {
         return cursorError("access-log.invalid-cursor", "access log cursor is invalid")
       }
       const bodyPart = parts[1]
-      const signaturePart = parts[2]
-      if (bodyPart === undefined || signaturePart === undefined) {
+      if (bodyPart === undefined) {
         return cursorError("access-log.invalid-cursor", "access log cursor is invalid")
       }
       const bodyBytes = base64UrlDecode(bodyPart)
-      const signatureBytes = base64UrlDecode(signaturePart)
-      if (bodyBytes === undefined || signatureBytes === undefined || signatureBytes.length !== 32) {
-        return cursorError("access-log.invalid-cursor", "access log cursor is invalid")
-      }
-      const unsigned = `${parts[0]}.${bodyPart}`
-      const expectedSignature = signature(unsigned)
-      if (expectedSignature.length !== signatureBytes.length || !timingSafeEqual(expectedSignature, signatureBytes)) {
-        return cursorError("access-log.invalid-cursor", "access log cursor is invalid")
-      }
+      if (bodyBytes === undefined) return cursorError("access-log.invalid-cursor", "access log cursor is invalid")
       let body: unknown
       try {
         body = JSON.parse(bodyBytes.toString("utf8")) as unknown

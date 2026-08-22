@@ -63,7 +63,6 @@ export type ProjectAccessLogSourceFileCreateOptions = {
   maxScannedBytes?: number
   maxDecompressedBytes?: number
   cursor?: ProjectAccessLogCursorCodec
-  cursorSecret?: string | Uint8Array
   cursorLifetimeMs?: number
   clock?: () => number
 }
@@ -920,7 +919,6 @@ export function projectAccessLogSourceFileCreate(
   const cursor =
     normalizedOptions.cursor ??
     projectAccessLogCursorCreate({
-      secret: normalizedOptions.cursorSecret,
       clock: normalizedOptions.clock,
       lifetimeMs: normalizedOptions.cursorLifetimeMs,
     })

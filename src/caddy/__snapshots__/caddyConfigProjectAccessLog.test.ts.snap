@@ -1,38 +1,12 @@
 // Bun Snapshot v1, https://bun.sh/docs/test/snapshots
 
-exports[`Caddy project access logging snapshots active logger, all-domain mapping, privacy, rotation, and default exclusion 1`] = `
+exports[`Caddy project access logging snapshots active logger, all-domain mapping, raw records, rotation, and default exclusion 1`] = `
 {
   "logging": {
     "logs": {
       "5ad58d04ec07c62212cd3b5e4bc05bd8cc7df42f8c1aeb494986aa8561eb46f9": {
         "encoder": {
-          "fields": {
-            "request>client_ip": {
-              "filter": "ip_mask",
-              "ipv4_cidr": 24,
-              "ipv6_cidr": 64,
-            },
-            "request>headers": {
-              "filter": "delete",
-            },
-            "request>remote_ip": {
-              "filter": "ip_mask",
-              "ipv4_cidr": 24,
-              "ipv6_cidr": 64,
-            },
-            "request>uri": {
-              "filter": "regexp",
-              "regexp": "\\?.*$",
-              "value": "",
-            },
-            "resp_headers": {
-              "filter": "delete",
-            },
-          },
-          "format": "filter",
-          "wrap": {
-            "format": "json",
-          },
+          "format": "json",
         },
         "include": [
           "http.log.access.5ad58d04ec07c62212cd3b5e4bc05bd8cc7df42f8c1aeb494986aa8561eb46f9",
@@ -67,7 +41,7 @@ exports[`Caddy project access logging snapshots active logger, all-domain mappin
         "5ad58d04ec07c62212cd3b5e4bc05bd8cc7df42f8c1aeb494986aa8561eb46f9",
       ],
     },
-    "should_log_credentials": false,
+    "should_log_credentials": true,
   },
 }
 `;

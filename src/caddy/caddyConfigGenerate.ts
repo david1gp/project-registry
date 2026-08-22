@@ -293,17 +293,7 @@ function projectRoute(project: Project, options: CaddyConfigOptions): Record<str
 }
 
 function projectAccessLogEncoder(): Record<string, unknown> {
-  return {
-    format: "filter",
-    wrap: { format: "json" },
-    fields: {
-      "request>headers": { filter: "delete" },
-      resp_headers: { filter: "delete" },
-      "request>uri": { filter: "regexp", regexp: "\\?.*$", value: "" },
-      "request>remote_ip": { filter: "ip_mask", ipv4_cidr: 24, ipv6_cidr: 64 },
-      "request>client_ip": { filter: "ip_mask", ipv4_cidr: 24, ipv6_cidr: 64 },
-    },
-  }
+  return { format: "json" }
 }
 
 function projectAccessLogConfig(
@@ -311,7 +301,7 @@ function projectAccessLogConfig(
   root: string,
 ): Result<{
   logging: { logs: Record<string, unknown> }
-  serverLogs: { logger_names: Record<string, string[]>; should_log_credentials: false }
+  serverLogs: { logger_names: Record<string, string[]>; should_log_credentials: true }
 }> {
   const op = "caddyConfigGenerate"
   const logs: Record<string, unknown> = {}
@@ -345,7 +335,7 @@ function projectAccessLogConfig(
 
   return createResult({
     logging: { logs: { default: { exclude: exclusions }, ...logs } },
-    serverLogs: { logger_names: loggerNames, should_log_credentials: false },
+    serverLogs: { logger_names: loggerNames, should_log_credentials: true },
   })
 }
 

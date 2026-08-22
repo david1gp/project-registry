@@ -1,16 +1,8 @@
 import type { PromiseResult, ResultErr } from "#result"
 import type { ProjectKey } from "../project/projectKey.js"
+import type { ProjectAccessLogRecord } from "./ProjectAccessLogRecord.js"
 
-export type ProjectAccessLogRecord = {
-  timestamp: number
-  method: string
-  host: string
-  path: string
-  status: number
-  duration: number
-  responseBytes: number
-  clientNetwork: string
-}
+export type { ProjectAccessLogRecord } from "./ProjectAccessLogRecord.js"
 
 export type ProjectAccessLogReadOptions = {
   limit?: number

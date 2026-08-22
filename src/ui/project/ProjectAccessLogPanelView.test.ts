@@ -18,4 +18,11 @@ describe("ProjectAccessLogPanelView", () => {
     expect(source).toContain("<h2 id={p.titleId}")
     expect(source).toContain('<section class="overflow-x-auto" aria-labelledby={p.titleId}>')
   })
+
+  test("offers the complete raw JSON record for inspection", () => {
+    expect(source).toContain('import { CodeBlock } from "#ui/static/code/CodeBlock.jsx"')
+    expect(source).toContain("<summary")
+    expect(source).toContain("JSON anzeigen")
+    expect(source).toContain("data={record}")
+  })
 })

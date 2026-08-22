@@ -2,6 +2,23 @@ import { describe, expect, test } from "bun:test"
 import { projectAccessLogClientGet } from "./projectAccessLogClientGet.js"
 
 describe("projectAccessLogClientGet", () => {
+  test("preserves complete raw Caddy records", async () => {
+    const record = {
+      ts: 1_755_757_341.418,
+      request: {
+        uri: "/private?full=true",
+        headers: { authorization: ["Bearer secret"], cookie: ["session=secret"] },
+      },
+      status: 200,
+      resp_headers: { "set-cookie": ["session=secret; Secure"] },
+    }
+    const result = await projectAccessLogClientGet("leo", "app", {}, async () =>
+      Response.json({ success: true, data: { records: [record], partial: false, malformedLines: 0 } }),
+    )
+
+    expect(result).toEqual({ success: true, data: { records: [record], partial: false, malformedLines: 0 } })
+  })
+
   test("uses the ownerful encoded route and forwards the paging cursor", async () => {
     let requestedUrl = ""
     let requestedInit: RequestInit | undefined

@@ -1,20 +1,26 @@
 import { describe, expect, test } from "bun:test"
-import { createRoot } from "solid-js"
+import { createEffect, createRoot } from "solid-js"
 import { createResult, createResultError } from "#result"
 import { createSignalObject } from "#ui/utils/createSignalObject.js"
 import { projectAccessLogPanelStateCreate } from "./ProjectAccessLogPanelStateCreate.js"
 import type { ProjectAccessLogPage } from "./projectAccessLogPageSchema.js"
+import { projectAccessLogRecordSummary } from "./projectAccessLogRecordSummary.js"
 
 const record = {
-  timestamp: 1_777_000_000,
-  method: "GET",
-  host: "app.example",
-  path: "/",
+  ts: 1_777_000_000,
+  request: {
+    method: "GET",
+    host: "app.example",
+    uri: "/",
+    client_ip: "192.0.2.1",
+    headers: { authorization: ["Bearer secret"], cookie: ["session=secret"] },
+  },
   status: 200,
   duration: 0.01,
-  responseBytes: 42,
-  clientNetwork: "192.0.2.0/24",
+  size: 42,
 }
+
+const recordWithUri = (uri: string) => ({ ...record, request: { ...record.request, uri } })
 
 function page(overrides: Partial<ProjectAccessLogPage> = {}): ProjectAccessLogPage {
   return { records: [record], partial: false, malformedLines: 0, ...overrides }
@@ -92,19 +98,22 @@ describe("projectAccessLogPanelStateCreate", () => {
               }
             }
             return createResult(
-              page({ records: [{ ...record, path: "/older" }], partial: true, malformedLines: 2, next: "cursor-2" }),
+              page({ records: [recordWithUri("/older")], partial: true, malformedLines: 2, next: "cursor-2" }),
             )
           }
           return createResult(page({ next: "cursor-2" }))
         })
         harness.state.mount()
         await settle()
-        expect(harness.state.records()).toHaveLength(1)
+        expect(harness.state.records()).toEqual([record])
         expect(harness.intervalHandlers.size).toBe(1)
 
         harness.state.olderLoad()
         await settle()
-        expect(harness.state.records().map((entry) => entry.path)).toEqual(["/", "/older"])
+        expect(harness.state.records().map((entry) => projectAccessLogRecordSummary(entry).path)).toEqual([
+          "/",
+          "/older",
+        ])
         expect(harness.state.partial()).toBe(true)
         expect(harness.state.malformedLines()).toBe(2)
         expect(harness.state.partialMessage()).toBe("2 fehlerhafte Protokolleinträge wurden übersprungen.")
@@ -122,9 +131,9 @@ describe("projectAccessLogPanelStateCreate", () => {
   })
 
   test("merges background pages, keeps the loaded tail, and removes page overlap", async () => {
-    const newest = { ...record, path: "/newest" }
-    const overlap = { ...record, path: "/overlap" }
-    const oldest = { ...record, path: "/oldest" }
+    const newest = recordWithUri("/newest")
+    const overlap = recordWithUri("/overlap")
+    const oldest = recordWithUri("/oldest")
     let calls = 0
     await new Promise<void>((resolve) => {
       createRoot(async (dispose) => {
@@ -134,7 +143,7 @@ describe("projectAccessLogPanelStateCreate", () => {
             return createResult(page({ records: [overlap, oldest], next: "tail-2" }))
           }
           if (calls === 3) {
-            return createResult(page({ records: [{ ...record, path: "/fresh" }, overlap], next: "fresh-tail" }))
+            return createResult(page({ records: [recordWithUri("/fresh"), overlap], next: "fresh-tail" }))
           }
           return createResult(page({ records: [newest, overlap], next: "tail-1" }))
         })
@@ -142,13 +151,22 @@ describe("projectAccessLogPanelStateCreate", () => {
         await settle()
         harness.state.olderLoad()
         await settle()
-        expect(harness.state.records().map((entry) => entry.path)).toEqual(["/newest", "/overlap", "/oldest"])
+        expect(harness.state.records().map((entry) => projectAccessLogRecordSummary(entry).path)).toEqual([
+          "/newest",
+          "/overlap",
+          "/oldest",
+        ])
         expect(harness.state.next()).toBe("tail-2")
 
         const poll = [...harness.intervalHandlers.values()][0]
         poll?.()
         await settle()
-        expect(harness.state.records().map((entry) => entry.path)).toEqual(["/fresh", "/overlap", "/newest", "/oldest"])
+        expect(harness.state.records().map((entry) => projectAccessLogRecordSummary(entry).path)).toEqual([
+          "/fresh",
+          "/overlap",
+          "/newest",
+          "/oldest",
+        ])
         expect(harness.state.next()).toBe("tail-2")
         expect(calls).toBe(3)
         harness.state.dispose()
@@ -166,7 +184,7 @@ describe("projectAccessLogPanelStateCreate", () => {
           if (options?.before === undefined) return createResult(page({ next: "tail" }))
           olderCalls += 1
           if (olderCalls === 1) throw new Error("request failed")
-          return createResult(page({ records: [{ ...record, path: "/older" }], next: undefined }))
+          return createResult(page({ records: [recordWithUri("/older")], next: undefined }))
         })
         harness.state.mount()
         await settle()
@@ -176,7 +194,10 @@ describe("projectAccessLogPanelStateCreate", () => {
         harness.state.olderLoad()
         await settle()
         expect(harness.state.olderLoading()).toBe(false)
-        expect(harness.state.records().map((entry) => entry.path)).toEqual(["/", "/older"])
+        expect(harness.state.records().map((entry) => projectAccessLogRecordSummary(entry).path)).toEqual([
+          "/",
+          "/older",
+        ])
         expect(olderCalls).toBe(2)
         harness.state.dispose()
         dispose()
@@ -190,11 +211,17 @@ describe("projectAccessLogPanelStateCreate", () => {
     await new Promise<void>((resolve) => {
       createRoot(async (dispose) => {
         const harness = harnessCreate(async () => new Promise((resolveRequest) => pending.push(resolveRequest)))
+        const busyValues: boolean[] = []
+        createEffect(() => busyValues.push(harness.state.busy()))
         harness.state.mount()
         expect(harness.state.busy()).toBe(true)
+        await settle()
+        expect(busyValues.at(-1)).toBe(true)
         pending.shift()?.(createResult(page({ next: "tail" })))
         await settle()
         expect(harness.state.busy()).toBe(false)
+        expect(harness.state.next()).toBe("tail")
+        expect(busyValues.at(-1)).toBe(false)
 
         harness.state.refresh()
         expect(harness.state.busy()).toBe(true)
@@ -369,11 +396,11 @@ describe("projectAccessLogPanelStateCreate", () => {
         expect(harness.state.refreshing()).toBe(false)
         expect(harness.state.olderLoading()).toBe(false)
 
-        calls[0]?.resolve(createResult(page({ records: [{ ...record, path: "/stale" }] })))
+        calls[0]?.resolve(createResult(page({ records: [recordWithUri("/stale")] })))
         await settle()
         expect(harness.state.records()).toEqual([])
 
-        const newRecord = { ...record, host: "new.example", path: "/new" }
+        const newRecord = { ...record, request: { ...record.request, host: "new.example", uri: "/new" } }
         calls[1]?.resolve(createResult(page({ records: [newRecord] })))
         await settle()
         expect(harness.state.records()).toEqual([newRecord])

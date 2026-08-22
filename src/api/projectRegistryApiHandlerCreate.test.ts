@@ -3,6 +3,7 @@ import { mkdtempSync, rmSync } from "node:fs"
 import { join } from "node:path"
 import type { GitStoreCommitInfo } from "#git-store"
 import { createResult, createResultError, type Result } from "#result"
+import { caddyAccessLogFixture } from "../../test/fixtures/caddyAccessLogFixture.js"
 import { caddyConfigGenerateFixtures } from "../../test/fixtures/caddyConfigGenerateFixtures.js"
 import type { ProjectAccess } from "../access/ProjectAccess.js"
 import type { Role } from "../access/Role.js"
@@ -708,7 +709,7 @@ describe("projectRegistryApiHandlerCreate", () => {
 
   test("serves bounded access-log pages over the shared Unix and HTTP request boundary", async () => {
     const source = accessLogSourceCreate(
-      createResult({ records: [], next: "next-cursor", partial: false, malformedLines: 0 }),
+      createResult({ records: [caddyAccessLogFixture], next: "next-cursor", partial: false, malformedLines: 0 }),
     )
     const handler = projectRegistryApiHandlerCreate({
       repository: repositoryCreate(),
@@ -734,6 +735,7 @@ describe("projectRegistryApiHandlerCreate", () => {
     expect(unix.response.headers.get("cache-control")).toBe("no-store")
     expect(http.response.headers.get("cache-control")).toBe("no-store")
     expect(unix.body).toMatchObject({ success: true, data: { next: "next-cursor" } })
+    expect(unix.body).toMatchObject({ success: true, data: { records: [caddyAccessLogFixture] } })
     expect(source.calls).toEqual([
       { owner: "leo", name: "opencode", options: { limit: 2, before: "opaque" } },
       { owner: "leo", name: "opencode", options: { limit: 2 } },

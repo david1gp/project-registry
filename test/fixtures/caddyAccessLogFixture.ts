@@ -9,7 +9,12 @@ export const caddyAccessLogFixture = {
     proto: "HTTP/2.0",
     method: "GET",
     host: "app.example",
-    uri: "/private/report",
+    uri: "/private/report?download=full",
+    client_ip: "198.51.100.23",
+    headers: {
+      authorization: ["Bearer secret"],
+      cookie: ["session=secret"],
+    },
     tls: {
       resumed: false,
       version: "tls1.3",
@@ -23,4 +28,8 @@ export const caddyAccessLogFixture = {
   duration: 0.012345,
   size: 4096,
   status: 200,
+  resp_headers: {
+    "set-cookie": ["session=secret; Secure"],
+    "content-type": ["application/json"],
+  },
 } as const

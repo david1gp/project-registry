@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import { createResult, createResultError, type Result } from "#result"
+import { caddyAccessLogFixture } from "../../test/fixtures/caddyAccessLogFixture.js"
 import type { Actor } from "../access/Actor.js"
 import type { ProjectAccess } from "../access/ProjectAccess.js"
 import type { Role } from "../access/Role.js"
@@ -67,7 +68,12 @@ function sourceCreate(result: Result<ProjectAccessLogPage>): ProjectAccessLogSou
   return source
 }
 
-const page: ProjectAccessLogPage = { records: [], next: undefined, partial: false, malformedLines: 0 }
+const page: ProjectAccessLogPage = {
+  records: [caddyAccessLogFixture],
+  next: undefined,
+  partial: false,
+  malformedLines: 0,
+}
 
 describe("projectAccessLogListUseCase", () => {
   test("reuses the project read role matrix before reading storage", async () => {
@@ -93,6 +99,20 @@ describe("projectAccessLogListUseCase", () => {
       expect(result.success).toBe(allowed)
       expect(source.calls).toBe(allowed ? 1 : 0)
     }
+  })
+
+  test("passes the complete raw source page through unchanged", async () => {
+    const source = sourceCreate(createResult(page))
+    const result = await projectAccessLogListUseCase(
+      {
+        repository: repositoryCreate(project("alice", "site")),
+        access: accessCreate({ subject: "s", username: "alice", role: "own" }, "own"),
+        source,
+      },
+      { owner: "alice", name: "site" },
+    )
+
+    expect(result).toEqual(createResult(page))
   })
 
   test("collapses missing and unauthorized projects to the same safe result", async () => {

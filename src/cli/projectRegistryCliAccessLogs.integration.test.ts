@@ -104,19 +104,36 @@ function caddyApplicationCreate(): CaddyApplication {
   }
 }
 
-function projectLogRecord(timestamp: number): string {
-  return JSON.stringify({
+function projectLogRecordValue(timestamp: number) {
+  return {
+    level: "info",
     ts: timestamp,
+    logger: "http.log.access.leo-site",
+    msg: "handled request",
     request: {
+      remote_ip: `198.51.100.${timestamp + 1}`,
+      remote_port: "54321",
+      proto: "HTTP/2.0",
       method: "GET",
       host: "leo.example",
       uri: `/path?secret=${timestamp}`,
       client_ip: `192.0.2.${timestamp + 1}`,
+      headers: {
+        authorization: ["Bearer secret"],
+        cookie: [`session=${timestamp}`],
+      },
+      tls: { version: "tls1.3", server_name: "leo.example" },
     },
+    bytes_read: 0,
     status: 200,
     duration: 0.01,
     size: timestamp,
-  })
+    resp_headers: { "content-type": ["application/json"] },
+  }
+}
+
+function projectLogRecord(timestamp: number): string {
+  return JSON.stringify(projectLogRecordValue(timestamp))
 }
 
 function filesystemCreate(): {
@@ -190,7 +207,7 @@ async function accessLogHarnessCreate(): Promise<AccessLogHarness> {
   await mkdir(dirname(activePathR.data), { recursive: true })
   await writeFile(activePathR.data, `${projectLogRecord(1)}\n${projectLogRecord(2)}\n`)
 
-  const sourceR = projectAccessLogSourceFileCreate({ root, cursorSecret: "cli-integration-secret" })
+  const sourceR = projectAccessLogSourceFileCreate({ root })
   if (!sourceR.success) throw new Error(sourceR.errorMessage)
 
   const fakeFilesystem = filesystemCreate()
@@ -299,7 +316,7 @@ describe("projectRegistryCli access-log Unix integration", () => {
       )
       expect(inferred.exitCode).toBe(0)
       const inferredEnvelope = jsonParse(inferred.stdout)
-      expect(inferredEnvelope.data.records.map((record: { timestamp: number }) => record.timestamp)).toEqual([2])
+      expect(inferredEnvelope.data.records).toEqual([projectLogRecordValue(2)])
       expect(inferredEnvelope.data.next).toEqual(expect.any(String))
       expect(harness.requests[0]).toMatchObject({
         path: "/api/v1/projects/site/access-logs?limit=1",
@@ -312,7 +329,7 @@ describe("projectRegistryCli access-log Unix integration", () => {
         { USER: "leo" },
       )
       expect(explicitAuthorized.exitCode).toBe(0)
-      expect(jsonParse(explicitAuthorized.stdout).data.records[0].timestamp).toBe(2)
+      expect(jsonParse(explicitAuthorized.stdout).data.records[0]).toEqual(projectLogRecordValue(2))
       expect(harness.requests[1]).toMatchObject({
         path: "/api/v1/users/leo/projects/site/access-logs?limit=1",
         socket: adminSocket,
@@ -341,9 +358,7 @@ describe("projectRegistryCli access-log Unix integration", () => {
         { USER: "admin" },
       )
       expect(continued.exitCode).toBe(0)
-      expect(jsonParse(continued.stdout).data.records.map((record: { timestamp: number }) => record.timestamp)).toEqual(
-        [1],
-      )
+      expect(jsonParse(continued.stdout).data.records).toEqual([projectLogRecordValue(1)])
       expect(harness.requests[3]?.path).toBe(
         `/api/v1/projects/site/access-logs?limit=1&before=${encodeURIComponent(cursor)}`,
       )

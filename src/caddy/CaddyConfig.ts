@@ -7,7 +7,7 @@ export type CaddyConfig = {
           routes: unknown[]
           logs?: {
             logger_names: Record<string, string[]>
-            should_log_credentials: false
+            should_log_credentials: boolean
           }
         }
       }

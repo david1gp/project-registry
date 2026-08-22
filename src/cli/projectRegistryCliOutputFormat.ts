@@ -43,16 +43,7 @@ const regenerateSchema = a.looseObject({
   applied: a.boolean(),
   attempts: a.pipe(a.number(), a.integer(), a.minValue(0)),
 })
-const accessLogRecordSchema = a.object({
-  timestamp: a.pipe(a.number(), a.finite(), a.minValue(0), a.maxValue(8_640_000_000_000)),
-  method: a.string(),
-  host: a.string(),
-  path: a.string(),
-  status: a.pipe(a.number(), a.integer(), a.minValue(0), a.maxValue(999)),
-  duration: a.pipe(a.number(), a.finite(), a.minValue(0)),
-  responseBytes: a.pipe(a.number(), a.integer(), a.minValue(0)),
-  clientNetwork: a.string(),
-})
+const accessLogRecordSchema = a.record(a.string(), a.unknown())
 const accessLogPageSchema = a.object({
   records: a.array(accessLogRecordSchema),
   next: a.optional(a.string()),
@@ -71,10 +62,10 @@ function dataParse<TSchema extends a.BaseSchema<unknown, unknown, a.BaseIssue<un
   return createResult(parsed.output)
 }
 
-function jsonSerialize(data: unknown): Result<string> {
+function jsonSerialize(data: unknown, indentation = 0): Result<string> {
   const op = "projectRegistryCliOutputFormat"
   try {
-    return createResult(`${JSON.stringify(data)}\n`)
+    return createResult(`${JSON.stringify(data, null, indentation)}\n`)
   } catch {
     return createResultError(op, "The command output could not be serialized.")
   }
@@ -183,18 +174,13 @@ export function projectRegistryCliOutputFormat(
   if (command.kind === "regenerate") return createResult("regenerated\n")
   if (command.kind === "project-access-logs") {
     const page = parsedData as a.InferOutput<typeof accessLogPageSchema>
-    const lines = page.records.map((record) =>
-      [
-        new Date(record.timestamp * 1_000).toISOString(),
-        record.method,
-        record.host,
-        record.path,
-        record.status,
-        record.duration,
-        record.responseBytes,
-        record.clientNetwork,
-      ].join("\t"),
-    )
+    const recordLines: string[] = []
+    for (const record of page.records) {
+      const recordR = jsonSerialize(record, 2)
+      if (!recordR.success) return recordR
+      recordLines.push(recordR.data.slice(0, -1))
+    }
+    const lines = [...recordLines]
     if (lines.length === 0) lines.push("No access logs.")
     if (page.next !== undefined) lines.push(`Next: ${page.next}`)
     if (page.partial) lines.push("Partial: yes")

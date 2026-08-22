@@ -19,7 +19,7 @@ function accessLogConfig(projects: unknown[], root = "/var/lib/project-registry/
 }
 
 describe("Caddy project access logging", () => {
-  test("snapshots active logger, all-domain mapping, privacy, rotation, and default exclusion", () => {
+  test("snapshots active logger, all-domain mapping, raw records, rotation, and default exclusion", () => {
     const config = accessLogConfig([
       caddyConfigGenerateFixtures.disabled,
       caddyConfigGenerateFixtures.catalogOnly,

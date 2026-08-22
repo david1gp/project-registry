@@ -14,14 +14,24 @@ const status = { desiredRevision: "new", appliedRevision: "old", pendingRevision
 const accessLogPage = {
   records: [
     {
-      timestamp: 0,
-      method: "GET",
-      host: "site.example",
-      path: "/",
-      status: 200,
+      level: "info",
+      ts: 1_755_757_341.418,
+      logger: "http.log.access.example",
+      msg: "handled request",
+      request: {
+        method: "GET",
+        host: "site.example",
+        uri: "/?download=full",
+        client_ip: "192.0.2.23",
+        headers: {
+          authorization: ["Bearer secret"],
+          cookie: ["session=secret"],
+        },
+      },
       duration: 0.125,
-      responseBytes: 42,
-      clientNetwork: "192.0.2.0/24",
+      size: 42,
+      status: 200,
+      resp_headers: { "content-type": ["application/json"] },
     },
   ],
   next: "next-cursor",
@@ -116,7 +126,7 @@ describe("projectRegistryCliRun", () => {
     ])
   })
 
-  test("formats access-log pages for humans and JSON without changing the public fields", async () => {
+  test("formats complete access-log records for humans and JSON", async () => {
     const human: string[] = []
     const humanExit = await projectRegistryCliRun(["project", "access-logs", "site"], {
       environment: { USER: "david" },
@@ -131,10 +141,9 @@ describe("projectRegistryCliRun", () => {
     })
 
     expect(humanExit).toBe(0)
-    expect(human.join("")).toBe(
-      "1970-01-01T00:00:00.000Z\tGET\tsite.example\t/\t200\t0.125\t42\t192.0.2.0/24\nNext: next-cursor\n",
-    )
+    expect(human.join("")).toBe(`${JSON.stringify(accessLogPage.records[0], null, 2)}\nNext: next-cursor\n`)
     expect(jsonExit).toBe(0)
+    expect(JSON.parse(json.join("")).data.records).toEqual(accessLogPage.records)
     expect(json.join("")).toBe(`${JSON.stringify({ success: true, data: accessLogPage })}\n`)
   })
 

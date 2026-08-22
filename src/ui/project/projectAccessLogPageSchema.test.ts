@@ -2,59 +2,51 @@ import { describe, expect, test } from "bun:test"
 import * as v from "valibot"
 import { projectAccessLogPageSchema } from "./projectAccessLogPageSchema.js"
 
-const pageWithTimestamp = (timestamp: number) => ({
-  records: [
-    {
-      timestamp,
-      method: "GET",
-      host: "app.example",
-      path: "/",
-      status: 200,
-      duration: 0.01,
-      responseBytes: 42,
-      clientNetwork: "192.0.2.0/24",
-    },
-  ],
+const pageWithRecord = (record: unknown) => ({
+  records: [record],
   partial: false,
   malformedLines: 0,
 })
 
-const pageWithRecordNumber = (field: "status" | "duration" | "responseBytes", value: number) => {
-  const page = pageWithTimestamp(1_755_757_341.418)
-  page.records[0]![field] = value
-  return page
+const rawRecord = {
+  level: "info",
+  ts: 1_755_757_341.418,
+  request: {
+    method: "GET",
+    host: "app.example",
+    uri: "/private/report?download=full",
+    client_ip: "198.51.100.23",
+    headers: { authorization: ["Bearer secret"], cookie: ["session=secret"] },
+    tls: { resumed: false, server_name: null },
+  },
+  duration: 0.01,
+  size: 42,
+  status: 200,
+  resp_headers: { "set-cookie": ["session=secret; Secure"] },
 }
 
+const page = (malformedLines: number) => ({
+  records: [rawRecord],
+  partial: false,
+  malformedLines,
+})
+
 describe("projectAccessLogPageSchema", () => {
-  test("accepts realistic fractional Caddy epoch seconds", () => {
-    expect(v.safeParse(projectAccessLogPageSchema, pageWithTimestamp(1_755_757_341.418)).success).toBe(true)
+  test("preserves a complete raw Caddy JSON record", () => {
+    const result = v.safeParse(projectAccessLogPageSchema, page(0))
+    expect(result.success).toBe(true)
+    if (result.success) expect(result.output.records[0]).toEqual(rawRecord)
   })
 
-  test.each([-1, Number.NaN, Number.POSITIVE_INFINITY, 1_755_757_341_418])(
-    "rejects an unrealistic timestamp: %p",
-    (timestamp) => {
-      expect(v.safeParse(projectAccessLogPageSchema, pageWithTimestamp(timestamp)).success).toBe(false)
-    },
-  )
+  test.each([[null], [[]], ["record"], [42]] as const)("rejects a non-object record: %p", (record) => {
+    expect(v.safeParse(projectAccessLogPageSchema, pageWithRecord(record)).success).toBe(false)
+  })
 
-  test.each([
-    ["status", -1],
-    ["status", 1.5],
-    ["status", 1_000],
-    ["status", Number.NaN],
-    ["duration", -0.1],
-    ["duration", Number.POSITIVE_INFINITY],
-    ["responseBytes", -1],
-    ["responseBytes", 1.5],
-    ["responseBytes", Number.POSITIVE_INFINITY],
-  ] as const)("rejects invalid %s values: %p", (field, value) => {
-    expect(v.safeParse(projectAccessLogPageSchema, pageWithRecordNumber(field, value)).success).toBe(false)
+  test.each([Number.NaN, Number.POSITIVE_INFINITY, undefined, new Date()])("rejects a non-JSON value: %p", (value) => {
+    expect(v.safeParse(projectAccessLogPageSchema, pageWithRecord({ value })).success).toBe(false)
   })
 
   test.each([-1, 1.5, Number.NaN, Number.POSITIVE_INFINITY])("rejects invalid malformed line counts: %p", (value) => {
-    expect(
-      v.safeParse(projectAccessLogPageSchema, { ...pageWithTimestamp(1_755_757_341.418), malformedLines: value })
-        .success,
-    ).toBe(false)
+    expect(v.safeParse(projectAccessLogPageSchema, page(value)).success).toBe(false)
   })
 })

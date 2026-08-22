@@ -1,15 +1,34 @@
 import * as v from "valibot"
 
-const projectAccessLogRecordSchema = v.object({
-  timestamp: v.pipe(v.number(), v.finite(), v.minValue(0), v.maxValue(253_402_300_799)),
-  method: v.string(),
-  host: v.string(),
-  path: v.string(),
-  status: v.pipe(v.number(), v.finite(), v.safeInteger(), v.minValue(0), v.maxValue(999)),
-  duration: v.pipe(v.number(), v.finite(), v.minValue(0)),
-  responseBytes: v.pipe(v.number(), v.finite(), v.safeInteger(), v.minValue(0)),
-  clientNetwork: v.string(),
-})
+type ProjectAccessLogJsonValue =
+  | null
+  | boolean
+  | number
+  | string
+  | ProjectAccessLogJsonValue[]
+  | { [key: string]: ProjectAccessLogJsonValue }
+
+const projectAccessLogJsonValueSchema: v.GenericSchema<ProjectAccessLogJsonValue> = v.lazy(() =>
+  v.union([
+    v.null_(),
+    v.boolean(),
+    v.pipe(v.number(), v.finite()),
+    v.string(),
+    v.array(projectAccessLogJsonValueSchema),
+    projectAccessLogJsonObjectSchema,
+  ]),
+)
+
+const projectAccessLogJsonObjectSchema = v.pipe(
+  v.custom<{ [key: string]: ProjectAccessLogJsonValue }>((value) => {
+    if (typeof value !== "object" || value === null || Array.isArray(value)) return false
+    const prototype = Object.getPrototypeOf(value)
+    return prototype === Object.prototype || prototype === null
+  }),
+  v.record(v.string(), projectAccessLogJsonValueSchema),
+)
+
+const projectAccessLogRecordSchema = projectAccessLogJsonObjectSchema
 
 export const projectAccessLogPageSchema = v.object({
   records: v.array(projectAccessLogRecordSchema),

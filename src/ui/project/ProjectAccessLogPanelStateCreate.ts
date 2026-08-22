@@ -30,10 +30,10 @@ export function projectAccessLogPanelStateCreate(
   const initialLoading = createSignalObject(true)
   const refreshing = createSignalObject(false)
   const olderLoading = createSignalObject(false)
+  const busy = createSignalObject(false)
   const initialErrorMessage = createSignalObject<string | undefined>(undefined)
   const expiredCursor = createSignalObject(false)
   const backgroundError = createSignalObject(false)
-  const busy = () => request !== undefined
   let timer: Timer | undefined
   let request: AbortController | undefined
   let mounted = false
@@ -78,6 +78,7 @@ export function projectAccessLogPanelStateCreate(
     if (request !== undefined) return
     const controller = new AbortController()
     request = controller
+    busy.set(true)
     if (!background && !initialLoading.get()) refreshing.set(true)
     try {
       const result = await client(owner(), name(), { limit: 100, signal: controller.signal })
@@ -122,6 +123,7 @@ export function projectAccessLogPanelStateCreate(
     } finally {
       if (request === controller) {
         request = undefined
+        busy.set(false)
         if (mounted) refreshing.set(false)
       }
     }
@@ -130,6 +132,7 @@ export function projectAccessLogPanelStateCreate(
   const projectReset = () => {
     request?.abort()
     request = undefined
+    busy.set(false)
     records.set([])
     next.set(undefined)
     partial.set(false)
@@ -164,6 +167,7 @@ export function projectAccessLogPanelStateCreate(
     if (before === undefined || request !== undefined) return
     const controller = new AbortController()
     request = controller
+    busy.set(true)
     olderLoading.set(true)
     try {
       const result = await client(owner(), name(), { limit: 100, before, signal: controller.signal })
@@ -190,6 +194,7 @@ export function projectAccessLogPanelStateCreate(
     } finally {
       if (request === controller) {
         request = undefined
+        busy.set(false)
         if (mounted) olderLoading.set(false)
       }
     }
@@ -217,6 +222,7 @@ export function projectAccessLogPanelStateCreate(
     pollingStop()
     request?.abort()
     request = undefined
+    busy.set(false)
     olderPagesLoaded = false
   }
 
@@ -236,7 +242,7 @@ export function projectAccessLogPanelStateCreate(
     initialErrorMessage: initialErrorMessage.get,
     expiredCursor: expiredCursor.get,
     backgroundError: backgroundError.get,
-    busy,
+    busy: busy.get,
     empty: () => !initialLoading.get() && initialErrorMessage.get() === undefined && records.get().length === 0,
     refresh: () => void refresh(),
     olderLoad: () => void olderLoad(),

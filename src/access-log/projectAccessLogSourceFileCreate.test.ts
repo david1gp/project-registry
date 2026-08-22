@@ -43,20 +43,27 @@ describe("projectAccessLogSourceFileCreate", () => {
         join(fixture.directory, "access-20260820.jsonl.gz"),
         gzipSync(`${rawRecord(1)}\n${rawRecord(2)}\n`),
       )
-      const sourceR = projectAccessLogSourceFileCreate({ root: fixture.root, cursorSecret: "test-secret" })
+      const sourceR = projectAccessLogSourceFileCreate({ root: fixture.root })
       expect(sourceR.success).toBe(true)
       if (!sourceR.success) return
 
       const firstR = await sourceR.data.read(project, { limit: 2 })
       expect(firstR.success).toBe(true)
       if (!firstR.success) return
-      expect(firstR.data.records.map((record) => record.timestamp)).toEqual([4, 3])
+      expect(firstR.data.records.map((record) => record.ts)).toEqual([4, 3])
+      expect(firstR.data.records[0]).toMatchObject({
+        ts: 4,
+        request: { uri: "/path?secret=4", client_ip: "192.0.2.10" },
+      })
       expect(firstR.data.next).toBeDefined()
+
+      const wrongProjectR = await sourceR.data.read({ owner: "alice", name: "other" }, { before: firstR.data.next })
+      expect(wrongProjectR).toMatchObject({ success: false, code: "access-log.invalid-cursor" })
 
       const secondR = await sourceR.data.read(project, { limit: 2, before: firstR.data.next })
       expect(secondR.success).toBe(true)
       if (!secondR.success) return
-      expect(secondR.data.records.map((record) => record.timestamp)).toEqual([2, 1])
+      expect(secondR.data.records.map((record) => record.ts)).toEqual([2, 1])
       expect(secondR.data.next).toBeUndefined()
     } finally {
       await rm(fixture.root, { force: true, recursive: true })
@@ -73,19 +80,19 @@ describe("projectAccessLogSourceFileCreate", () => {
       await writeFile(`${transitional}.gz`, gzipSync(transitionalContent))
       await writeFile(join(fixture.directory, "access-20260820.jsonl.gz"), gzipSync(`${rawRecord(1)}\n`))
 
-      const sourceR = projectAccessLogSourceFileCreate({ root: fixture.root, cursorSecret: "test-secret" })
+      const sourceR = projectAccessLogSourceFileCreate({ root: fixture.root })
       expect(sourceR.success).toBe(true)
       if (!sourceR.success) return
 
       const firstR = await sourceR.data.read(project, { limit: 2 })
       expect(firstR.success).toBe(true)
       if (!firstR.success || firstR.data.next === undefined) return
-      expect(firstR.data.records.map((record) => record.timestamp)).toEqual([4, 3])
+      expect(firstR.data.records.map((record) => record.ts)).toEqual([4, 3])
 
       const secondR = await sourceR.data.read(project, { limit: 2, before: firstR.data.next })
       expect(secondR.success).toBe(true)
       if (secondR.success) {
-        expect(secondR.data.records.map((record) => record.timestamp)).toEqual([2, 1])
+        expect(secondR.data.records.map((record) => record.ts)).toEqual([2, 1])
         expect(secondR.data.next).toBeUndefined()
       }
     } finally {
@@ -110,7 +117,7 @@ describe("projectAccessLogSourceFileCreate", () => {
       const pageR = await sourceR.data.read(project, { limit: 10 })
       expect(pageR).toMatchObject({ success: true })
       if (pageR.success) {
-        expect(pageR.data.records.map((record) => record.timestamp)).toEqual([4, 2, 1, 3])
+        expect(pageR.data.records.map((record) => record.ts)).toEqual([4, 2, 1, 3])
         expect(pageR.data.next).toBeUndefined()
       }
     } finally {
@@ -150,7 +157,7 @@ describe("projectAccessLogSourceFileCreate", () => {
       const pageR = await sourceR.data.read(project)
       expect(pageR).toMatchObject({ success: true })
       if (pageR.success) {
-        expect(pageR.data.records.map((record) => record.timestamp)).toEqual([2, 1])
+        expect(pageR.data.records.map((record) => record.ts)).toEqual([2, 1])
         expect(pageR.data).toMatchObject({ partial: true, malformedLines: 1 })
       }
     } finally {
@@ -162,7 +169,7 @@ describe("projectAccessLogSourceFileCreate", () => {
     const fixture = await fixtureCreate()
     try {
       await writeFile(fixture.active, `${rawRecord(1)}\n${rawRecord(2)}\n`)
-      const sourceR = projectAccessLogSourceFileCreate({ root: fixture.root, cursorSecret: "test-secret" })
+      const sourceR = projectAccessLogSourceFileCreate({ root: fixture.root })
       expect(sourceR.success).toBe(true)
       if (!sourceR.success) return
 
@@ -174,7 +181,7 @@ describe("projectAccessLogSourceFileCreate", () => {
       const secondR = await sourceR.data.read(project, { limit: 1, before: firstR.data.next })
       expect(secondR).toMatchObject({ success: true })
       if (secondR.success) {
-        expect(secondR.data.records.map((record) => record.timestamp)).toEqual([1])
+        expect(secondR.data.records.map((record) => record.ts)).toEqual([1])
         expect(secondR.data.next).toBeUndefined()
       }
     } finally {
@@ -182,11 +189,11 @@ describe("projectAccessLogSourceFileCreate", () => {
     }
   })
 
-  test("uses the signed digest and absolute offset rather than timestamps for duplicates", async () => {
+  test("uses the anchor digest and absolute offset rather than timestamps for duplicates", async () => {
     const fixture = await fixtureCreate()
     try {
       await writeFile(fixture.active, `${rawRecord(1, "192.0.2.10")}\n${rawRecord(1, "198.51.100.10")}\n`)
-      const sourceR = projectAccessLogSourceFileCreate({ root: fixture.root, cursorSecret: "test-secret" })
+      const sourceR = projectAccessLogSourceFileCreate({ root: fixture.root })
       expect(sourceR.success).toBe(true)
       if (!sourceR.success) return
 
@@ -195,7 +202,11 @@ describe("projectAccessLogSourceFileCreate", () => {
       if (!firstR.success || firstR.data.next === undefined) return
       const secondR = await sourceR.data.read(project, { limit: 1, before: firstR.data.next })
       expect(secondR).toMatchObject({ success: true })
-      if (secondR.success) expect(secondR.data.records.map((record) => record.clientNetwork)).toEqual(["192.0.2.0/24"])
+      if (secondR.success) {
+        expect(secondR.data.records.map((record) => (record.request as { client_ip: string }).client_ip)).toEqual([
+          "192.0.2.10",
+        ])
+      }
     } finally {
       await rm(fixture.root, { force: true, recursive: true })
     }
@@ -304,14 +315,13 @@ describe("projectAccessLogSourceFileCreate", () => {
       const sourceR = projectAccessLogSourceFileCreate({
         root: fixture.root,
         limits: { maxScannedBytes: 64 * 1024 },
-        cursorSecret: "test-secret",
       })
       expect(sourceR.success).toBe(true)
       if (!sourceR.success) return
       const pageR = await sourceR.data.read(project, { limit: 1 })
       expect(pageR).toMatchObject({ success: true })
       if (pageR.success) {
-        expect(pageR.data.records.map((record) => record.timestamp)).toEqual([2])
+        expect(pageR.data.records.map((record) => record.ts)).toEqual([2])
         expect(pageR.data.next).toBeDefined()
       }
     } finally {
@@ -331,7 +341,7 @@ describe("projectAccessLogSourceFileCreate", () => {
       if (!sourceR.success) return
       const pageR = await sourceR.data.read(project, { limit: 1 })
       expect(pageR).toMatchObject({ success: true })
-      if (pageR.success) expect(pageR.data.records.map((record) => record.timestamp)).toEqual([2])
+      if (pageR.success) expect(pageR.data.records.map((record) => record.ts)).toEqual([2])
     } finally {
       await rm(fixture.root, { force: true, recursive: true })
     }
@@ -344,24 +354,24 @@ describe("projectAccessLogSourceFileCreate", () => {
         join(fixture.directory, "access-20260820.jsonl.gz"),
         gzipSync(`${rawRecord(1)}\n${rawRecord(2)}\n${rawRecord(3)}\n`),
       )
-      const sourceR = projectAccessLogSourceFileCreate({ root: fixture.root, cursorSecret: "test-secret" })
+      const sourceR = projectAccessLogSourceFileCreate({ root: fixture.root })
       expect(sourceR.success).toBe(true)
       if (!sourceR.success) return
 
       const firstR = await sourceR.data.read(project, { limit: 1 })
       expect(firstR.success).toBe(true)
       if (!firstR.success || firstR.data.next === undefined) return
-      expect(firstR.data.records.map((record) => record.timestamp)).toEqual([3])
+      expect(firstR.data.records.map((record) => record.ts)).toEqual([3])
 
       const secondR = await sourceR.data.read(project, { limit: 1, before: firstR.data.next })
       expect(secondR.success).toBe(true)
       if (!secondR.success || secondR.data.next === undefined) return
-      expect(secondR.data.records.map((record) => record.timestamp)).toEqual([2])
+      expect(secondR.data.records.map((record) => record.ts)).toEqual([2])
 
       const thirdR = await sourceR.data.read(project, { limit: 1, before: secondR.data.next })
       expect(thirdR.success).toBe(true)
       if (thirdR.success) {
-        expect(thirdR.data.records.map((record) => record.timestamp)).toEqual([1])
+        expect(thirdR.data.records.map((record) => record.ts)).toEqual([1])
         expect(thirdR.data.next).toBeUndefined()
       }
     } finally {
@@ -452,7 +462,7 @@ describe("projectAccessLogSourceFileCreate", () => {
       }
       await rm(fixture.active, { recursive: true })
       await writeFile(fixture.active, `${rawRecord(2)}\n${rawRecord(1)}\n`)
-      const sourceR = projectAccessLogSourceFileCreate({ root: fixture.root, cursorSecret: "test-secret" })
+      const sourceR = projectAccessLogSourceFileCreate({ root: fixture.root })
       expect(sourceR.success).toBe(true)
       if (!sourceR.success) return
       const pageR = await sourceR.data.read(project, { limit: 1 })
@@ -472,7 +482,7 @@ describe("projectAccessLogSourceFileCreate", () => {
     const fixture = await fixtureCreate()
     try {
       await writeFile(fixture.active, `${rawRecord(1)}\n${rawRecord(2)}\n`)
-      const sourceR = projectAccessLogSourceFileCreate({ root: fixture.root, cursorSecret: "test-secret" })
+      const sourceR = projectAccessLogSourceFileCreate({ root: fixture.root })
       expect(sourceR.success).toBe(true)
       if (!sourceR.success) return
       const pageR = await sourceR.data.read(project, { limit: 1 })
@@ -499,7 +509,7 @@ describe("projectAccessLogSourceFileCreate", () => {
     const fixture = await fixtureCreate()
     try {
       await writeFile(fixture.active, `${rawRecord(1)}\n${rawRecord(2)}\n`)
-      const sourceR = projectAccessLogSourceFileCreate({ root: fixture.root, cursorSecret: "test-secret" })
+      const sourceR = projectAccessLogSourceFileCreate({ root: fixture.root })
       expect(sourceR.success).toBe(true)
       if (!sourceR.success) return
       const pageR = await sourceR.data.read(project, { limit: 1 })
