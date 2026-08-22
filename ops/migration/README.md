@@ -159,9 +159,7 @@ The installer is idempotent: the Bun destination and its containing directory ar
 reset to `root:root` and mode `0755` on every apply, including when `BUN_BIN` is
 already the destination. This prevents `caddy` or another service account from
 replacing the executable. It performs no service start, enable, stop, restart,
-reload, or systemd daemon reload. It installs the reviewed
-`caddy.service.d/10-project-registry-umask.conf` drop-in as root-owned mode `0644`,
-without replacing the authoritative Caddy unit. It installs the normalized OIDC file as root-owned
+reload, or systemd daemon reload. It installs the normalized OIDC file as root-owned
 mode `0600`, the non-secret environment as `0640`, and the unit as `0644`. The
 unit separately references the required root-owned `0600` `/etc/project-registry/zitadel.env`;
 provision that file from a secret store or pass it with `PROJECT_REGISTRY_ZITADEL_SOURCE`.
@@ -197,15 +195,12 @@ The root is deliberately outside the migrated Git repository. The installer crea
 `root/quarantine` owned by the exact effective `User=`/`Group=` of the authoritative `caddy.service`, with mode `0700`.
 Caddy creates each project directory and `access.jsonl`; the generated JSON explicitly sets the native file writer's
 `mode: "0600"` and `dir_mode: "0700"`, so this uses the production-compatible Caddy file-writer fields rather than
-relying on an ambient umask. Caddy rotation files must remain known archive names and regular `0600` files. Retention
-metadata and its bounded temporary names are daemon-owned regular `0600` files. Before preparation or installation,
-the existing hierarchy is audited without following links and with a 4,096-entry bound: only expected project/archive/
-metadata names and directories are accepted. Broad modes on expected, correctly owned entries are repaired; wrong
-ownership, symlinks, FIFOs, other special files, unknown names, and missing required preparation namespaces fail closed.
-The daemon runs as root only to manage sockets and retention metadata and reads the hierarchy without weakening these
-permissions. The staged authoritative Caddy unit remains unchanged; the reviewed drop-in sets `UMask=0077`. Preparation
-and installation verify the drop-in with `systemd-analyze` and resolve the effective `caddy.service` `User=`/`Group=`
-identity read-only. Explicit Caddy file-writer `mode: "0600"` and `dir_mode: "0700"` settings remain authoritative.
+relying on an ambient umask. Caddy rotation files are `0600` regular files, and retention metadata and its bounded
+temporary names are root-owned regular `0600` files. The installer provisions only the three base directories; it does
+not enumerate, audit, or repair existing project files, archives, or metadata. The root daemon reads the Caddy-owned
+log files as root and writes its own metadata with the same `0600` mode. Preparation checks that the already-provisioned
+directories are readable, traversable, and writable by the effective Caddy user. No custom Caddy service drop-in is
+installed or migrated; the explicit Caddy file-writer `mode: "0600"` and `dir_mode: "0700"` settings remain authoritative.
 
 Capacity is bounded per active project by Caddy's 25 MiB size roll, daily roll, gzip compression, seven-day retention,
 and eight-archive limit: plan for up to 225 MiB before compression for the active file plus eight archives. Multiply
@@ -218,18 +213,14 @@ the no-follow checks. Monitor the filesystem; there is no global byte quota.
 
 1. **Enable:** provision the Zitadel env file with mode `0600`, set the log-root variable, run the installer, inspect
    the staged files, run `systemd-analyze verify`, and check `stat` ownership/modes for the three directories. If
-    using `prepare-leo.bash`, provision the hierarchy before its `--apply` validation pass. Run native validation as
-     `$CADDY_USER` before any cutover. The drop-in is staged/installed only; it does not change the running Caddy process.
-    Cutover must explicitly run `systemctl daemon-reload` and the reviewed `systemctl restart caddy.service` to activate
-    `UMask=0077`, followed by the effective identity checks.
+   using `prepare-leo.bash`, provision the hierarchy before its `--apply` validation pass. Run native validation as
+   `$CADDY_USER` before any cutover.
 2. **Disable:** unset `PROJECT_REGISTRY_CADDY_ACCESS_LOG_ROOT` and re-stage the daemon. The generated Caddy config
    then has no access-log writers. Keep old logs outside Git until the retention/rollback window is closed; do not
    delete them as part of installation.
-3. **Rollback:** use the reviewed migration rollback procedure with
-   `--caddy-umask-dropin /etc/systemd/system/caddy.service.d/10-project-registry-umask.conf`. Stop only the replacement
-   daemon, restore the saved Caddy JSON, restore the backed-up drop-in (or remove it when it was absent), and resume the
-   retained daemon. Logging data is not copied into Git or deleted by rollback; restore the previously reviewed log-root
-   setting only if the replacement configuration is resumed.
+3. **Rollback:** use the reviewed migration rollback procedure. Stop only the replacement daemon, restore the saved
+   Caddy JSON, and resume the retained daemon. Logging data is not copied into Git or deleted by rollback; restore the
+   previously reviewed log-root setting only if the replacement configuration is resumed.
 
 Installation checks must be read-only after staging: `systemd-analyze verify`, `stat -c '%U:%G %a %n'` for the log
 hierarchy, `systemctl show caddy.service --property=User --property=Group`, `runuser -u USER -g GROUP -- id -u`, and
@@ -253,7 +244,7 @@ the dependency preflight (with existing missing filesystem paths and stopped dev
 warned), and stdin-only Caddy validation before creating the backup or any install/stage
 files. A passing run creates a new backup under the requested backup root as
 `caddy-state-YYYYMMDDTHHMMSSZ[-N]`, including `caddy-admin-config.json`, then
-stages the candidate JSON, unchanged unit, and reviewed UMask drop-in at separate paths. The live files remain unchanged.
+stages the candidate JSON and unchanged unit at separate paths. The live files remain unchanged.
 
 Preview the complete plan while the old stack remains live:
 
@@ -289,8 +280,8 @@ filesystem paths and stopped backends), and candidate validation before it
 backs up the existing Caddy data, live JSON, and live unit under a new
 timestamped/non-colliding directory. It does not copy or normalize TLS data.
 It runs task 1, task 3, task 4, and the task-6 dependency preflight first. After they pass, it stages the
- OIDC-capable Caddy binary, candidate config, unchanged candidate unit, reviewed UMask drop-in, task-5 daemon
-artifacts/unit, and the existing OIDC env. A migration marker makes repeat apply
+  OIDC-capable Caddy binary, candidate config, unchanged candidate unit, task-5 daemon artifacts/unit, and the existing
+  OIDC env. A migration marker makes repeat apply
 runs skip task 1 while each run retains another backup and stages only the
 separate candidate paths.
 
@@ -336,8 +327,7 @@ bash ops/migration/migrate-leo.bash prepare --dry-run \
 ```
 
 After reviewing it, repeat with `--apply`. Preparation remains responsible for
-staging files and does not activate services. The later cutover must explicitly
-daemon-reload and restart `caddy.service` if the reviewed UMask drop-in is to take effect.
+staging files and does not activate services.
 
 Preview the service switch. Rollback requires the exact reviewed backup JSON (or
 its `caddy-state-*` directory), plus the explicit live Caddy paths:
@@ -347,8 +337,7 @@ bash ops/migration/migrate-leo.bash cutover
 bash ops/migration/migrate-leo.bash rollback \
   --caddy-binary /home/caddy/.local/bin/caddy \
   --caddy-config /home/caddy/.config/caddy/caddy.json \
-  --caddy-backup /home/caddy/project-registry-caddy-backups/caddy-state-YYYYMMDDTHHMMSSZ \
-  --caddy-umask-dropin /etc/systemd/system/caddy.service.d/10-project-registry-umask.conf
+  --caddy-backup /home/caddy/project-registry-caddy-backups/caddy-state-YYYYMMDDTHHMMSSZ
 ```
 
 On Leo, run the reviewed switch as root with `--apply`:
@@ -358,16 +347,14 @@ sudo bash ops/migration/migrate-leo.bash cutover --apply
 sudo bash ops/migration/migrate-leo.bash rollback --apply \
   --caddy-binary /home/caddy/.local/bin/caddy \
   --caddy-config /home/caddy/.config/caddy/caddy.json \
-  --caddy-backup /home/caddy/project-registry-caddy-backups/caddy-state-YYYYMMDDTHHMMSSZ \
-  --caddy-umask-dropin /etc/systemd/system/caddy.service.d/10-project-registry-umask.conf
+  --caddy-backup /home/caddy/project-registry-caddy-backups/caddy-state-YYYYMMDDTHHMMSSZ
 ```
 
 Before either a dry-run plan or an apply, the wrapper runs read-only systemd
 unit preflights for `caddy-projects.service` and `project-registryd.service`.
 All preflights complete before any service mutation; a failed preflight leaves
 both daemons untouched. The public, authoritative system `caddy.service` stays
-running throughout and is never passed to `systemctl` by this wrapper. Its
-drop-in activation is a separate reviewed cutover operation. There is no
+running throughout and is never passed to `systemctl` by this wrapper. There is no
 user-manager Caddy path.
 
 Cutover uses this fixed order: stop and disable `caddy-projects.service`, reload
@@ -376,8 +363,7 @@ manager. Rollback performs this fixed order: stop and disable
 `project-registryd.service`, reload the saved JSON into the already-running
 system `caddy.service` with the configured Caddy binary/admin URL, persist it at
 the configured Caddy JSON path, reload systemd, then enable and start the
-retained `caddy-projects.service`; rollback also restores or removes the prepared
-Caddy UMask drop-in when `--caddy-umask-dropin` is supplied. The daemon unit names can be overridden with
+retained `caddy-projects.service`. The daemon unit names can be overridden with
 `--old-projects-service` and `--new-daemon-service` for a reviewed host; there
 are no old/new Caddy service options.
 

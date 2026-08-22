@@ -29,9 +29,6 @@ CADDY_UNIT_DESTINATION=""
 CADDY_CONFIG_DESTINATION=""
 CADDY_CONFIG_STAGE=""
 CADDY_UNIT_STAGE=""
-CADDY_UMASK_DROPIN_SOURCE="${CADDY_UMASK_DROPIN_SOURCE:-$SCRIPT_DIR/caddy.service.d/10-project-registry-umask.conf}"
-CADDY_UMASK_DROPIN_STAGE="${CADDY_UMASK_DROPIN_STAGE:-}"
-CADDY_UMASK_DROPIN_DESTINATION="${CADDY_UMASK_DROPIN_DESTINATION:-}"
 CADDY_OIDC_DESTINATION=""
 CADDY_OIDC_ALIAS_DESTINATION=""
 PROJECT_REGISTRY_INSTALL_ROOT=""
@@ -41,7 +38,6 @@ BUN_BIN="${BUN_BIN:-}"
 INSTALL_BIN="${INSTALL_BIN:-install}"
 SETCAP_BIN="${SETCAP_BIN:-}"
 GETCAP_BIN="${GETCAP_BIN:-}"
-SYSTEMD_ANALYZE_BIN="${SYSTEMD_ANALYZE_BIN:-systemd-analyze}"
 CADDY_USER="${CADDY_USER:-}"
 CADDY_GROUP="${CADDY_GROUP:-}"
 CADDY_WORKING_DIRECTORY="${CADDY_WORKING_DIRECTORY:-/home/caddy}"
@@ -49,10 +45,6 @@ CADDY_ACCESS_COMMAND="${CADDY_ACCESS_COMMAND:-/usr/sbin/runuser}"
 
 # shellcheck source=/dev/null
 source "$SCRIPT_DIR/caddy-service-identity.bash"
-# shellcheck source=/dev/null
-source "$SCRIPT_DIR/caddy-access-log-permissions.bash"
-# shellcheck source=/dev/null
-source "$SCRIPT_DIR/caddy-umask-dropin.bash"
 
 usage() {
   cat <<'USAGE'
@@ -112,9 +104,6 @@ Options:
   --caddy-config-destination PATH   Existing live system Caddy JSON (read-only)
   --caddy-config-stage PATH         Separate candidate Caddy JSON stage path
     --caddy-unit-stage PATH            Separate candidate Caddy unit stage path
-     --caddy-umask-dropin-source PATH  Reviewed authoritative Caddy UMask drop-in
-     --caddy-umask-dropin-stage PATH   Separate drop-in stage path
-     --caddy-umask-dropin-destination PATH  Existing authoritative drop-in to back up
   --caddy-oidc-destination PATH     System Caddy OIDC env destination
   --caddy-oidc-alias-destination PATH  Second env path used by the existing Caddy unit
   --project-registry-install-root PATH  project-registry runtime destination
@@ -124,7 +113,6 @@ Options:
 
 Environment:
   BUN_BIN, INSTALL_BIN, SETCAP_BIN, GETCAP_BIN may override host tools.
-  SYSTEMD_ANALYZE_BIN may override systemd-analyze for fixtures.
   CADDY_SERVICE_IDENTITY_FILE may inject a read-only User=/Group= fixture for tests.
   CADDY_SERVICE_IDENTITY_OUTPUT may inject systemctl-show output for tests.
 USAGE
@@ -246,18 +234,6 @@ while (($# > 0)); do
       CADDY_UNIT_STAGE="$(argument_value "$1" "${2:-}")"
       shift
       ;;
-    --caddy-umask-dropin-source)
-      CADDY_UMASK_DROPIN_SOURCE="$(argument_value "$1" "${2:-}")"
-      shift
-      ;;
-    --caddy-umask-dropin-stage)
-      CADDY_UMASK_DROPIN_STAGE="$(argument_value "$1" "${2:-}")"
-      shift
-      ;;
-    --caddy-umask-dropin-destination)
-      CADDY_UMASK_DROPIN_DESTINATION="$(argument_value "$1" "${2:-}")"
-      shift
-      ;;
     --caddy-oidc-destination)
       CADDY_OIDC_DESTINATION="$(argument_value "$1" "${2:-}")"
       shift
@@ -323,9 +299,6 @@ required_option --project-registry-install-root "$PROJECT_REGISTRY_INSTALL_ROOT"
 required_option --project-registry-config-root "$PROJECT_REGISTRY_CONFIG_ROOT"
 required_option --project-registry-unit-destination "$PROJECT_REGISTRY_UNIT_DESTINATION"
 
-CADDY_UMASK_DROPIN_STAGE="${CADDY_UMASK_DROPIN_STAGE:-$CADDY_UNIT_STAGE.d/10-project-registry-umask.conf}"
-CADDY_UMASK_DROPIN_DESTINATION="${CADDY_UMASK_DROPIN_DESTINATION:-$(dirname -- "$CADDY_UNIT_DESTINATION")/caddy.service.d/10-project-registry-umask.conf}"
-
 if [[ "$DRY_RUN" -eq 0 ]]; then
   BUN_BIN="${BUN_BIN:-$(command -v bun || true)}"
   SETCAP_BIN="${SETCAP_BIN:-$(command -v setcap || true)}"
@@ -348,7 +321,6 @@ source_file_check "$OIDC_SOURCE"
 if [[ -n "$LEGACY_CADDY_CONFIG" ]]; then source_file_check "$LEGACY_CADDY_CONFIG"; fi
 source_file_check "$CADDY_BINARY_SOURCE"
 source_file_check "$CADDY_UNIT_SOURCE"
-source_file_check "$CADDY_UMASK_DROPIN_SOURCE"
 directory_check "$LEGACY_REPOSITORY"
 directory_check "$SOFTWARE_PROJECTS"
 directory_check "$CADDY_DATA_DESTINATION"
@@ -365,7 +337,6 @@ fi
 # properties fixture or injected output; no service is started or reloaded.
 CADDY_SERVICE_IDENTITY_FILE="${CADDY_SERVICE_IDENTITY_FILE:-$CADDY_UNIT_DESTINATION}"
 caddy_service_identity_load
-caddy_umask_dropin_validate "$CADDY_UMASK_DROPIN_SOURCE" || exit 1
 
 CADDY_DATA_REALPATH="$(realpath -m "$CADDY_DATA_DESTINATION")"
 CADDY_BACKUP_ROOT_REALPATH="$(realpath -m "$CADDY_BACKUP_ROOT")"
@@ -373,8 +344,6 @@ CADDY_CONFIG_REALPATH="$(realpath -m "$CADDY_CONFIG_DESTINATION")"
 CADDY_CONFIG_STAGE_REALPATH="$(realpath -m "$CADDY_CONFIG_STAGE")"
 CADDY_UNIT_REALPATH="$(realpath -m "$CADDY_UNIT_DESTINATION")"
 CADDY_UNIT_STAGE_REALPATH="$(realpath -m "$CADDY_UNIT_STAGE")"
-CADDY_UMASK_DROPIN_STAGE_REALPATH="$(realpath -m "$CADDY_UMASK_DROPIN_STAGE")"
-CADDY_UMASK_DROPIN_DESTINATION_REALPATH="$(realpath -m "$CADDY_UMASK_DROPIN_DESTINATION")"
 CANDIDATE_OUTPUT_REALPATH="$(realpath -m "$CANDIDATE_OUTPUT")"
 CADDY_BINARY_SOURCE_REALPATH="$(realpath "$CADDY_BINARY_SOURCE")"
 CADDY_BINARY_DESTINATION_REALPATH="$(realpath -m "$CADDY_BINARY_DESTINATION")"
@@ -465,19 +434,13 @@ if [[ "$CADDY_CONFIG_STAGE_REALPATH" == "$CADDY_CONFIG_REALPATH" || \
   "$CADDY_CONFIG_STAGE_REALPATH" == "$CADDY_UNIT_REALPATH" || \
   "$CADDY_UNIT_STAGE_REALPATH" == "$CADDY_CONFIG_REALPATH" || \
   "$CADDY_UNIT_STAGE_REALPATH" == "$CADDY_UNIT_REALPATH" || \
-  "$CADDY_CONFIG_STAGE_REALPATH" == "$CADDY_UNIT_STAGE_REALPATH" || \
-  "$CADDY_UMASK_DROPIN_STAGE_REALPATH" == "$CADDY_CONFIG_REALPATH" || \
-  "$CADDY_UMASK_DROPIN_STAGE_REALPATH" == "$CADDY_UNIT_REALPATH" || \
-  "$CADDY_UMASK_DROPIN_STAGE_REALPATH" == "$CADDY_CONFIG_STAGE_REALPATH" || \
-  "$CADDY_UMASK_DROPIN_STAGE_REALPATH" == "$CADDY_UNIT_STAGE_REALPATH" || \
-  "$CADDY_UMASK_DROPIN_STAGE_REALPATH" == "$CADDY_UMASK_DROPIN_DESTINATION_REALPATH" ]]; then
+  "$CADDY_CONFIG_STAGE_REALPATH" == "$CADDY_UNIT_STAGE_REALPATH" ]]; then
   printf 'Caddy candidate stage paths must be separate from live files and each other\n' >&2
   exit 1
 fi
 if path_is_within "$CADDY_DATA_REALPATH" "$CADDY_CONFIG_STAGE_REALPATH" || \
-  path_is_within "$CADDY_DATA_REALPATH" "$CADDY_UNIT_STAGE_REALPATH" || \
-  path_is_within "$CADDY_DATA_REALPATH" "$CADDY_UMASK_DROPIN_STAGE_REALPATH" || \
-  path_is_within "$CADDY_DATA_REALPATH" "$CANDIDATE_OUTPUT_REALPATH"; then
+   path_is_within "$CADDY_DATA_REALPATH" "$CADDY_UNIT_STAGE_REALPATH" || \
+   path_is_within "$CADDY_DATA_REALPATH" "$CANDIDATE_OUTPUT_REALPATH"; then
   printf 'Caddy candidate paths must not be inside live Caddy data: %s\n' "$CADDY_DATA_DESTINATION" >&2
   exit 1
 fi
@@ -534,12 +497,10 @@ print_plan() {
   printf 'would generate candidate Caddy config at: %s\n' "$CANDIDATE_OUTPUT"
   printf 'would stage candidate Caddy config: %s -> %s\n' "$CANDIDATE_OUTPUT" "$CADDY_CONFIG_STAGE"
   printf 'would stage candidate Caddy unit unchanged: %s -> %s\n' "$CADDY_UNIT_SOURCE" "$CADDY_UNIT_STAGE"
-  printf 'would stage reviewed Caddy UMask drop-in: %s -> %s (UMask=0077, mode 0644)\n' "$CADDY_UMASK_DROPIN_SOURCE" "$CADDY_UMASK_DROPIN_STAGE"
-  printf 'would back up authoritative Caddy UMask drop-in: %s\n' "$CADDY_UMASK_DROPIN_DESTINATION"
   printf 'would reuse OIDC env: %s -> %s and %s\n' "$OIDC_SOURCE" "$CADDY_OIDC_DESTINATION" "$CADDY_OIDC_ALIAS_DESTINATION"
   printf 'would run task-5 installer with runtime=%s config=%s unit=%s\n' \
     "$PROJECT_REGISTRY_INSTALL_ROOT" "$PROJECT_REGISTRY_CONFIG_ROOT" "$PROJECT_REGISTRY_UNIT_DESTINATION"
-  printf 'would audit existing Caddy access logs, archives, and metadata without following links (bounded, safe-mode repair only)\n'
+  printf 'would leave existing Caddy access-log files and metadata untouched\n'
   printf 'would write candidate: %s\n' "$CANDIDATE_OUTPUT"
   printf 'would check dependencies as Caddy user=%s from working directory=%s with access-command=%s (missing filesystem paths and stopped backends warned)\n' \
     "$CADDY_USER:$CADDY_GROUP" "$CADDY_WORKING_DIRECTORY" "$CADDY_ACCESS_COMMAND"
@@ -556,7 +517,6 @@ fi
 access_log_root_preflight() {
   local root="${PROJECT_REGISTRY_CADDY_ACCESS_LOG_ROOT:-}"
   [[ -z "$root" ]] && return 0
-  caddy_access_log_audit_existing "$root" "$CADDY_USER" "$CADDY_GROUP" root root 1 1 || exit 1
   for directory in "$root" "$root/projects" "$root/quarantine"; do
     "$CADDY_ACCESS_COMMAND" -u "$CADDY_USER" -g "$CADDY_GROUP" -- test -r "$directory" || {
       printf 'Caddy cannot read access-log directory: %s\n' "$directory" >&2
@@ -594,19 +554,6 @@ backup_live_caddy_state() {
   find "$backup_path/caddy-data" -type d -exec chmod 0700 {} +
   chmod 0600 "$backup_path/caddy.json"
   cp -a "$CADDY_UNIT_DESTINATION" "$backup_path/caddy.service"
-  if [[ -L "$CADDY_UMASK_DROPIN_DESTINATION" ]]; then
-    printf 'authoritative Caddy UMask drop-in is a symbolic link: %s\n' "$CADDY_UMASK_DROPIN_DESTINATION" >&2
-    return 1
-  elif [[ -e "$CADDY_UMASK_DROPIN_DESTINATION" ]]; then
-    [[ -f "$CADDY_UMASK_DROPIN_DESTINATION" ]] || {
-      printf 'authoritative Caddy UMask drop-in is not a regular file: %s\n' "$CADDY_UMASK_DROPIN_DESTINATION" >&2
-      return 1
-    }
-    cp --preserve=mode,ownership "$CADDY_UMASK_DROPIN_DESTINATION" "$backup_path/caddy-umask-dropin.conf"
-  else
-    : > "$backup_path/caddy-umask-dropin.absent"
-    chmod 0600 "$backup_path/caddy-umask-dropin.absent"
-  fi
   backup_oidc_environment "$CADDY_OIDC_DESTINATION" "$backup_path/caddy-oidc.env"
   backup_oidc_environment "$CADDY_OIDC_ALIAS_DESTINATION" "$backup_path/caddy-oidc-alias.env"
   CADDY_BACKUP_APPLY_PATH="$backup_path"
@@ -618,21 +565,6 @@ stage_caddy_unit_unchanged() {
   local output="$2"
   cp -- "$source" "$output"
   chmod 0644 "$output"
-}
-
-verify_staged_caddy_unit_and_dropin() {
-  local unit="$PREPARATION_TEMP/caddy.service"
-  local dropin_directory="$unit.d"
-  local dropin="$dropin_directory/10-project-registry-umask.conf"
-  mkdir -p "$dropin_directory"
-  stage_caddy_unit_unchanged "$CADDY_UNIT_SOURCE" "$unit"
-  cp -- "$CADDY_UMASK_DROPIN_SOURCE" "$dropin"
-  chmod 0644 "$dropin"
-  caddy_umask_dropin_validate "$dropin" || exit 1
-  caddy_umask_dropin_verify_unit "$unit" "$SYSTEMD_ANALYZE_BIN" || {
-    printf 'systemd-analyze rejected staged authoritative caddy.service/drop-in\n' >&2
-    exit 1
-  }
 }
 
 backup_oidc_environment() {
@@ -735,13 +667,11 @@ dependency_preflight_args=(
 if [[ -n "$CADDY_ACCESS_COMMAND" ]]; then dependency_preflight_args+=(--caddy-access-command "$CADDY_ACCESS_COMMAND"); fi
 "$BUN_BIN" "${dependency_preflight_args[@]}"
 
-verify_staged_caddy_unit_and_dropin
-
 backup_live_caddy_state
 cp -a "$legacy_baseline_path" "$CADDY_BACKUP_APPLY_PATH/caddy-admin-config.json"
 chmod 0600 "$CADDY_BACKUP_APPLY_PATH/caddy-admin-config.json"
 
-mkdir -p "$(dirname "$CANDIDATE_OUTPUT")" "$(dirname "$CADDY_CONFIG_STAGE")" "$(dirname "$CADDY_UNIT_STAGE")" "$(dirname "$CADDY_UMASK_DROPIN_STAGE")"
+mkdir -p "$(dirname "$CANDIDATE_OUTPUT")" "$(dirname "$CADDY_CONFIG_STAGE")" "$(dirname "$CADDY_UNIT_STAGE")"
 candidate_realpath="$(realpath -m "$CANDIDATE_OUTPUT")"
 config_stage_realpath="$(realpath -m "$CADDY_CONFIG_STAGE")"
 if [[ "$candidate_realpath" == "$config_stage_realpath" ]]; then
@@ -770,9 +700,6 @@ PROJECT_REGISTRY_REPOSITORY_PATH="$MIGRATED_REPOSITORY" \
 PROJECT_REGISTRY_CADDY_BINARY="$CADDY_BINARY_DESTINATION" \
 CADDY_USER="$CADDY_USER" \
 CADDY_GROUP="$CADDY_GROUP" \
-PROJECT_REGISTRY_CADDY_UMASK_DROPIN_SOURCE="$CADDY_UMASK_DROPIN_SOURCE" \
-PROJECT_REGISTRY_CADDY_UMASK_DROPIN_TARGET="$CADDY_UMASK_DROPIN_STAGE" \
-PROJECT_REGISTRY_CADDY_UNIT_FOR_VERIFY="$CADDY_UNIT_STAGE" \
 CADDY_SERVICE_IDENTITY_OUTPUT="User=$CADDY_USER
 Group=$CADDY_GROUP" \
   BUN_BIN="$BUN_BIN" \

@@ -15,8 +15,6 @@ CADDY_BACKUP="${CADDY_BACKUP:-}"
 CADDY_ADMIN_URL="${CADDY_ADMIN_URL:-http://127.0.0.1:2019}"
 CADDY_RELOAD_ADDRESS=""
 CADDY_BACKUP_CONFIG=""
-CADDY_UMASK_DROPIN="${PROJECT_REGISTRY_CADDY_UMASK_DROPIN_TARGET:-}"
-CADDY_BACKUP_ROOT=""
 DRY_RUN=1
 MODE_SEEN=0
 
@@ -37,7 +35,6 @@ Cutover/rollback options:
   --caddy-binary PATH             OIDC-capable Caddy binary for rollback
   --caddy-config PATH             live Caddy JSON file to persist the restored config
   --caddy-backup PATH              saved JSON or backup directory containing caddy-admin-config.json
-  --caddy-umask-dropin PATH        authoritative caddy.service drop-in to restore/remove on rollback
   --caddy-admin-url ADDRESS        Caddy admin API address (default: http://127.0.0.1:2019)
   --dry-run                      print the ordered plan (default)
   --apply                        execute the ordered service changes
@@ -48,9 +45,6 @@ two system daemon units are swapped. Rollback validates the saved JSON offline,
 reloads it through caddy.service's admin API, persists it at --caddy-config, and
 then resumes the retained legacy daemon. It does not reverse project data or
 Caddy certificates.
-The prepared UMask drop-in is not active until the reviewed cutover explicitly
-performs a systemd daemon-reload and caddy.service restart. Preparation and
-installation never perform either operation.
 USAGE
 }
 
@@ -153,25 +147,8 @@ preflight() {
     [[ -n "$CADDY_BACKUP" ]] || { printf '%s requires --caddy-backup\n' "$ACTION" >&2; exit 2; }
     if [[ -d "$CADDY_BACKUP" ]]; then
       CADDY_BACKUP_CONFIG="$CADDY_BACKUP/caddy-admin-config.json"
-      CADDY_BACKUP_ROOT="$CADDY_BACKUP"
     else
       CADDY_BACKUP_CONFIG="$CADDY_BACKUP"
-    fi
-
-    if [[ -n "$CADDY_UMASK_DROPIN" ]]; then
-      [[ "$CADDY_UMASK_DROPIN" == /* && "$CADDY_UMASK_DROPIN" != / && "$CADDY_UMASK_DROPIN" != *$'\n'* ]] || {
-        printf 'invalid Caddy UMask drop-in path: %s\n' "$CADDY_UMASK_DROPIN" >&2
-        exit 2
-      }
-      caddy_umask_dropin_directory="$(dirname -- "$CADDY_UMASK_DROPIN")"
-      [[ -d "$caddy_umask_dropin_directory" && -w "$caddy_umask_dropin_directory" && -x "$caddy_umask_dropin_directory" ]] || {
-        printf 'Caddy UMask drop-in directory is not writable/traversable: %s\n' "$caddy_umask_dropin_directory" >&2
-        exit 1
-      }
-      [[ ! -L "$CADDY_UMASK_DROPIN" ]] || {
-        printf 'Caddy UMask drop-in is a symbolic link: %s\n' "$CADDY_UMASK_DROPIN" >&2
-        exit 1
-      }
     fi
 
     [[ -x "$CADDY_BINARY" ]] || { printf 'Caddy binary is not executable: %s\n' "$CADDY_BINARY" >&2; exit 1; }
@@ -228,30 +205,10 @@ rollback_plan() {
   printf 'would reload saved Caddy JSON through the running system caddy.service: %s\n' "$CADDY_BACKUP_CONFIG"
   print_caddy_command reload --config "$CADDY_BACKUP_CONFIG" --adapter "" --address "$CADDY_RELOAD_ADDRESS"
   printf 'would persist restored Caddy JSON: %s -> %s\n' "$CADDY_BACKUP_CONFIG" "$CADDY_CONFIG"
-  if [[ -n "$CADDY_UMASK_DROPIN" ]]; then
-    printf 'would restore/remove prepared Caddy UMask drop-in through migration backup: %s\n' "$CADDY_UMASK_DROPIN"
-  fi
   print_systemctl_command daemon-reload
   print_systemctl_command enable "$OLD_PROJECTS_SERVICE"
   print_systemctl_command start "$OLD_PROJECTS_SERVICE"
   printf 'no services changed\n'
-}
-
-restore_caddy_umask_dropin() {
-  [[ -n "$CADDY_UMASK_DROPIN" ]] || return 0
-  local backup_dropin=""
-  if [[ -n "$CADDY_BACKUP_ROOT" ]]; then
-    backup_dropin="$CADDY_BACKUP_ROOT/caddy-umask-dropin.conf"
-  fi
-  if [[ -n "$backup_dropin" && -f "$backup_dropin" && ! -L "$backup_dropin" ]]; then
-    local temporary
-    temporary="$(mktemp "$(dirname -- "$CADDY_UMASK_DROPIN")/.10-project-registry-umask.XXXXXX")"
-    cp --preserve=mode,ownership -- "$backup_dropin" "$temporary"
-    mv -f -- "$temporary" "$CADDY_UMASK_DROPIN"
-  else
-    rm -f -- "$CADDY_UMASK_DROPIN"
-  fi
-  printf 'restored Caddy UMask drop-in state: %s\n' "$CADDY_UMASK_DROPIN"
 }
 
 prepare_action() {
@@ -321,10 +278,6 @@ parse_service_options() {
         CADDY_ADMIN_URL="$(argument_value "$1" "${2:-}")"
         shift
         ;;
-      --caddy-umask-dropin)
-        CADDY_UMASK_DROPIN="$(argument_value "$1" "${2:-}")"
-        shift
-        ;;
       --help|-h)
         usage
         exit 0
@@ -391,7 +344,6 @@ case "$ACTION" in
       cp --preserve=mode,ownership -- "$CADDY_BACKUP_CONFIG" "$rollback_config_temp"
       mv -f -- "$rollback_config_temp" "$CADDY_CONFIG"
       rollback_config_temp=""
-      restore_caddy_umask_dropin
       run_systemctl daemon-reload
       run_systemctl enable "$OLD_PROJECTS_SERVICE"
       run_systemctl start "$OLD_PROJECTS_SERVICE"

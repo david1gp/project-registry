@@ -7,7 +7,6 @@ const migrationDirectory = import.meta.dir
 const preparationScript = join(migrationDirectory, "prepare-leo.bash")
 const caddyUnitFixture = join(migrationDirectory, "fixtures", "caddy-service", "caddy.service")
 const caddyIdentityFixture = join(migrationDirectory, "fixtures", "caddy-service-identity", "distinct.properties")
-const caddyUmaskDropinFixture = join(migrationDirectory, "caddy.service.d", "10-project-registry-umask.conf")
 const softwareProjectsFixture = join(migrationDirectory, "fixtures", "software-projects")
 
 type CommandResult = {
@@ -159,7 +158,7 @@ describe("Leo preparation", () => {
       expect(result.stdout).toContain("would back up existing live Caddy OIDC env files")
       expect(result.stdout).toContain("would stage candidate Caddy config")
       expect(result.stdout).toContain("would stage candidate Caddy unit")
-      expect(result.stdout).toContain("UMask=0077")
+      expect(result.stdout).not.toContain("UMask=0077")
       expect(result.stdout).toContain("stdin-only Caddy validation")
       expect(result.stdout).toContain("would run migration, candidate generation, task-4 semantic parity")
       expect(result.stdout).not.toContain("rsync")
@@ -438,13 +437,6 @@ exec /usr/bin/install "\${filtered[@]}"
       expect(await readFile(join(directory, "caddy-staging", "caddy.service"), "utf8")).toBe(
         await readFile(caddyUnitFixture, "utf8"),
       )
-      expect(await readFile(join(directory, "caddy-staging", "caddy.service.d", "10-project-registry-umask.conf"), "utf8")).toBe(
-        await readFile(caddyUmaskDropinFixture, "utf8"),
-      )
-      expect((await stat(join(directory, "caddy-staging", "caddy.service.d", "10-project-registry-umask.conf"))).mode & 0o777).toBe(
-        0o644,
-      )
-
       const firstBackupNames = await readdir(backupRoot)
       expect(firstBackupNames).toHaveLength(1)
       const firstBackup = join(backupRoot, firstBackupNames[0]!)
@@ -627,8 +619,8 @@ esac
     expect(script).not.toContain('install -o caddy -g caddy')
     expect(script).toContain('--caddy-access-command "$CADDY_ACCESS_COMMAND"')
      expect(script).toContain("stage_caddy_unit_unchanged")
-     expect(script).toContain("verify_staged_caddy_unit_and_dropin")
-     expect(script).not.toContain("stage_caddy_unit_with_restrictive_umask")
+    expect(script).not.toContain("caddy_umask")
+    expect(script).not.toContain("caddy_access_log_audit")
     expect(script).toContain("access_log_root_preflight")
   })
 

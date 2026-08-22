@@ -20,10 +20,6 @@ CADDY_BINARY_PATH="${PROJECT_REGISTRY_CADDY_BINARY:-/home/caddy/.local/bin/caddy
 BUN_BIN="${BUN_BIN:-}"
 INSTALL_BIN="${INSTALL_BIN:-install}"
 PROJECT_REGISTRY_CADDY_ACCESS_LOG_ROOT="${PROJECT_REGISTRY_CADDY_ACCESS_LOG_ROOT:-}"
-PROJECT_REGISTRY_CADDY_UMASK_DROPIN_SOURCE="${PROJECT_REGISTRY_CADDY_UMASK_DROPIN_SOURCE:-$SCRIPT_DIR/caddy.service.d/10-project-registry-umask.conf}"
-PROJECT_REGISTRY_CADDY_UMASK_DROPIN_TARGET="${PROJECT_REGISTRY_CADDY_UMASK_DROPIN_TARGET:-/etc/systemd/system/caddy.service.d/10-project-registry-umask.conf}"
-PROJECT_REGISTRY_CADDY_UNIT_FOR_VERIFY="${PROJECT_REGISTRY_CADDY_UNIT_FOR_VERIFY:-/etc/systemd/system/caddy.service}"
-SYSTEMD_ANALYZE_BIN="${SYSTEMD_ANALYZE_BIN:-systemd-analyze}"
 PROJECT_REGISTRY_BUN_RUNTIME_PATH="${PROJECT_REGISTRY_BUN_RUNTIME_PATH:-/usr/local/bin/project-registry-bun}"
 CADDY_USER="${CADDY_USER:-}"
 CADDY_GROUP="${CADDY_GROUP:-}"
@@ -34,8 +30,6 @@ DRY_RUN=1
 source "$SCRIPT_DIR/caddy-service-identity.bash"
 # shellcheck source=/dev/null
 source "$SCRIPT_DIR/caddy-access-log-permissions.bash"
-# shellcheck source=/dev/null
-source "$SCRIPT_DIR/caddy-umask-dropin.bash"
 
 usage() {
   cat <<'USAGE'
@@ -56,10 +50,6 @@ Environment:
   PROJECT_REGISTRY_ZITADEL_SOURCE  optional separately provisioned Zitadel env to copy
   PROJECT_REGISTRY_ZITADEL_TARGET  required Zitadel env destination (default: config root/zitadel.env)
   PROJECT_REGISTRY_CADDY_ACCESS_LOG_ROOT  opt-in Caddy access-log root (unset disables logging)
-  PROJECT_REGISTRY_CADDY_UMASK_DROPIN_SOURCE  reviewed Caddy UMask drop-in source
-  PROJECT_REGISTRY_CADDY_UMASK_DROPIN_TARGET  Caddy drop-in destination (no service reload)
-  PROJECT_REGISTRY_CADDY_UNIT_FOR_VERIFY     staged caddy.service used by systemd-analyze
-  SYSTEMD_ANALYZE_BIN                        systemd-analyze executable
   CADDY_USER/CADDY_GROUP  optional expected identity; it must exactly match caddy.service
   CADDY_SERVICE_IDENTITY_FILE  read-only identity fixture for tests/offline preparation
   CADDY_SERVICE_IDENTITY_OUTPUT  injected systemctl-show output for tests/offline preparation
@@ -97,10 +87,6 @@ done
 [[ -f "$SOURCE_DIR/package.json" ]] || { printf 'missing package.json in: %s\n' "$SOURCE_DIR" >&2; exit 1; }
 [[ -f "$SCRIPT_DIR/project-registryd.service" ]] || { printf 'missing service template\n' >&2; exit 1; }
 [[ -f "$SCRIPT_DIR/project-registryd.env" ]] || { printf 'missing environment template\n' >&2; exit 1; }
-[[ -f "$PROJECT_REGISTRY_CADDY_UMASK_DROPIN_SOURCE" ]] || {
-  printf 'missing Caddy UMask drop-in source: %s\n' "$PROJECT_REGISTRY_CADDY_UMASK_DROPIN_SOURCE" >&2
-  exit 1
-}
 [[ -r "$OIDC_SOURCE" ]] || { printf 'missing or unreadable OIDC environment: %s\n' "$OIDC_SOURCE" >&2; exit 1; }
 if [[ -n "$ZITADEL_SOURCE" ]]; then
   [[ -f "$ZITADEL_SOURCE" && ! -L "$ZITADEL_SOURCE" && -r "$ZITADEL_SOURCE" ]] || {
@@ -116,11 +102,6 @@ fi
 [[ -n "$CADDY_BINARY_PATH" && "$CADDY_BINARY_PATH" != *$'\n'* ]] || { printf 'invalid Caddy binary path\n' >&2; exit 1; }
 [[ -n "$OIDC_TARGET" && "$OIDC_TARGET" != *$'\n'* ]] || { printf 'invalid OIDC destination\n' >&2; exit 1; }
 [[ -n "$ZITADEL_TARGET" && "$ZITADEL_TARGET" != *$'\n'* ]] || { printf 'invalid Zitadel destination\n' >&2; exit 1; }
-[[ "$PROJECT_REGISTRY_CADDY_UMASK_DROPIN_TARGET" == /* && "$PROJECT_REGISTRY_CADDY_UMASK_DROPIN_TARGET" != / &&
-  "$PROJECT_REGISTRY_CADDY_UMASK_DROPIN_TARGET" != *$'\n'* ]] || {
-  printf 'invalid Caddy UMask drop-in destination\n' >&2
-  exit 1
-}
 [[ -n "$PROJECT_REGISTRY_BUN_RUNTIME_PATH" && "$PROJECT_REGISTRY_BUN_RUNTIME_PATH" == /* && "$PROJECT_REGISTRY_BUN_RUNTIME_PATH" != *$'\n'* ]] || {
   printf 'invalid Bun runtime path\n' >&2
   exit 1
@@ -189,17 +170,11 @@ if [[ "$DRY_RUN" -eq 1 ]]; then
   if [[ -n "$PROJECT_REGISTRY_CADDY_ACCESS_LOG_ROOT" ]]; then
      printf 'dry-run: would provision Caddy access-log root %s (%s:%s, directories 0700)\n' \
        "$PROJECT_REGISTRY_CADDY_ACCESS_LOG_ROOT" "$CADDY_USER" "$CADDY_GROUP"
-     printf 'dry-run: would audit existing access logs, archives, and metadata without following links (bounded, safe-mode repair only)\n'
+      printf 'dry-run: existing access-log files and metadata would be left untouched\n'
   else
     printf 'dry-run: Caddy access logging remains disabled (PROJECT_REGISTRY_CADDY_ACCESS_LOG_ROOT is unset)\n'
   fi
   printf 'dry-run: would install unit into %s (mode 0644), repository=%s, Caddy=%s\n' "$UNIT_PATH" "$REPOSITORY_PATH" "$CADDY_BINARY_PATH"
-  printf 'dry-run: would install reviewed Caddy UMask drop-in %s -> %s (mode 0644; no service activation)\n' \
-    "$PROJECT_REGISTRY_CADDY_UMASK_DROPIN_SOURCE" "$PROJECT_REGISTRY_CADDY_UMASK_DROPIN_TARGET"
-  if [[ -n "$PROJECT_REGISTRY_CADDY_UNIT_FOR_VERIFY" ]]; then
-    printf 'dry-run: would run %s verify %s and check effective caddy.service identity\n' \
-      "$SYSTEMD_ANALYZE_BIN" "$PROJECT_REGISTRY_CADDY_UNIT_FOR_VERIFY"
-  fi
   printf 'dry-run: no service operation will be performed\n'
   exit 0
 fi
@@ -223,8 +198,7 @@ fi
   exit 1
 }
 
-"$INSTALL_BIN" -d -o root -g root -m 0755 "$INSTALL_ROOT" "$CONFIG_ROOT" "$(dirname "$UNIT_PATH")" "$(dirname "$OIDC_TARGET")" "$(dirname "$ZITADEL_TARGET")" \
-  "$(dirname "$PROJECT_REGISTRY_CADDY_UMASK_DROPIN_TARGET")"
+"$INSTALL_BIN" -d -o root -g root -m 0755 "$INSTALL_ROOT" "$CONFIG_ROOT" "$(dirname "$UNIT_PATH")" "$(dirname "$OIDC_TARGET")" "$(dirname "$ZITADEL_TARGET")"
 if [[ -n "$PROJECT_REGISTRY_CADDY_ACCESS_LOG_ROOT" ]]; then
   caddy_access_log_root_prepare "$PROJECT_REGISTRY_CADDY_ACCESS_LOG_ROOT" "$CADDY_USER" "$CADDY_GROUP" || exit 1
 fi
@@ -336,13 +310,6 @@ sed \
   -e "s|/usr/local/bin/project-registry-bun|$PROJECT_REGISTRY_BUN_RUNTIME_PATH|g" \
   "$SCRIPT_DIR/project-registryd.service" > "$unit_stage"
 "$INSTALL_BIN" -o root -g root -m 0644 "$unit_stage" "$UNIT_PATH"
-caddy_umask_dropin_install "$PROJECT_REGISTRY_CADDY_UMASK_DROPIN_SOURCE" \
-  "$PROJECT_REGISTRY_CADDY_UMASK_DROPIN_TARGET" "$INSTALL_BIN"
-if [[ -n "$PROJECT_REGISTRY_CADDY_UNIT_FOR_VERIFY" ]]; then
-  caddy_umask_dropin_verify_unit "$PROJECT_REGISTRY_CADDY_UNIT_FOR_VERIFY" "$SYSTEMD_ANALYZE_BIN" || exit 1
-  printf 'Verified Caddy drop-in with %s and effective caddy.service identity %s:%s.\n' \
-    "$SYSTEMD_ANALYZE_BIN" "$CADDY_USER" "$CADDY_GROUP"
-fi
 
 printf 'Installed project-registryd files without activating a service.\n'
 printf 'Next preparation checks: systemd-analyze verify %s; verify Caddy access-log ownership/modes if enabled\n' "$UNIT_PATH"

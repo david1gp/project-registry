@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { chmod, mkdir, mkdtemp, readFile, rm, stat, symlink, writeFile } from "node:fs/promises"
+import { chmod, mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { projectRegistryDaemonConfigFromEnv } from "../../src/runtime/projectRegistryDaemonConfigFromEnv.js"
@@ -8,8 +8,6 @@ const migrationDirectory = import.meta.dir
 const installer = join(migrationDirectory, "install-project-registryd.bash")
 const identityFixtureDirectory = join(migrationDirectory, "fixtures", "caddy-service-identity")
 const accessLogPermissions = join(migrationDirectory, "caddy-access-log-permissions.bash")
-const caddyUmaskDropin = join(migrationDirectory, "caddy.service.d", "10-project-registry-umask.conf")
-const caddyUmaskDropinHelper = join(migrationDirectory, "caddy-umask-dropin.bash")
 
 type CommandResult = {
   exitCode: number
@@ -32,91 +30,33 @@ async function command(
 }
 
 describe("project-registryd production staging", () => {
-  test("repairs only owned expected log entries and rejects unsafe fixtures", async () => {
+  test("provisions only the Caddy access-log directories", async () => {
     const directory = await mkdtemp(join(tmpdir(), "project-registry-log-permissions-"))
     const user = (await command("id", ["-un"], Bun.env as Record<string, string>)).stdout.trim()
     const group = (await command("id", ["-gn"], Bun.env as Record<string, string>)).stdout.trim()
-    const projectId = "a".repeat(64)
-    const wrongOwnerRoot = join(directory, "wrong-owner")
-
-    const fixtureCreate = async (root: string) => {
-      const project = join(root, "projects", projectId)
-      await mkdir(join(project, ".."), { recursive: true })
-      await mkdir(project, { recursive: true })
-      await mkdir(join(root, "quarantine"), { recursive: true })
-      await writeFile(join(project, "access.jsonl"), "{}\n")
-      await writeFile(join(project, "access-2026-08-21.jsonl.gz"), "archive\n")
-      await writeFile(join(project, ".project-registry-retention.json"), '{"version":1,"state":"active"}\n')
-      for (const path of [root, join(root, "projects"), join(root, "quarantine"), project]) await chmod(path, 0o777)
-      for (const path of [
-        join(project, "access.jsonl"),
-        join(project, "access-2026-08-21.jsonl.gz"),
-        join(project, ".project-registry-retention.json"),
-      ]) {
-        await chmod(path, 0o666)
-      }
-      return project
-    }
-
-    const audit = async (
-      root: string,
-      caddyUser: string,
-      caddyGroup: string,
-      daemonUser = user,
-      daemonGroup = group,
-    ) => {
-      const argumentsList = [
-        "-c",
-        '. "$1"; caddy_access_log_audit_existing "$2" "$3" "$4" "$5" "$6" 1 1',
-        "bash",
-        accessLogPermissions,
-        root,
-        caddyUser,
-        caddyGroup,
-        daemonUser,
-        daemonGroup,
-      ]
-      if (caddyUser === "nobody") {
-        return command("runuser", ["-u", "nobody", "--", "bash", ...argumentsList], Bun.env as Record<string, string>)
-      }
-      return command("bash", argumentsList, Bun.env as Record<string, string>)
-    }
+    const root = join(directory, "logs")
+    const existingFile = join(root, "projects", "unexpected-entry")
+    const userId = Number((await command("id", ["-u"], Bun.env as Record<string, string>)).stdout.trim())
+    const groupId = Number((await command("id", ["-g"], Bun.env as Record<string, string>)).stdout.trim())
 
     try {
-      const broadRoot = join(directory, "broad")
-      await fixtureCreate(broadRoot)
-      const broadResult = await audit(broadRoot, user, group)
-      expect(broadResult.exitCode).toBe(0)
-      expect((await stat(broadRoot)).mode & 0o777).toBe(0o700)
-      expect((await stat(join(broadRoot, "projects", projectId, "access.jsonl"))).mode & 0o777).toBe(0o600)
-      expect(
-        (await stat(join(broadRoot, "projects", projectId, "access-2026-08-21.jsonl.gz"))).mode & 0o777,
-      ).toBe(0o600)
-      expect(
-        (await stat(join(broadRoot, "projects", projectId, ".project-registry-retention.json"))).mode & 0o777,
-      ).toBe(0o600)
+      await mkdir(join(root, "projects"), { recursive: true, mode: 0o777 })
+      await writeFile(existingFile, "leave me\n", { mode: 0o666 })
+      await chmod(existingFile, 0o666)
+      const result = await command(
+        "bash",
+        ["-c", '. "$1"; caddy_access_log_root_prepare "$2" "$3" "$4"', "bash", accessLogPermissions, root, user, group],
+        Bun.env as Record<string, string>,
+      )
 
-      const symlinkRoot = join(directory, "symlink")
-      const symlinkProject = await fixtureCreate(symlinkRoot)
-      await rm(join(symlinkProject, "access.jsonl"))
-      await symlink(join(symlinkProject, "access-2026-08-21.jsonl.gz"), join(symlinkProject, "access.jsonl"))
-      const symlinkResult = await audit(symlinkRoot, user, group)
-      expect(symlinkResult.exitCode).toBe(1)
-      expect(symlinkResult.stderr).toContain("symbolic link")
-
-      const fifoRoot = join(directory, "fifo")
-      const fifoProject = await fixtureCreate(fifoRoot)
-      await rm(join(fifoProject, "access.jsonl"))
-      const fifo = Bun.spawn(["mkfifo", join(fifoProject, "access.jsonl")], { stderr: "pipe", stdout: "pipe" })
-      expect(await fifo.exited).toBe(0)
-      const fifoResult = await audit(fifoRoot, user, group)
-      expect(fifoResult.exitCode).toBe(1)
-      expect(fifoResult.stderr).toContain("special file")
-
-      await fixtureCreate(wrongOwnerRoot)
-      const wrongOwnerResult = await audit(wrongOwnerRoot, "root", "root")
-      expect(wrongOwnerResult.exitCode).toBe(1)
-      expect(wrongOwnerResult.stderr).toContain("ownership mismatch")
+      expect(result.exitCode).toBe(0)
+      for (const path of [root, join(root, "projects"), join(root, "quarantine")]) {
+        expect((await stat(path)).mode & 0o777).toBe(0o700)
+      }
+      expect((await stat(root)).uid).toBe(userId)
+      expect((await stat(root)).gid).toBe(groupId)
+      expect(await readFile(existingFile, "utf8")).toBe("leave me\n")
+      expect((await stat(existingFile)).mode & 0o777).toBe(0o666)
     } finally {
       await rm(directory, { force: true, recursive: true })
     }
@@ -213,40 +153,14 @@ describe("project-registryd production staging", () => {
     expect(installerSource).toContain("-m 0640")
   })
 
-  test("plans the reviewed authoritative Caddy drop-in without rewriting Caddy file modes", async () => {
-    const dropin = await readFile(caddyUmaskDropin, "utf8")
+  test("keeps Caddy file-writer modes without installer auditing or a Caddy drop-in", async () => {
     const installerSource = await readFile(installer, "utf8")
     const caddyConfigSource = await readFile(join(migrationDirectory, "..", "..", "src", "caddy", "caddyConfigGenerate.ts"), "utf8")
 
-    expect(dropin).toContain("[Service]")
-    expect(dropin).toContain("UMask=0077")
-    expect(installerSource).toContain("PROJECT_REGISTRY_CADDY_UMASK_DROPIN_SOURCE")
-    expect(installerSource).toContain("caddy_umask_dropin_install")
-    expect(installerSource).toContain("caddy_umask_dropin_verify_unit")
+    expect(installerSource).not.toContain("caddy_access_log_audit")
+    expect(installerSource).not.toContain("UMask drop-in")
     expect(caddyConfigSource).toContain('dir_mode: "0700"')
     expect(caddyConfigSource).toContain('mode: "0600"')
-  })
-
-  test("installs only the reviewed drop-in with explicit mode 0644", async () => {
-    const directory = await mkdtemp(join(tmpdir(), "project-registry-umask-dropin-"))
-    try {
-      const target = join(directory, "caddy.service.d", "10-project-registry-umask.conf")
-      const install = join(directory, "install")
-      await mkdir(join(directory, "caddy.service.d"), { recursive: true })
-      await writeFile(install, '#!/bin/sh\nset -eu\nargs=""\nwhile [ "$#" -gt 0 ]; do case "$1" in -o|-g) shift 2 ;; *) args="$args $(printf "%s" "$1")"; shift ;; esac; done\nset -- $args\nexec /usr/bin/install "$@"\n')
-      await chmod(install, 0o755)
-      const result = await command(
-        "bash",
-        ["-c", '. "$1"; caddy_umask_dropin_install "$2" "$3" "$4"', "bash", caddyUmaskDropinHelper, caddyUmaskDropin, target, install],
-        Bun.env as Record<string, string>,
-      )
-
-      expect(result.exitCode).toBe(0)
-      expect(await readFile(target, "utf8")).toBe(await readFile(caddyUmaskDropin, "utf8"))
-      expect((await stat(target)).mode & 0o777).toBe(0o644)
-    } finally {
-      await rm(directory, { force: true, recursive: true })
-    }
   })
 
   test("starts after and wants the existing system Caddy service", async () => {
@@ -338,12 +252,9 @@ describe("project-registryd production staging", () => {
       const configRoot = join(directory, "config")
       const unitPath = join(directory, "unit", "project-registryd.service")
       const runtimePath = join(directory, "runtime", "bun")
-      const caddyUnit = join(directory, "caddy.service")
-      const dropinTarget = join(directory, "caddy.service.d", "10-project-registry-umask.conf")
 
       await mkdir(source, { recursive: true })
       await mkdir(tools, { recursive: true })
-      await Bun.write(caddyUnit, "[Unit]\nDescription=fixture\n")
       await Bun.write(join(source, "package.json"), "{}\n")
       await Bun.write(
         oidc,
@@ -378,8 +289,6 @@ describe("project-registryd production staging", () => {
         PROJECT_REGISTRY_UNIT_PATH: unitPath,
         PROJECT_REGISTRY_BUN_RUNTIME_PATH: runtimePath,
         PROJECT_REGISTRY_CADDY_ACCESS_LOG_ROOT: "",
-        PROJECT_REGISTRY_CADDY_UMASK_DROPIN_TARGET: dropinTarget,
-        PROJECT_REGISTRY_CADDY_UNIT_FOR_VERIFY: caddyUnit,
         CADDY_SERVICE_IDENTITY_FILE: join(identityFixtureDirectory, "matching.properties"),
       }
       delete environment.INSTALL_BIN
@@ -390,8 +299,7 @@ describe("project-registryd production staging", () => {
       expect(result.stderr).toBe("")
       expect(await Bun.file(join(configRoot, "project-registryd.env")).exists()).toBe(true)
       expect(await Bun.file(unitPath).exists()).toBe(true)
-      expect(await Bun.file(dropinTarget).exists()).toBe(true)
-      expect(await readFile(installLog, "utf8")).toContain(`-o root -g root -m 0644 -- ${join(migrationDirectory, "caddy.service.d", "10-project-registry-umask.conf")}`)
+      expect(await readFile(installLog, "utf8")).not.toContain("umask")
     } finally {
       await rm(directory, { force: true, recursive: true })
     }

@@ -192,16 +192,11 @@ describe("Leo migration wrapper", () => {
       const fake = await fakeSystemd(directory)
       const caddy = await fakeCaddy(fake)
       const backup = join(directory, "caddy-state", "caddy-admin-config.json")
-      const backupDropin = join(directory, "caddy-state", "caddy-umask-dropin.conf")
       const config = join(directory, "live", "caddy.json")
-      const dropin = join(directory, "live", "caddy.service.d", "10-project-registry-umask.conf")
       await mkdir(join(directory, "caddy-state"), { recursive: true })
       await mkdir(join(directory, "live"), { recursive: true })
-      await mkdir(join(directory, "live", "caddy.service.d"), { recursive: true })
       await Bun.write(backup, '{"legacy":true}\n')
-      await Bun.write(backupDropin, "[Service]\nUMask=0022\n")
       await Bun.write(config, '{"candidate":true}\n')
-      await Bun.write(dropin, "[Service]\nUMask=0077\n")
       const result = await command(
         "bash",
         [
@@ -214,16 +209,13 @@ describe("Leo migration wrapper", () => {
           caddy,
           "--caddy-config",
           config,
-           "--caddy-backup",
-           join(directory, "caddy-state"),
-           "--caddy-umask-dropin",
-           dropin,
+          "--caddy-backup",
+          join(directory, "caddy-state"),
         ],
         fake.environment,
       )
 
       expect(result.exitCode).toBe(0)
-      expect(await readFile(dropin, "utf8")).toBe("[Service]\nUMask=0022\n")
       expect(await logLines(fake.environment.FAKE_SYSTEMCTL_LOG)).toEqual([
         "cat caddy-projects.service",
         "cat project-registryd.service",
@@ -624,6 +616,8 @@ describe("Leo migration wrapper", () => {
     expect(script).not.toContain("--old-caddy-service")
     expect(script).not.toContain("--new-caddy-service")
     expect(script).not.toContain("--old-caddy-user")
+    expect(script).not.toContain("caddy-umask-dropin")
+    expect(script).not.toContain("CADDY_UMASK")
     expect(script).not.toMatch(/curl|caddy\s+(run|stop)\b/)
   })
 })
