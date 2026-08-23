@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test"
+import pkg from "../../package.json" with { type: "json" }
 import { projectRegistryCliRun } from "./projectRegistryCliRun.js"
 
 const project = {
@@ -584,7 +585,7 @@ describe("projectRegistryCliRun", () => {
     expect(requests).toBe(0)
     expect(output.join("")).toContain("Usage: project-registry")
     expect(output.join("")).toContain("delete --port <port>")
-    expect(output.join("")).toContain("project-registry 0.1.0")
+    expect(output.join("")).toContain(`project-registry ${pkg.version}`)
   })
 
   test("rejects malformed command data", async () => {
