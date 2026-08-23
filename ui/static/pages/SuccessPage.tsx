@@ -1,4 +1,4 @@
-import { mdiCheckCircleOutline } from "@mdi/js"
+import { mdiCheckCircleOutline } from "@adaptive-ds/mdi/mdiCheckCircleOutline.js"
 import { Show } from "solid-js"
 import { Icon } from "#ui/static/icon/Icon.jsx"
 import { classesPageWrapper } from "#ui/static/page/classesPageWrapper.js"

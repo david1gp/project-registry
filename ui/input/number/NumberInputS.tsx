@@ -1,4 +1,7 @@
-import { mdiMinus, mdiMinusBox, mdiPlus, mdiPlusBox } from "@mdi/js"
+import { mdiMinus } from "@adaptive-ds/mdi/mdiMinus.js"
+import { mdiMinusBox } from "@adaptive-ds/mdi/mdiMinusBox.js"
+import { mdiPlus } from "@adaptive-ds/mdi/mdiPlus.js"
+import { mdiPlusBox } from "@adaptive-ds/mdi/mdiPlusBox.js"
 import { type ComponentProps, type JSX, splitProps } from "solid-js"
 import { Input } from "#ui/input/input/Input.jsx"
 import type { NumberInputText } from "#ui/input/number/NumberInputTexts.jsx"

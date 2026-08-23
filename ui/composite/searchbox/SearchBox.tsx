@@ -1,4 +1,6 @@
-import { mdiCheck, mdiMagnify, mdiUndo } from "@mdi/js"
+import { mdiCheck } from "@adaptive-ds/mdi/mdiCheck.js"
+import { mdiMagnify } from "@adaptive-ds/mdi/mdiMagnify.js"
+import { mdiUndo } from "@adaptive-ds/mdi/mdiUndo.js"
 import { createSignal, For, onCleanup, Show } from "solid-js"
 import { ButtonIcon } from "#ui/interactive/button/ButtonIcon.jsx"
 import { buttonVariant } from "#ui/interactive/button/buttonCva.js"

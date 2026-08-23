@@ -1,5 +1,5 @@
 import Dialog from "@corvu/dialog"
-import { mdiClose } from "@mdi/js"
+import { mdiClose } from "@adaptive-ds/mdi/mdiClose.js"
 import type { JSX } from "solid-js"
 import { classesDisabledDirectly } from "#ui/classes/classesDisabledDirectly.js"
 import type { ButtonIcon1Props } from "#ui/interactive/button/ButtonIcon1.jsx"

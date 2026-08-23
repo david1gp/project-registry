@@ -1,4 +1,4 @@
-import { mdiLoading } from "@mdi/js"
+import { mdiLoading } from "@adaptive-ds/mdi/mdiLoading.js"
 import { type Component, type ComponentProps, splitProps } from "solid-js"
 import { Button } from "#ui/interactive/button/Button.jsx"
 import type { ButtonCvaProps, ButtonVariant } from "#ui/interactive/button/buttonCva.js"

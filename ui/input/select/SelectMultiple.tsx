@@ -1,4 +1,6 @@
-import { mdiCheck, mdiClose, mdiPlus } from "@mdi/js"
+import { mdiCheck } from "@adaptive-ds/mdi/mdiCheck.js"
+import { mdiClose } from "@adaptive-ds/mdi/mdiClose.js"
+import { mdiPlus } from "@adaptive-ds/mdi/mdiPlus.js"
 import { Key } from "@solid-primitives/keyed"
 import { For, mergeProps } from "solid-js"
 import type { SelectMultipleTexts } from "#ui/input/select/SelectMultipleTexts.js"

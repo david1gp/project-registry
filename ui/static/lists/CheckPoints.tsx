@@ -1,4 +1,4 @@
-import { mdiCheck } from "@mdi/js"
+import { mdiCheck } from "@adaptive-ds/mdi/mdiCheck.js"
 import { For } from "solid-js"
 import { Icon } from "#ui/static/icon/Icon.jsx"
 import { classMerge } from "#ui/utils/classMerge.js"

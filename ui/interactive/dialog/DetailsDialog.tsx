@@ -1,5 +1,6 @@
 import Dialog from "@corvu/dialog"
-import { mdiChevronDown, mdiClose } from "@mdi/js"
+import { mdiChevronDown } from "@adaptive-ds/mdi/mdiChevronDown.js"
+import { mdiClose } from "@adaptive-ds/mdi/mdiClose.js"
 import { createSignal, type JSXElement, onMount, Show } from "solid-js"
 import { buttonCvaIconOnly, buttonVariant } from "#ui/interactive/button/buttonCva.js"
 import { buttonIconCva } from "#ui/interactive/button/buttonIconCva.js"

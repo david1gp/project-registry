@@ -1,4 +1,5 @@
-import { mdiCheckboxBlankCircleOutline, mdiCheckboxMarkedCircle } from "@mdi/js"
+import { mdiCheckboxBlankCircleOutline } from "@adaptive-ds/mdi/mdiCheckboxBlankCircleOutline.js"
+import { mdiCheckboxMarkedCircle } from "@adaptive-ds/mdi/mdiCheckboxMarkedCircle.js"
 import { ButtonIcon } from "#ui/interactive/button/ButtonIcon.jsx"
 import { buttonVariant } from "#ui/interactive/button/buttonCva.js"
 import { classMerge } from "#ui/utils/classMerge.js"

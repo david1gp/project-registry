@@ -1,4 +1,4 @@
-import { mdiInformationOutline } from "@mdi/js"
+import { mdiInformationOutline } from "@adaptive-ds/mdi/mdiInformationOutline.js"
 import { ttt } from "#ui/i18n/ttt.js"
 import { buttonSize, buttonVariant } from "#ui/interactive/button/buttonCva.js"
 import { CorvuPopover } from "#ui/interactive/popover/CorvuPopover.jsx"

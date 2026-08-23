@@ -1,4 +1,7 @@
-import { mdiAlertCircle, mdiAlertOctagram, mdiCheckCircle, mdiInformationOutline } from "@mdi/js"
+import { mdiAlertCircle } from "@adaptive-ds/mdi/mdiAlertCircle.js"
+import { mdiAlertOctagram } from "@adaptive-ds/mdi/mdiAlertOctagram.js"
+import { mdiCheckCircle } from "@adaptive-ds/mdi/mdiCheckCircle.js"
+import { mdiInformationOutline } from "@adaptive-ds/mdi/mdiInformationOutline.js"
 
 export type ToastVariant = keyof typeof toastVariant
 

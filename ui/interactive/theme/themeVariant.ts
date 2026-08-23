@@ -1,4 +1,6 @@
-import { mdiBrightnessAuto, mdiWeatherNight, mdiWhiteBalanceSunny } from "@mdi/js"
+import { mdiBrightnessAuto } from "@adaptive-ds/mdi/mdiBrightnessAuto.js"
+import { mdiWeatherNight } from "@adaptive-ds/mdi/mdiWeatherNight.js"
+import { mdiWhiteBalanceSunny } from "@adaptive-ds/mdi/mdiWhiteBalanceSunny.js"
 import * as v from "valibot"
 
 export type ThemeVariant = keyof typeof themeVariant

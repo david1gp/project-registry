@@ -1,4 +1,5 @@
-import { mdiCheckboxBlankOutline, mdiCheckboxMarked } from "@mdi/js"
+import { mdiCheckboxBlankOutline } from "@adaptive-ds/mdi/mdiCheckboxBlankOutline.js"
+import { mdiCheckboxMarked } from "@adaptive-ds/mdi/mdiCheckboxMarked.js"
 import { type ComponentProps, splitProps } from "solid-js"
 import { classesDisabledDirectly } from "#ui/classes/classesDisabledDirectly.js"
 import { Icon } from "#ui/static/icon/Icon.jsx"

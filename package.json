@@ -27,6 +27,7 @@
   },
   "dependencies": {
     "@adaptive-ds/git-store": "^0.1.0",
+    "@adaptive-ds/mdi": "^0.1.2",
     "@solidjs/router": "^0.15.4",
     "clsx": "^2.1.1",
     "solid-js": "^1.9.12",

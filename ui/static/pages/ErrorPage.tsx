@@ -1,4 +1,4 @@
-import { mdiAlertBoxOutline } from "@mdi/js"
+import { mdiAlertBoxOutline } from "@adaptive-ds/mdi/mdiAlertBoxOutline.js"
 import { Icon } from "#ui/static/icon/Icon.jsx"
 import { classMerge } from "#ui/utils/classMerge.js"
 import type { HasTitle } from "#ui/utils/HasTitle.js"

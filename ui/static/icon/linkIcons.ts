@@ -1,17 +1,15 @@
-import {
-  mdiAccountPlus,
-  mdiArrowLeft,
-  mdiArrowRight,
-  mdiArrowTopRight,
-  mdiHome,
-  mdiLogin,
-  mdiLoginVariant,
-  mdiLogout,
-  mdiLogoutVariant,
-  mdiRedoVariant,
-  mdiReload,
-  mdiSubdirectoryArrowRight,
-} from "@mdi/js"
+import { mdiAccountPlus } from "@adaptive-ds/mdi/mdiAccountPlus.js"
+import { mdiArrowLeft } from "@adaptive-ds/mdi/mdiArrowLeft.js"
+import { mdiArrowRight } from "@adaptive-ds/mdi/mdiArrowRight.js"
+import { mdiArrowTopRight } from "@adaptive-ds/mdi/mdiArrowTopRight.js"
+import { mdiHome } from "@adaptive-ds/mdi/mdiHome.js"
+import { mdiLogin } from "@adaptive-ds/mdi/mdiLogin.js"
+import { mdiLoginVariant } from "@adaptive-ds/mdi/mdiLoginVariant.js"
+import { mdiLogout } from "@adaptive-ds/mdi/mdiLogout.js"
+import { mdiLogoutVariant } from "@adaptive-ds/mdi/mdiLogoutVariant.js"
+import { mdiRedoVariant } from "@adaptive-ds/mdi/mdiRedoVariant.js"
+import { mdiReload } from "@adaptive-ds/mdi/mdiReload.js"
+import { mdiSubdirectoryArrowRight } from "@adaptive-ds/mdi/mdiSubdirectoryArrowRight.js"
 
 export const linkIcons = {
   reload: mdiReload,

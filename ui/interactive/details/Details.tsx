@@ -1,4 +1,4 @@
-import { mdiChevronDown } from "@mdi/js"
+import { mdiChevronDown } from "@adaptive-ds/mdi/mdiChevronDown.js"
 import { type JSXElement, Show } from "solid-js"
 import { Icon } from "#ui/static/icon/Icon.jsx"
 import { classArr } from "#ui/utils/classArr.js"

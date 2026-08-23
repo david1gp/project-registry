@@ -1,5 +1,6 @@
 import Dialog from "@corvu/dialog"
-import { mdiCookie, mdiShieldCheckOutline } from "@mdi/js"
+import { mdiCookie } from "@adaptive-ds/mdi/mdiCookie.js"
+import { mdiShieldCheckOutline } from "@adaptive-ds/mdi/mdiShieldCheckOutline.js"
 import { createSignal, For, onCleanup, onMount, Show } from "solid-js"
 import { Button } from "#ui/interactive/button/Button.jsx"
 import { buttonVariant } from "#ui/interactive/button/buttonCva.js"

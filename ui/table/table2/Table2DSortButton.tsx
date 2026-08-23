@@ -1,4 +1,5 @@
-import { mdiArrowDown, mdiArrowUp } from "@mdi/js"
+import { mdiArrowDown } from "@adaptive-ds/mdi/mdiArrowDown.js"
+import { mdiArrowUp } from "@adaptive-ds/mdi/mdiArrowUp.js"
 import { ButtonIcon } from "#ui/interactive/button/ButtonIcon.jsx"
 import { buttonVariant } from "#ui/interactive/button/buttonCva.js"
 import type { TableColumnDef } from "#ui/table/shared/TableColumnDef.js"

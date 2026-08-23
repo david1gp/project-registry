@@ -1,4 +1,4 @@
-import { mdiCircle } from "@mdi/js"
+import { mdiCircle } from "@adaptive-ds/mdi/mdiCircle.js"
 import { For } from "solid-js"
 import { Icon } from "#ui/static/icon/Icon.jsx"
 import { classMerge } from "#ui/utils/classMerge.js"
