@@ -376,3 +376,153 @@ start the retained daemon, and never claims a completed rollback. The public
 admin API reload is the only live Caddy operation. Dry-run performs the same
 read-only offline validation, but never reloads Caddy, writes the config file, or
 changes either daemon.
+
+## Disposable staging access-log check (task 9)
+
+Run `ops/staging/caddy-project-access-logs-check.bash` only against a fresh,
+disposable staging deployment. It sends credentials and query secrets into the
+raw access logs, so do not use production credentials, hosts, projects, sockets,
+or log roots. The check does not deploy or clean up the target.
+
+### Prerequisites and validation
+
+The staging deployment must provide an active, non-root `caddy.service`, an
+HTTP `project-registryd` endpoint, two owner-bound Unix sockets, the deployed
+CLI, and a fresh access-log root outside Git. The root and its `projects` and
+`quarantine` directories must already be mode `0700` and owned by the effective
+Caddy `User=`/`Group=`. The two project log directories must have no data or
+rotated archives (an empty active `access.jsonl` is acceptable). Prepare two
+distinct owners, project names, and Caddy hosts;
+each host must serve the safe GET `--request-path`.
+
+First run the non-contacting prerequisite check:
+
+```bash
+bash ops/staging/caddy-project-access-logs-check.bash --validate
+```
+
+`--validate` checks only local commands. It does not contact a target, read the
+credential header files, or change the staging deployment.
+
+`--run` has no defaults. All of these options are required exactly once:
+
+```text
+--api-url URL --caddy-url URL
+--api-headers-a FILE --api-headers-b FILE
+--unix-socket-a PATH --unix-socket-b PATH --cli PATH --log-root PATH
+--staging-attestation FILE
+--owner-a USER --owner-b USER --project-a NAME --project-b NAME
+--host-a HOST --host-b HOST --request-path PATH --rotation-count N
+```
+
+The header files must be regular, non-symlink, readable files with no
+group/other permission bits and must contain a `Cookie:` header. Paths are
+absolute; URLs are `http://` or `https://`. Each owner, project, and host A/B
+pair must be distinct, and `--rotation-count` must be `1` through `100000`.
+Before any target activity, `--cli` must name a non-symlink regular executable
+owned by root with no group/other write bits. Every parent directory through
+`/` must also be non-symlink, root-owned, and have no group/other write bits.
+Append `--insecure` only for an explicitly supplied disposable staging
+certificate mismatch.
+
+### Deployment attestation and invocation
+
+The deployment process must create `--staging-attestation` before `--run`; the
+check never creates or updates it. As root, create a temporary file and
+atomically rename it into place with owner `root:root` and mode `0600`. Its only
+bytes are these four newline-terminated lines:
+
+```text
+version=1
+purpose=caddy-project-access-logs-staging
+deployment_id=<32 lowercase hexadecimal characters>
+target_sha256=<64 lowercase hexadecimal characters>
+```
+
+Generate the deployment ID as 16 random bytes rendered by
+`od -An -N16 -tx1 /dev/urandom | tr -d ' \n'`. The digest is the SHA-256 of
+the NUL-separated values, in this exact order: normalized `--api-url` (one
+trailing slash removed), normalized `--caddy-url`, the two header *file paths*,
+the two socket paths, CLI path, log-root path, attestation path, deployment ID,
+the two owners, the two projects, the two hosts, request path, rotation count,
+and TLS mode (`0`, or `1` when `--insecure` is supplied). The deployment must
+hash paths and settings only; it must never read or put credential contents in
+the digest, command output, attestation, or process arguments.
+
+For example, with variables set to the exact invocation values, the root-only
+deployment step is:
+
+```bash
+api_url="${API_URL%/}"
+caddy_url="${CADDY_URL%/}"
+tls_mode=0 # use 1 only when --insecure is passed
+deployment_id="$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')"
+target_sha256="$(
+  printf '%s\0' \
+    "$api_url" "$caddy_url" "$API_HEADERS_A" "$API_HEADERS_B" \
+    "$UNIX_SOCKET_A" "$UNIX_SOCKET_B" "$CLI" "$LOG_ROOT" \
+    "$STAGING_ATTESTATION" "$deployment_id" "$OWNER_A" "$OWNER_B" \
+    "$PROJECT_A" "$PROJECT_B" "$HOST_A" "$HOST_B" "$REQUEST_PATH" \
+    "$ROTATION_COUNT" "$tls_mode" |
+    sha256sum | awk '{ print $1 }'
+  )"
+umask 077
+attestation_tmp="$(mktemp "${STAGING_ATTESTATION}.tmp.XXXXXX")"
+printf 'version=1\npurpose=caddy-project-access-logs-staging\ndeployment_id=%s\ntarget_sha256=%s\n' \
+  "$deployment_id" "$target_sha256" >"$attestation_tmp"
+chown root:root -- "$attestation_tmp"
+chmod 600 -- "$attestation_tmp"
+mv -- "$attestation_tmp" "$STAGING_ATTESTATION"
+```
+
+Only file names and non-secret target values enter this command; the header
+files are never opened by the attestation step.
+
+The invocation must pass the same values used for the attestation:
+
+```bash
+sudo bash ops/staging/caddy-project-access-logs-check.bash --run \
+  --api-url "$API_URL" \
+  --caddy-url "$CADDY_URL" \
+  --api-headers-a "$API_HEADERS_A" \
+  --api-headers-b "$API_HEADERS_B" \
+  --unix-socket-a "$UNIX_SOCKET_A" \
+  --unix-socket-b "$UNIX_SOCKET_B" \
+  --cli "$CLI" \
+  --log-root "$LOG_ROOT" \
+  --staging-attestation "$STAGING_ATTESTATION" \
+  --owner-a "$OWNER_A" --owner-b "$OWNER_B" \
+  --project-a "$PROJECT_A" --project-b "$PROJECT_B" \
+  --host-a "$HOST_A" --host-b "$HOST_B" \
+  --request-path "$REQUEST_PATH" \
+  --rotation-count "$ROTATION_COUNT"
+```
+
+Add `--insecure` only when it was included as TLS mode `1` in the attestation.
+
+The check proves complete raw-record preservation of query, Cookie, and
+Authorization values; project/host logger isolation; Caddy-owned `0700`/
+`0600` permissions, archive and retention-metadata permissions; filesystem,
+HTTP, and both explicit and owner-inferred Unix reads returning identical
+records; cross-owner HTTP/Unix `404` authorization parity; one-roll rotation
+continuity; and bounded page, filesystem-read, decompression, record, line, and
+disk behavior. Production planning capacity is approximately `225 MiB` per
+project (25 MiB for the active file plus eight 25 MiB archives, before
+compression). Separately, the staging check allows and enforces its explicit
+`226 MiB` apparent-size ceiling per project: `25 MiB × 9 + 1 MiB` observation
+slack. It sends only GETs, with two initial requests, one pre-rotation request,
+at most `--rotation-count` rotation requests (batches of at most eight parallel
+requests), and one post-rotation request. `--rotation-count` is a maximum
+traffic budget, not a guaranteed count: a passing run must observe rotation,
+and an insufficient count fails when rotation is not observed. Adjust that
+count only on disposable staging, never on production or a reused target. The
+script bounds each project at the explicit `226 MiB` ceiling, pages at
+`8 MiB`/`1000` records, and filesystem reads at `64 MiB` scanned/decompressed,
+`128 KiB` per line, and `1000000` records. Temporary response/work files are
+mode `0600` and are removed by the script's exit trap.
+
+After the run, destroy the disposable services and remove both test projects,
+their access-log root, the two header files, sockets, CLI staging files, and
+the attestation. The script removes only its temporary workspace; it does not
+delete target logs. Never run this check against production or any
+non-disposable/reused target.
