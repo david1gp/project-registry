@@ -45,7 +45,8 @@ Let an authenticated consumer view bounded, complete raw Caddy access logs for e
 - [x] 6. Add the project-detail access-log client and panel using reusable `#ui` components, including inspectable raw JSON records; test paging, polling cleanup, refresh/pause, visibility changes, and all empty/error states, then verify the rendered flow in a browser.
 - [x] 7. Add inactive-directory retention reconciliation after successful Caddy application, with mount-safe no-follow quarantine transitions, a 24-hour cleanup grace, a 1,024 raw active-ID bound, serialized one-daemon reconciliation, and tests for active, recently inactive, expired, crash recovery, races, and malicious filesystem entries.
 - [x] 8. Update systemd/migration installation and environment templates to create the Caddy-owned `0700` log root with `0600` files, and document capacity/retention and the opt-in rollout switch.
-- [ ] 9. Add an end-to-end staging check that sends requests containing query secrets, cookies, authorization headers, and distinct project hosts; prove complete-record preservation, project isolation, permissions, rotation continuity, HTTP/Unix authorization parity, and bounded disk/read behavior before enabling production.
+- [ ] 9. Add an explicit opt-in end-to-end check for a disposable staging deployment that sends requests containing query secrets, cookies, authorization headers, and distinct project hosts; prove complete-record preservation, project isolation, permissions, rotation continuity, HTTP/Unix authorization parity, and bounded disk/read behavior, document its required staging inputs and safe invocation, then run it before enabling production.
+  - Current: the fail-closed check and operator procedure are implemented and locally verified; a disposable staging deployment, target attestation, and live run are still required before production enablement.
 
 ## Paths
 
