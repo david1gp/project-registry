@@ -9,6 +9,7 @@ Commands:
   project history <name> [--limit <n>]
   project access-logs <name> [--owner <owner>] [--limit <n>] [--before <cursor>]
   history [--limit <n>]
+  docs <path> [--http]
   docs <name> <path> [--http]
   config [selector]
   regenerate

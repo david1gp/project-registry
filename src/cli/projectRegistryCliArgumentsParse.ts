@@ -329,6 +329,17 @@ export function projectRegistryCliArgumentsParse(args: readonly string[]): Resul
   if (
     subject === "docs" &&
     action !== undefined &&
+    value === undefined &&
+    extra.length === 0 &&
+    limit === undefined &&
+    !hasMutationOptions &&
+    !hasAccessLogOptions
+  ) {
+    return createResult({ command: { kind: "docs-local", path: action, http: hasHttp }, json, socket })
+  }
+  if (
+    subject === "docs" &&
+    action !== undefined &&
     value !== undefined &&
     extra.length === 0 &&
     limit === undefined &&

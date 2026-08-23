@@ -1,6 +1,10 @@
+import * as a from "valibot"
 import { createResult, createResultError, type Result, type ResultErr } from "#result"
+import type { Project } from "../project/Project.js"
+import { projectSchema } from "../project/projectSchema.js"
 import type { ProjectRegistryCliFetch } from "./ProjectRegistryCliFetch.js"
 import type { ProjectRegistryCliInvocation } from "./ProjectRegistryCliInvocation.js"
+import { projectNameFromPath } from "./projectNameFromPath.js"
 import { projectRegistryCliArgumentsParse } from "./projectRegistryCliArgumentsParse.js"
 import { projectRegistryCliHelp } from "./projectRegistryCliHelp.js"
 import { projectRegistryCliOutputFormat } from "./projectRegistryCliOutputFormat.js"
@@ -73,6 +77,15 @@ function revisionParse(data: unknown): Result<string> {
   return createResult(revision)
 }
 
+const projectListResponseSchema = a.object({ projects: a.array(projectSchema) })
+
+function projectListResponseParse(data: unknown): Result<readonly Project[]> {
+  const op = "projectRegistryCliProjectListResponseParse"
+  const parsed = a.safeParse(projectListResponseSchema, data)
+  if (!parsed.success) return createResultError(op, "project-registryd returned malformed project list data.")
+  return createResult(parsed.output.projects)
+}
+
 async function commandRequest(
   invocation: ProjectRegistryCliInvocation,
   socketPath: string,
@@ -85,6 +98,7 @@ async function commandRequest(
     command.kind !== "project-edit" &&
     command.kind !== "project-delete" &&
     command.kind !== "docs" &&
+    command.kind !== "docs-local" &&
     command.kind !== "regenerate" &&
     command.kind !== "project-access-logs"
   ) {
@@ -102,10 +116,27 @@ async function commandRequest(
   if (!ownerR.success) return ownerR
   const ownerPath = encodeURIComponent(ownerR.data)
 
-  if (command.kind === "docs") {
+  if (command.kind === "docs" || command.kind === "docs-local") {
+    let name: string
+    if (command.kind === "docs") {
+      name = command.name
+    } else {
+      const projectsR = await projectRegistryCliRequest(
+        socketPath,
+        `/api/v1/users/${ownerPath}/projects`,
+        {},
+        requestFetch,
+      )
+      if (!projectsR.success) return projectsR
+      const projectListR = projectListResponseParse(projectsR.data)
+      if (!projectListR.success) return projectListR
+      const nameR = projectNameFromPath(projectListR.data, process.cwd())
+      if (!nameR.success) return nameR
+      name = nameR.data
+    }
     const query = new URLSearchParams({ path: command.path })
     if (command.http) query.set("scheme", "http")
-    const path = `/api/v1/users/${ownerPath}/projects/${encodeURIComponent(command.name)}/docs?${query}`
+    const path = `/api/v1/users/${ownerPath}/projects/${encodeURIComponent(name)}/docs?${query}`
     return projectRegistryCliRequest(socketPath, path, {}, requestFetch)
   }
 

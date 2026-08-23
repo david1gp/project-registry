@@ -106,7 +106,7 @@ export function projectRegistryCliOutputFormat(
     }
     parsedData = parsedR.data
   }
-  if (command.kind === "docs") {
+  if (command.kind === "docs" || command.kind === "docs-local") {
     const parsedR = dataParse(docsSchema, data, "documentation URL")
     if (!parsedR.success) return parsedR
     parsedData = parsedR.data
@@ -167,7 +167,7 @@ export function projectRegistryCliOutputFormat(
     if (!mutation.changed) return createResult(`unchanged ${mutation.key.owner}/${mutation.key.name}\n`)
     return createResult(`${verb} ${mutation.key.owner}/${mutation.key.name}\n`)
   }
-  if (command.kind === "docs") {
+  if (command.kind === "docs" || command.kind === "docs-local") {
     const docs = parsedData as a.InferOutput<typeof docsSchema>
     return createResult(docs.urls.length === 0 ? "No documentation URLs.\n" : `${docs.urls.join("\n")}\n`)
   }

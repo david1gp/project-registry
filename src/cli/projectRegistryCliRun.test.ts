@@ -331,7 +331,7 @@ describe("projectRegistryCliRun", () => {
     expect(stdout.join("")).toBe("deleted david/site\n")
   })
 
-  test("prints documentation URLs and requests explicit HTTP when selected", async () => {
+  test("keeps explicit-name docs direct without a project lookup", async () => {
     const requests: string[] = []
     const stdout: string[] = []
     const exitCode = await projectRegistryCliRun(["docs", "site", "guide/intro.md", "--http"], {
@@ -346,6 +346,83 @@ describe("projectRegistryCliRun", () => {
     expect(exitCode).toBe(0)
     expect(requests).toEqual(["/api/v1/users/david/projects/site/docs?path=guide%2Fintro.md&scheme=http"])
     expect(stdout.join("")).toBe("http://site.example/docs/guide/intro.md\n")
+  })
+
+  test("resolves local documentation from the current working directory before requesting docs", async () => {
+    const requests: string[] = []
+    const stdout: string[] = []
+    const exitCode = await projectRegistryCliRun(["docs", "guide/intro.md"], {
+      environment: { USER: "david" },
+      requestFetch: async (input) => {
+        const path = new URL(String(input)).pathname + new URL(String(input)).search
+        requests.push(path)
+        if (path === "/api/v1/users/david/projects") {
+          return Response.json({
+            success: true,
+            data: {
+              projects: [
+                {
+                  schemaVersion: 1,
+                  owner: "david",
+                  name: "site",
+                  type: "customer",
+                  order: Number.MAX_SAFE_INTEGER,
+                  services: [],
+                  caddy: {
+                    port: 4321,
+                    domains: ["site.example"],
+                    path: process.cwd(),
+                  },
+                },
+              ],
+              revision: "current",
+            },
+          })
+        }
+        return Response.json({ success: true, data: { urls: ["https://site.example/docs/guide/intro.md"] } })
+      },
+      stdout: (text) => stdout.push(text),
+    })
+
+    expect(exitCode).toBe(0)
+    expect(requests).toEqual([
+      "/api/v1/users/david/projects",
+      "/api/v1/users/david/projects/site/docs?path=guide%2Fintro.md",
+    ])
+    expect(stdout.join("")).toBe("https://site.example/docs/guide/intro.md\n")
+  })
+
+  test("reports a clear error and skips the docs request when no local project matches", async () => {
+    const requests: string[] = []
+    const stderr: string[] = []
+    const exitCode = await projectRegistryCliRun(["docs", "guide/intro.md"], {
+      environment: { USER: "david" },
+      requestFetch: async (input) => {
+        requests.push(new URL(String(input)).pathname)
+        return Response.json({
+          success: true,
+          data: {
+            projects: [
+              {
+                schemaVersion: 1,
+                owner: "david",
+                name: "other",
+                type: "customer",
+                order: Number.MAX_SAFE_INTEGER,
+                services: [],
+                caddy: { port: 4321, domains: ["other.example"], path: "/tmp/other" },
+              },
+            ],
+            revision: "current",
+          },
+        })
+      },
+      stderr: (text) => stderr.push(text),
+    })
+
+    expect(exitCode).toBe(1)
+    expect(requests).toEqual(["/api/v1/users/david/projects"])
+    expect(stderr.join("")).toBe(`error: no project matches cwd: ${process.cwd()}\n`)
   })
 
   test("regenerates through the versioned POST endpoint", async () => {

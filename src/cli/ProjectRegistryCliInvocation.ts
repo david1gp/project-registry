@@ -13,6 +13,7 @@ export type ProjectRegistryCliInvocation = {
     | { kind: "project-access-logs"; name: string; owner?: string; limit?: number; before?: string }
     | { kind: "history"; limit?: number }
     | { kind: "docs"; name: string; path: string; http: boolean }
+    | { kind: "docs-local"; path: string; http: boolean }
     | { kind: "config"; selector?: string }
     | { kind: "regenerate" }
     | { kind: "status" }
