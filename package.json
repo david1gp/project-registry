@@ -1,6 +1,6 @@
 {
   "name": "@adaptive-ds/project-registry",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "scripts": {
     "dev": "bun test --watch",
     "build": "bun run build:lib && bun run build:ui",
