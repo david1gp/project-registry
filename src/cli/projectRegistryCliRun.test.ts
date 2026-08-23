@@ -331,6 +331,39 @@ describe("projectRegistryCliRun", () => {
     expect(stdout.join("")).toBe("deleted david/site\n")
   })
 
+  test("deletes the current owner's project by port through the legacy API route", async () => {
+    const requests: Array<{ path: string; method: string; body?: unknown }> = []
+    const stdout: string[] = []
+    const exitCode = await projectRegistryCliRun(["delete", "--port", "4321"], {
+      environment: { USER: "david" },
+      requestFetch: async (input, init) => {
+        requests.push({
+          path: new URL(String(input)).pathname,
+          method: init?.method ?? "GET",
+          body: typeof init?.body === "string" ? JSON.parse(init.body) : undefined,
+        })
+        return Response.json({ success: true, data: { deleted: "site" } })
+      },
+      stdout: (text) => stdout.push(text),
+    })
+
+    expect(exitCode).toBe(0)
+    expect(requests).toEqual([{ path: "/projects/by-port/4321", method: "DELETE", body: undefined }])
+    expect(stdout.join("")).toBe("deleted david/site\n")
+  })
+
+  test("preserves the legacy delete-by-port response in JSON output", async () => {
+    const stdout: string[] = []
+    const exitCode = await projectRegistryCliRun(["delete", "--port", "4321", "--json"], {
+      environment: { USER: "david" },
+      requestFetch: async () => Response.json({ success: true, data: { deleted: "site" } }),
+      stdout: (text) => stdout.push(text),
+    })
+
+    expect(exitCode).toBe(0)
+    expect(JSON.parse(stdout.join(""))).toEqual({ success: true, data: { deleted: "site" } })
+  })
+
   test("keeps explicit-name docs direct without a project lookup", async () => {
     const requests: string[] = []
     const stdout: string[] = []
@@ -449,6 +482,7 @@ describe("projectRegistryCliRun", () => {
     [["project", "create", "--name", "site", "--domain", "site.example"], "POST"],
     [["project", "edit", "site", "--docs"], "PATCH"],
     [["project", "delete", "site"], "DELETE"],
+    [["delete", "--port", "4321"], "DELETE"],
   ] as const)("preserves mutation errors for %p", async (args, mutationMethod) => {
     const stderr: string[] = []
     const exitCode = await projectRegistryCliRun(args, {
@@ -549,6 +583,7 @@ describe("projectRegistryCliRun", () => {
     expect(await projectRegistryCliRun(["--version"], options)).toBe(0)
     expect(requests).toBe(0)
     expect(output.join("")).toContain("Usage: project-registry")
+    expect(output.join("")).toContain("delete --port <port>")
     expect(output.join("")).toContain("project-registry 0.1.0")
   })
 

@@ -9,6 +9,7 @@ export type ProjectRegistryCliInvocation = {
     | { kind: "project-create"; name: string; caddy: ProjectRegistryCliCaddyOptions }
     | { kind: "project-edit"; name: string; caddy: ProjectRegistryCliCaddyOptions }
     | { kind: "project-delete"; name: string }
+    | { kind: "project-delete-by-port"; port: number }
     | { kind: "project-history"; name: string; limit?: number }
     | { kind: "project-access-logs"; name: string; owner?: string; limit?: number; before?: string }
     | { kind: "history"; limit?: number }

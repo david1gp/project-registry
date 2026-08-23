@@ -232,6 +232,7 @@ export function projectRegistryCliArgumentsParse(args: readonly string[]): Resul
 
   const [subject, action, value, ...extra] = positionals
   const hasCaddyOptions = Object.keys(caddy).length > 0
+  const hasOnlyPortOption = port !== undefined && Object.keys(caddy).length === 1
   const hasMutationOptions = hasCaddyOptions || flagName !== undefined
   const hasAccessLogOptions = owner !== undefined || before !== undefined
   const hasHttp = booleans.has("--http")
@@ -298,6 +299,20 @@ export function projectRegistryCliArgumentsParse(args: readonly string[]): Resul
     if (!projectNamePattern.test(value)) return createResultError(op, "Project name is invalid.")
     if (flagName !== undefined) return createResultError(op, "Option --name cannot edit an immutable project name.")
     return createResult({ command: { kind: "project-edit", name: value, caddy }, json, socket })
+  }
+  if (
+    subject === "delete" &&
+    action === undefined &&
+    value === undefined &&
+    extra.length === 0 &&
+    hasOnlyPortOption &&
+    port !== undefined &&
+    flagName === undefined &&
+    limit === undefined &&
+    !hasAccessLogOptions &&
+    !hasHttp
+  ) {
+    return createResult({ command: { kind: "project-delete-by-port", port }, json, socket })
   }
   if (
     subject === "project" &&

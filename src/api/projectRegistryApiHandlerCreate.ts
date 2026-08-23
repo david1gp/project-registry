@@ -36,6 +36,7 @@ type ApiRoute =
   | { kind: "projects"; legacy: boolean; owner?: string }
   | { kind: "docs"; legacy: boolean; owner?: string; name: string }
   | { kind: "project"; legacy: boolean; owner?: string; name: string }
+  | { kind: "project-by-port"; legacy: true; port: number }
   | { kind: "access-logs"; legacy: false; owner: string; name: string }
   | { kind: "self-access-logs"; legacy: false; name: string }
   | { kind: "history"; legacy: boolean; owner?: string; name?: string }
@@ -170,6 +171,10 @@ function routeParse(path: string): ApiRoute | undefined {
     return { kind: "docs", legacy: true, name }
   }
 
+  const legacyProjectByPort = path.match(/^\/projects\/by-port\/(\d+)$/)
+  if (legacyProjectByPort !== null)
+    return { kind: "project-by-port", legacy: true, port: Number(legacyProjectByPort[1]) }
+
   const legacyProject = path.match(/^\/projects\/([^/]+)$/)
   if (legacyProject !== null) {
     const name = segmentDecode(legacyProject[1]!, projectNamePattern)
@@ -212,6 +217,7 @@ function routeRequiresProjectAccess(route: ApiRoute): boolean {
     route.kind === "projects" ||
     route.kind === "docs" ||
     route.kind === "project" ||
+    route.kind === "project-by-port" ||
     route.kind === "access-logs" ||
     route.kind === "self-access-logs" ||
     route.kind === "history" ||
@@ -288,6 +294,7 @@ function routeMethods(route: ApiRoute): readonly string[] {
   if (route.kind === "projects") return route.legacy ? ["GET"] : ["GET", "POST"]
   if (route.kind === "docs") return ["GET"]
   if (route.kind === "project") return route.legacy ? ["GET", "PUT", "PATCH", "DELETE"] : ["GET", "PATCH", "DELETE"]
+  if (route.kind === "project-by-port") return ["DELETE"]
   if (route.kind === "regenerate") return ["POST"]
   return ["GET"]
 }
@@ -719,6 +726,35 @@ export function projectRegistryApiHandlerCreate(options: ApiHandlerOptions): Pro
       const projectR = await projectGetUseCase(useCaseOptions, key)
       if (!projectR.success) return resultErrorResponse(projectR, true, "projects")
       return successResponse(legacyProjectMap(projectR.data.project))
+    }
+
+    if (route.kind === "project-by-port") {
+      const projectsR = await projectListUseCase(useCaseOptions, { owner })
+      if (!projectsR.success) return resultErrorResponse(projectsR, true, "projects")
+      const project = projectsR.data.projects.find((entry) => entry.caddy?.port === route.port)
+      if (project === undefined) {
+        return errorResponse(
+          {
+            code: "projects.not-found",
+            message: `no project with port ${route.port}`,
+            op: "projectDeleteByPort",
+            status: 404,
+          },
+          true,
+        )
+      }
+
+      const mutationR = await projectDelete(
+        useCaseOptions,
+        { owner, name: project.name },
+        { expectedRevision: projectsR.data.revision },
+      )
+      if (!mutationR.success) return resultErrorResponse(mutationR, true, "projects")
+      const applicationR = await caddyProjectChange(options.caddyApplication, mutationR.data)
+      if (applicationR !== undefined && "success" in applicationR && !applicationR.success) {
+        return resultErrorResponse(applicationR, true, "caddy")
+      }
+      return successResponse({ deleted: project.name })
     }
 
     if (route.kind === "projects") {

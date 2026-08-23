@@ -567,6 +567,71 @@ describe("projectRegistryApiHandlerCreate", () => {
     expect(application.regenerations).toBe(1)
   })
 
+  test("deletes the current owner's legacy project by numeric Caddy port", async () => {
+    const repository = repositoryCreate()
+    const application = caddyApplicationCreate()
+    const handler = projectRegistryApiHandlerCreate({ repository, caddyApplication: application })
+
+    const crossOwner = await requestJson(
+      handler,
+      "/projects/by-port/4096",
+      { transport: "unix", username: "david" },
+      "DELETE",
+    )
+    expect(crossOwner.response.status).toBe(404)
+    expect(crossOwner.body).toEqual({
+      success: false,
+      op: "projectDeleteByPort",
+      errorMessage: "no project with port 4096",
+      code: "projects.not-found",
+    })
+    expect(application.projectChanges).toBe(0)
+
+    const invalid = await requestJson(
+      handler,
+      "/projects/by-port/not-a-port",
+      { transport: "unix", username: "leo" },
+      "DELETE",
+    )
+    expect(invalid.response.status).toBe(404)
+    expect(invalid.body).toMatchObject({ success: false, code: "api.not-found" })
+
+    const deleted = await requestJson(
+      handler,
+      "/projects/by-port/4096",
+      { transport: "unix", username: "leo" },
+      "DELETE",
+    )
+    expect(deleted.response.status).toBe(200)
+    expect(deleted.body).toEqual({ success: true, data: { deleted: "opencode" } })
+    expect(repository.projects.some((project) => project.name === "opencode")).toBe(false)
+    expect(application.projectChanges).toBe(1)
+
+    const missing = await requestJson(
+      handler,
+      "/projects/by-port/4096",
+      { transport: "unix", username: "leo" },
+      "DELETE",
+    )
+    expect(missing.response.status).toBe(404)
+    expect(missing.body).toMatchObject({ success: false, code: "projects.not-found" })
+  })
+
+  test("keeps a project named by-port on the legacy name route", async () => {
+    const repository = repositoryCreate()
+    repository.projects.push(docsProjectCreate("leo", "by-port", ["by-port.example"]))
+    const application = caddyApplicationCreate()
+    const handler = projectRegistryApiHandlerCreate({ repository, caddyApplication: application })
+
+    const deleted = await requestJson(handler, "/projects/by-port", { transport: "unix", username: "leo" }, "DELETE")
+
+    expect(deleted.response.status).toBe(200)
+    expect(deleted.body).toEqual({ success: true, data: { deleted: "by-port" } })
+    expect(repository.projects.some((project) => project.name === "by-port")).toBe(false)
+    expect(repository.projects.some((project) => project.name === "opencode")).toBe(true)
+    expect(application.projectChanges).toBe(1)
+  })
+
   test("serves the legacy docs CLI request with normalized paths and socket-owner domains", async () => {
     const repository = repositoryCreate()
     repository.projects.push(docsProjectCreate("leo", "docsapp", ["docs.example", "docs-alt.example"]))

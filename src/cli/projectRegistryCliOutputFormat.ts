@@ -36,6 +36,7 @@ const mutationSchema = a.looseObject({
     errorMessage: a.optional(a.string()),
   }),
 })
+const legacyDeleteSchema = a.object({ deleted: a.string() })
 const docsSchema = a.object({ urls: a.array(a.string()) })
 const regenerateSchema = a.looseObject({
   revision: a.string(),
@@ -74,6 +75,7 @@ function jsonSerialize(data: unknown, indentation = 0): Result<string> {
 export function projectRegistryCliOutputFormat(
   invocation: ProjectRegistryCliInvocation,
   data: unknown,
+  owner?: string,
 ): Result<string> {
   const command = invocation.command
   let parsedData: unknown = data
@@ -104,6 +106,11 @@ export function projectRegistryCliOutputFormat(
     if (parsedR.data.action !== command.kind.slice("project-".length)) {
       return createResultError("projectRegistryCliOutputFormat", "project-registryd returned mismatched mutation data.")
     }
+    parsedData = parsedR.data
+  }
+  if (command.kind === "project-delete-by-port") {
+    const parsedR = dataParse(legacyDeleteSchema, data, "project deletion")
+    if (!parsedR.success) return parsedR
     parsedData = parsedR.data
   }
   if (command.kind === "docs" || command.kind === "docs-local") {
@@ -166,6 +173,10 @@ export function projectRegistryCliOutputFormat(
     const verb = mutation.action === "create" ? "created" : mutation.action === "delete" ? "deleted" : "updated"
     if (!mutation.changed) return createResult(`unchanged ${mutation.key.owner}/${mutation.key.name}\n`)
     return createResult(`${verb} ${mutation.key.owner}/${mutation.key.name}\n`)
+  }
+  if (command.kind === "project-delete-by-port") {
+    const deleted = parsedData as a.InferOutput<typeof legacyDeleteSchema>
+    return createResult(`deleted ${owner === undefined ? deleted.deleted : `${owner}/${deleted.deleted}`}\n`)
   }
   if (command.kind === "docs" || command.kind === "docs-local") {
     const docs = parsedData as a.InferOutput<typeof docsSchema>

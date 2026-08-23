@@ -11,6 +11,8 @@ describe("projectRegistryCliArgumentsParse", () => {
     ],
     [["project", "edit", "site"], { kind: "project-edit", name: "site", caddy: {} }],
     [["project", "delete", "site"], { kind: "project-delete", name: "site" }],
+    [["delete", "--port", "4321"], { kind: "project-delete-by-port", port: 4321 }],
+    [["delete", "--port=4321"], { kind: "project-delete-by-port", port: 4321 }],
     [["project", "history", "site"], { kind: "project-history", name: "site", limit: undefined }],
     [["project", "history", "site", "--limit", "5"], { kind: "project-history", name: "site", limit: 5 }],
     [
@@ -128,6 +130,8 @@ describe("projectRegistryCliArgumentsParse", () => {
     [["project", "create", "--domain", "site.example"], "Project create requires --name."],
     [["project", "edit", "site", "--name", "renamed"], "Option --name cannot edit an immutable project name."],
     [["project", "delete", "site", "--port", "4321"], "Unknown or invalid command: project delete site."],
+    [["delete", "--port", "0"], "Option --port requires an integer from 1 through 65535."],
+    [["delete", "--port", "4321", "extra"], "Unknown or invalid command: delete extra."],
     [["docs"], "Unknown or invalid command: docs."],
     [["docs", "site", "guide.md", "extra"], "Unknown or invalid command: docs site guide.md extra."],
     [["docs", "site", "guide.md", "--docs"], "Unknown or invalid command: docs site guide.md."],

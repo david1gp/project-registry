@@ -97,6 +97,7 @@ async function commandRequest(
     command.kind !== "project-create" &&
     command.kind !== "project-edit" &&
     command.kind !== "project-delete" &&
+    command.kind !== "project-delete-by-port" &&
     command.kind !== "docs" &&
     command.kind !== "docs-local" &&
     command.kind !== "regenerate" &&
@@ -138,6 +139,14 @@ async function commandRequest(
     if (command.http) query.set("scheme", "http")
     const path = `/api/v1/users/${ownerPath}/projects/${encodeURIComponent(name)}/docs?${query}`
     return projectRegistryCliRequest(socketPath, path, {}, requestFetch)
+  }
+  if (command.kind === "project-delete-by-port") {
+    return projectRegistryCliRequest(
+      socketPath,
+      `/projects/by-port/${command.port}`,
+      { method: "DELETE" },
+      requestFetch,
+    )
   }
 
   const projectPath =
@@ -214,7 +223,8 @@ export async function projectRegistryCliRun(args: readonly string[], options: Cl
     errorWrite(responseR, invocation.json, writeError)
     return 1
   }
-  const outputR = projectRegistryCliOutputFormat(invocation, responseR.data)
+  const outputOwner = invocation.command.kind === "project-delete-by-port" ? environment.USER?.trim() : undefined
+  const outputR = projectRegistryCliOutputFormat(invocation, responseR.data, outputOwner)
   if (!outputR.success) {
     errorWrite({ ...outputR, code: "cli.protocol" }, invocation.json, writeError)
     return 1

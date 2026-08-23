@@ -6,6 +6,7 @@ Commands:
   project create --name <name> --domain <hostname> [options]
   project edit <name> [options]
   project delete <name>
+  delete --port <port>
   project history <name> [--limit <n>]
   project access-logs <name> [--owner <owner>] [--limit <n>] [--before <cursor>]
   history [--limit <n>]
