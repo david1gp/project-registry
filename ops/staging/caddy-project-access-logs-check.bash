@@ -154,7 +154,7 @@ secret_file_validate() {
   local mode
   mode="$(stat -c '%a' -- "$path")" || fail "HTTP credential header file cannot be inspected"
   [[ "$mode" =~ ^[0-7]+$ ]] || fail "HTTP credential header file mode is invalid"
-  (( (10#$mode & 077) == 0 )) || fail "HTTP credential header file is too broadly readable"
+  (( (8#$mode & 077) == 0 )) || fail "HTTP credential header file is too broadly readable"
   awk '
     BEGIN { found = 0 }
     /^[[:space:]]*[Cc][Oo][Oo][Kk][Ii][Ee]:/ { found = 1 }
@@ -1402,26 +1402,50 @@ sent=0
 while ((sent < rotation_count)); do
   remaining=$((rotation_count - sent))
   batch="$rotation_batch_size"
-    ((remaining < batch)) && batch="$remaining"
-    rotation_config="$work/rotation.conf"
-    {
-    printf 'parallel\nparallel-max = 8\nsilent\nshow-error\nmax-time = 10\nconnect-timeout = 10\n'
-    if ((insecure == 1)); then
-      printf 'insecure\n'
-    fi
+  ((remaining < batch)) && batch="$remaining"
+  rotation_config="$work/rotation.conf"
+  rotation_statuses="$work/rotation-statuses"
+  rotation_curl_error="$work/rotation-curl-error"
+  rotation_curl_exit_status="$work/rotation-curl-exit-status"
+  rotation_assert_exit_status="$work/rotation-assert-exit-status"
+  {
+    printf 'parallel\nparallel-max = 8\n'
     for ((index = 0; index < batch; index += 1)); do
       printf 'url = "%s%s?e2e-query-secret=%s"\n' "$caddy_url" "$request_path" "$rotation_query"
       printf 'header = "Host: %s"\n' "$host_a"
       printf 'header = "Cookie: e2e-cookie=%s"\n' "$rotation_cookie"
       printf 'header = "Authorization: Bearer %s"\n' "$rotation_authorization"
       printf 'output = "/dev/null"\n'
+      printf 'silent\nshow-error\nmax-time = 10\nconnect-timeout = 10\n'
+      if ((insecure == 1)); then
+        printf 'insecure\n'
+      fi
+      printf 'write-out = "%%{http_code}\\n"\n'
+      if ((index + 1 < batch)); then
+        printf 'next\n'
+      fi
     done
-    printf 'write-out = "%%{http_code}\\n"\n'
   } >"$rotation_config"
-  if ! curl --config "$rotation_config" 2>"$work/rotation-curl-error" |
-    rotation_status_assert "$batch"; then
-    fail "bounded rotation request batch failed"
+  : >"$rotation_statuses"
+  : >"$rotation_curl_error"
+  : >"$rotation_curl_exit_status"
+  : >"$rotation_assert_exit_status"
+  chmod 600 -- "$rotation_config" "$rotation_statuses" "$rotation_curl_error" \
+    "$rotation_curl_exit_status" "$rotation_assert_exit_status"
+  if curl --disable --config "$rotation_config" >"$rotation_statuses" 2>"$rotation_curl_error"; then
+    curl_exit_code=0
+  else
+    curl_exit_code=$?
   fi
+  printf '%s\n' "$curl_exit_code" >"$rotation_curl_exit_status"
+  if rotation_status_assert "$batch" <"$rotation_statuses"; then
+    assert_exit_code=0
+  else
+    assert_exit_code=$?
+  fi
+  printf '%s\n' "$assert_exit_code" >"$rotation_assert_exit_status"
+  ((curl_exit_code == 0)) || fail "bounded rotation curl request batch failed"
+  ((assert_exit_code == 0)) || fail "bounded rotation status assertion failed"
   sent=$((sent + batch))
   archive_after="$(archive_count_read "$project_directory_a")"
   ((archive_after > archive_before)) && break
