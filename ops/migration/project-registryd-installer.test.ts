@@ -77,7 +77,7 @@ describe("project-registryd production staging", () => {
 
     const matching = await run("matching.properties")
     expect(matching.exitCode).toBe(0)
-    expect(matching.stdout).toBe("caddy:caddy\n")
+    expect(matching.stdout).toBe("nobody:nogroup\n")
 
     const distinct = await run("distinct.properties")
     expect(distinct.exitCode).toBe(0)
@@ -347,6 +347,7 @@ describe("project-registryd production staging", () => {
           PROJECT_REGISTRY_INSTALL_ROOT: join(directory, "install"),
           PROJECT_REGISTRY_CONFIG_ROOT: join(directory, "config"),
           PROJECT_REGISTRY_UNIT_PATH: join(directory, "unit", "project-registryd.service"),
+          CADDY_SERVICE_IDENTITY_FILE: join(identityFixtureDirectory, "matching.properties"),
           ...(root === undefined ? {} : { PROJECT_REGISTRY_CADDY_ACCESS_LOG_ROOT: root }),
         }
         if (root === undefined) delete installerEnvironment.PROJECT_REGISTRY_CADDY_ACCESS_LOG_ROOT

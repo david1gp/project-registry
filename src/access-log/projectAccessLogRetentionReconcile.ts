@@ -1,7 +1,7 @@
 import { dlopen, FFIType } from "bun:ffi"
 import { randomUUID } from "node:crypto"
 import { constants, type Stats } from "node:fs"
-import { lstat, mkdir, open, readdir, rename, rmdir, unlink } from "node:fs/promises"
+import { lstat, mkdir, open, opendir, rename, rmdir, unlink } from "node:fs/promises"
 import { join, posix } from "node:path"
 import * as a from "valibot"
 import { createResult, createResultError, type PromiseResult, type Result } from "#result"
@@ -270,11 +270,28 @@ async function directoryEntriesRead(
   budget: WorkBudget,
   maximumEntries = maximumProjectEntries,
 ): Promise<Result<readonly DirectoryChild[]>> {
-  let names: string[]
+  let entriesDirectory: Awaited<ReturnType<typeof opendir>>
   try {
-    names = await readdir(descriptorChildPath(directory, "."))
+    entriesDirectory = await opendir(descriptorChildPath(directory, "."))
   } catch {
     return retentionError("retention directory could not be read", path)
+  }
+
+  const names: string[] = []
+  try {
+    while (true) {
+      const entry = await entriesDirectory.read()
+      if (entry === null) break
+      names.push(entry.name)
+    }
+  } catch {
+    return retentionError("retention directory could not be read", path)
+  } finally {
+    try {
+      await entriesDirectory.close()
+    } catch {
+      // The read result is already determined; a close failure must not leak an exception.
+    }
   }
 
   const entries: DirectoryChild[] = []
@@ -924,17 +941,17 @@ async function projectDirectoryQuarantine(
     const moved = await projectDirectoryOpen(quarantine, project, projectsDevice)
     if (moved === undefined) return createResult(false)
     try {
-      await filesystem.syncDirectory(projects, "quarantine-rename-source")
-    } catch {
-      return retentionError("retention quarantine source rename could not be made durable", project.id)
-    }
-    try {
-      await filesystem.syncDirectory(quarantine, "quarantine-rename-destination")
-    } catch {
-      return retentionError("retention quarantine destination rename could not be made durable", project.id)
-    }
+      try {
+        await filesystem.syncDirectory(projects, "quarantine-rename-source")
+      } catch {
+        return retentionError("retention quarantine source rename could not be made durable", project.id)
+      }
+      try {
+        await filesystem.syncDirectory(quarantine, "quarantine-rename-destination")
+      } catch {
+        return retentionError("retention quarantine destination rename could not be made durable", project.id)
+      }
 
-    try {
       const movedStat = await moved.stat()
       if (!movedStat.isDirectory() || !statSameObject(movedStat, project.stat) || movedStat.dev !== projectsDevice) {
         return createResult(false)

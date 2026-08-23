@@ -147,6 +147,7 @@ describe("Leo preparation", () => {
       const result = await command("bash", [preparationScript, ...(await preparationArguments(directory))], {
         ...(Bun.env as Record<string, string>),
         PATH: `${fakeBin}:${Bun.env.PATH ?? ""}`,
+        CADDY_SERVICE_IDENTITY_FILE: caddyIdentityFixture,
       })
 
       expect(result.exitCode).toBe(0)
@@ -192,7 +193,10 @@ describe("Leo preparation", () => {
           "--dry-run",
           ...(await preparationArguments(directory, { caddyBinaryDestination: binaryAlias })),
         ],
-        Bun.env as Record<string, string>,
+        {
+          ...(Bun.env as Record<string, string>),
+          CADDY_SERVICE_IDENTITY_FILE: caddyIdentityFixture,
+        },
       )
 
       expect(result.exitCode).toBe(0)
