@@ -11,7 +11,7 @@ import {
   gitStoreRead,
   gitStoreRun,
 } from "#git-store"
-import { createResult, createResultError, type PromiseResult, type Result } from "#result"
+import { createResult, createResultError, createResultErrorCode, type PromiseResult, type Result } from "#result"
 import type { Project } from "../project/Project.js"
 import { projectCollisions } from "../project/projectCollisions.js"
 import type { ProjectKey } from "../project/projectKey.js"
@@ -208,7 +208,11 @@ async function projectRepositoryRequireClean(store: GitProjectRepository, op: st
   const statusR = await projectRepositoryWorktreeStatus(store)
   if (!statusR.success) return statusR
   if (!statusR.data.clean) {
-    return createResultError(op, "worktree is dirty; recover from HEAD before reading or mutating projects")
+    return createResultErrorCode(
+      op,
+      "worktree is dirty; recover from HEAD before reading or mutating projects",
+      "projects.conflict",
+    )
   }
   const divergenceR = await projectRepositoryTrackedDivergence(store, op)
   if (!divergenceR.success) return divergenceR
@@ -676,7 +680,11 @@ function projectRepositoryExpectedRevision(options: unknown, currentRevision: un
   const expectedR = projectMutationExpectedRevision(options, currentRevision, op)
   if (!expectedR.success) return expectedR
   if (expectedR.data !== currentRevision) {
-    return createResultError(op, `revision mismatch: expected ${expectedR.data}, current ${currentRevision}`)
+    return createResultErrorCode(
+      op,
+      `revision mismatch: expected ${expectedR.data}, current ${currentRevision}`,
+      "projects.conflict",
+    )
   }
   return createResult(undefined)
 }
@@ -696,17 +704,17 @@ async function projectRepositoryCreate(
   if (!actorR.success) return actorR
 
   const projectR = projectValidate(input)
-  if (!projectR.success) return createResultError(op, projectR.errorMessage)
+  if (!projectR.success) return { ...projectR, op }
   const project = projectR.data
   const existing = snapshotR.data.projects.find((item) => projectKeyEqual(item, project))
   if (existing) {
     if (projectRepositoryContentsEqual(existing, project))
       return projectRepositoryNoop("create", project, snapshotR.data.revision)
-    return createResultError(op, "project already exists")
+    return createResultErrorCode(op, "project already exists", "projects.conflict")
   }
 
   const collisionsR = projectCollisions([...snapshotR.data.projects, project])
-  if (!collisionsR.success) return createResultError(op, collisionsR.errorMessage)
+  if (!collisionsR.success) return { ...collisionsR, op }
   const pathR = projectRepositoryPath(project)
   if (!pathR.success) return pathR
   return projectRepositoryCommit(store, "create", project, actorR.data, pathR.data, project, snapshotR.data.revision)
@@ -731,18 +739,19 @@ async function projectRepositoryEdit(
   if (!actorR.success) return actorR
 
   const projectR = projectValidate(input)
-  if (!projectR.success) return createResultError(op, projectR.errorMessage)
+  if (!projectR.success) return { ...projectR, op }
   const project = projectR.data
-  if (!projectKeyEqual(project, key)) return createResultError(op, "project owner and name are immutable")
+  if (!projectKeyEqual(project, key))
+    return createResultErrorCode(op, "project owner and name are immutable", "request.invalid")
 
   const existing = snapshotR.data.projects.find((item) => projectKeyEqual(item, key))
-  if (!existing) return createResultError(op, "project not found")
+  if (!existing) return createResultErrorCode(op, "project not found", "projects.not-found")
   if (projectRepositoryContentsEqual(existing, project))
     return projectRepositoryNoop("edit", project, snapshotR.data.revision)
 
   const replacement = snapshotR.data.projects.map((item) => (projectKeyEqual(item, key) ? project : item))
   const collisionsR = projectCollisions(replacement)
-  if (!collisionsR.success) return createResultError(op, collisionsR.errorMessage)
+  if (!collisionsR.success) return { ...collisionsR, op }
   return projectRepositoryCommit(store, "edit", key, actorR.data, pathR.data, project, snapshotR.data.revision)
 }
 
@@ -764,7 +773,7 @@ async function projectRepositoryDelete(
   if (!actorR.success) return actorR
 
   const existing = snapshotR.data.projects.find((item) => projectKeyEqual(item, key))
-  if (!existing) return createResultError(op, "project not found")
+  if (!existing) return createResultErrorCode(op, "project not found", "projects.not-found")
   return projectRepositoryCommit(store, "delete", key, actorR.data, pathR.data, undefined, snapshotR.data.revision)
 }
 
@@ -880,7 +889,7 @@ export async function projectRepositoryOpen(options: unknown): PromiseResult<Pro
         const snapshotR = await projectRepositoryReadSnapshot(store)
         if (!snapshotR.success) return snapshotR
         const project = snapshotR.data.projects.find((item) => projectKeyEqual(item, key))
-        if (!project) return createResultError("projectRepositoryGet", "project not found")
+        if (!project) return createResultErrorCode("projectRepositoryGet", "project not found", "projects.not-found")
         const entry: ProjectRepositoryEntry = { project, revision: snapshotR.data.revision }
         return createResult(entry)
       }),

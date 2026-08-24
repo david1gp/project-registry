@@ -1,4 +1,4 @@
-import { createResult, createResultError, type Result } from "#result"
+import { createResult, createResultErrorCode, type Result } from "#result"
 import type { ProjectKey } from "./projectKey.js"
 import { projectKeyEqual } from "./projectKeyEqual.js"
 import type { Project } from "./projectSchema.js"
@@ -24,7 +24,7 @@ export function projectPortNext(
 ): Result<number> {
   const op = "projectPortNext"
   const rangeError = projectPortRangeValidate(range)
-  if (rangeError) return createResultError(op, rangeError)
+  if (rangeError) return createResultErrorCode(op, rangeError, "request.invalid")
 
   const used = new Set<number>()
   for (const project of projects) {
@@ -37,5 +37,5 @@ export function projectPortNext(
     if (!used.has(port)) return createResult(port)
   }
 
-  return createResultError(op, `no free port in range ${range.from}-${range.to}`)
+  return createResultErrorCode(op, `no free port in range ${range.from}-${range.to}`, "request.invalid")
 }

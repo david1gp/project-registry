@@ -1,4 +1,4 @@
-import { createResult, createResultError, type PromiseResult } from "#result"
+import { createResult, createResultErrorCode, type PromiseResult } from "#result"
 import type { CaddyDocsUrlsUseCaseOptions } from "./CaddyDocsUrlsUseCaseOptions.js"
 import { caddyVisibleProjects } from "./caddyVisibleProjects.js"
 import { type ProjectDocsUrls, projectDocsUrls } from "./projectDocsUrls.js"
@@ -7,13 +7,13 @@ export async function projectDocsUrlsUseCase(options: CaddyDocsUrlsUseCaseOption
   const op = "projectDocsUrlsUseCase"
   try {
     if (!options || typeof options !== "object" || Array.isArray(options)) {
-      return createResultError(op, "documentation options are invalid")
+      return createResultErrorCode(op, "documentation options are invalid", "documentation.invalid-options")
     }
     if (typeof options.projectName !== "string" || options.projectName.length === 0) {
-      return createResultError(op, "documentation project is unavailable")
+      return createResultErrorCode(op, "documentation project is unavailable", "projects.not-found")
     }
     if (options.owner !== undefined && typeof options.owner !== "string") {
-      return createResultError(op, "documentation project is unavailable")
+      return createResultErrorCode(op, "documentation project is unavailable", "projects.not-found")
     }
 
     const visibleR = await caddyVisibleProjects(options)
@@ -23,22 +23,14 @@ export async function projectDocsUrlsUseCase(options: CaddyDocsUrlsUseCaseOption
       (project) =>
         project.name === options.projectName && (options.owner === undefined || project.owner === options.owner),
     )
-    if (matches.length !== 1) return createResultError(op, "documentation project is unavailable")
+    if (matches.length !== 1)
+      return createResultErrorCode(op, "documentation project is unavailable", "projects.not-found")
 
     const project = matches[0]!
     const urlsR = projectDocsUrls(project, options.relativePath, { scheme: options.scheme })
     if (urlsR.success) return createResult(urlsR.data)
-    if (
-      project.caddy !== undefined &&
-      project.caddy !== null &&
-      !project.caddy.disabled &&
-      project.caddy.docs === true
-    ) {
-      return createResultError(op, "documentation URL could not be generated")
-    }
-
-    return createResultError(op, "documentation is unavailable")
+    return { ...urlsR, op }
   } catch {
-    return createResultError(op, "documentation options are invalid")
+    return createResultErrorCode(op, "documentation options are invalid", "documentation.invalid-options")
   }
 }

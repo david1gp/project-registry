@@ -1,5 +1,5 @@
 import * as a from "valibot"
-import { createResult, createResultError, type Result } from "#result"
+import { createResult, createResultErrorCode, type Result } from "#result"
 import { projectDomainNormalize } from "./projectDomainNormalize.js"
 import { type ProjectInput, projectInputSchema } from "./projectInputSchema.js"
 import type { ProjectKey } from "./projectKey.js"
@@ -164,7 +164,7 @@ function projectInputNormalize(input: unknown): unknown {
 export function projectNormalize(input: unknown, options: ProjectNormalizeOptions = {}): Result<Project> {
   const op = "projectNormalize"
   const parsed = a.safeParse(projectInputSchema, projectInputNormalize(input))
-  if (!parsed.success) return createResultError(op, a.summarize(parsed.issues))
+  if (!parsed.success) return createResultErrorCode(op, a.summarize(parsed.issues), "request.invalid")
 
   let normalized: ProjectInput = parsed.output
   if (normalized.caddy && normalized.caddy.port === undefined) {
@@ -175,6 +175,6 @@ export function projectNormalize(input: unknown, options: ProjectNormalizeOption
   }
 
   const projectResult = projectValidate(normalized, options)
-  if (!projectResult.success) return createResultError(op, projectResult.errorMessage)
+  if (!projectResult.success) return { ...projectResult, op }
   return createResult(projectResult.data)
 }

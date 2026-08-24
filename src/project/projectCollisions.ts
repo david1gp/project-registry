@@ -1,4 +1,4 @@
-import { createResult, createResultError, type Result } from "#result"
+import { createResult, createResultErrorCode, type Result } from "#result"
 import { projectDomainNormalize } from "./projectDomainNormalize.js"
 import type { ProjectKey } from "./projectKey.js"
 import { projectKey } from "./projectKey.js"
@@ -56,7 +56,7 @@ export function projectCollisions(
   for (const project of projectCollisionCandidates(projects, options)) {
     const previousKey = keys.find((candidate) => projectKeyEqual(candidate, project))
     if (previousKey && previousKey !== project) {
-      return createResultError(op, `project key collision: ${projectKey(project)}`)
+      return createResultErrorCode(op, `project key collision: ${projectKey(project)}`, "projects.conflict")
     }
     keys.push(project)
 
@@ -67,9 +67,10 @@ export function projectCollisions(
     for (const domain of new Set(caddy.domains.map(projectDomainNormalize))) {
       const previous = domains.get(domain)
       if (previous && !projectKeyEqual(previous, project)) {
-        return createResultError(
+        return createResultErrorCode(
           op,
           `active domain collision: ${domain} used by ${projectKey(previous)} and ${projectKey(project)}`,
+          "projects.conflict",
         )
       }
       domains.set(domain, project)
@@ -77,9 +78,10 @@ export function projectCollisions(
 
     const previous = ports.get(caddy.port)
     if (previous && !projectKeyEqual(previous, project)) {
-      return createResultError(
+      return createResultErrorCode(
         op,
         `active port collision: ${caddy.port} used by ${projectKey(previous)} and ${projectKey(project)}`,
+        "projects.conflict",
       )
     }
     ports.set(caddy.port, project)

@@ -178,6 +178,7 @@ describe("visibility-scoped Caddy inspection", () => {
     expect(result).toEqual({
       success: false,
       op: "caddyConfigSelect",
+      code: "caddy.not-found",
       errorMessage: "no server block matching selector",
     })
   })
@@ -192,9 +193,23 @@ describe("visibility-scoped Caddy inspection", () => {
     const disabledDocs = projectDocsUrls(disabledProject, "guide.md")
     const catalogDocs = projectDocsUrls(catalogProject, "guide.md")
     const noDocs = projectDocsUrls(noDocsProject, "guide.md")
-    expect(disabledDocs.success).toBe(false)
-    expect(catalogDocs.success).toBe(false)
-    expect(noDocs.success).toBe(false)
+    expect(disabledDocs).toMatchObject({
+      success: false,
+      code: "projects.disabled",
+      errorMessage: "documentation project is disabled",
+      hint: "Run: project-registry project edit disabled-project --enabled --docs",
+    })
+    expect(catalogDocs).toMatchObject({
+      success: false,
+      code: "documentation.invalid-configuration",
+      errorMessage: "documentation configuration is invalid",
+    })
+    expect(noDocs).toMatchObject({
+      success: false,
+      code: "documentation.disabled",
+      errorMessage: "documentation is disabled",
+      hint: "Run: project-registry project edit no-docs-project --docs",
+    })
   })
 
   test("generates documentation URLs only for visible active docs projects", async () => {
@@ -234,6 +249,10 @@ describe("visibility-scoped Caddy inspection", () => {
       relativePath: "guide.md",
     })
     expect(noDocs.success).toBe(false)
+    expect(noDocs).toMatchObject({
+      code: "documentation.disabled",
+      hint: "Run: project-registry project edit no-docs-project --docs",
+    })
   })
 
   test("does not aggregate documentation URLs for ambiguous visible names", async () => {
@@ -250,6 +269,7 @@ describe("visibility-scoped Caddy inspection", () => {
     expect(ambiguous).toEqual({
       success: false,
       op: "projectDocsUrlsUseCase",
+      code: "projects.not-found",
       errorMessage: "documentation project is unavailable",
     })
     expect(serialized(ambiguous)).not.toContain("alice-docs.example")
@@ -273,6 +293,27 @@ describe("visibility-scoped Caddy inspection", () => {
     const malformedDocs = projectDocsUrls(ownProject, "../alice.example")
     expect(malformedDocs.success).toBe(false)
     expect(serialized(malformedDocs)).not.toContain("alice.example")
+  })
+
+  test("distinguishes invalid documentation input, configuration, and URL generation", () => {
+    expect(projectDocsUrls(ownProject, "guide.html")).toMatchObject({
+      success: false,
+      code: "documentation.invalid-path",
+    })
+    expect(projectDocsUrls(ownProject, "guide.md", { scheme: "ftp" })).toMatchObject({
+      success: false,
+      code: "documentation.invalid-options",
+    })
+    expect(projectDocsUrls({ ...ownProject, caddy: null }, "guide.md")).toMatchObject({
+      success: false,
+      code: "documentation.invalid-configuration",
+    })
+    expect(
+      projectDocsUrls({ ...ownProject, caddy: { ...ownProject.caddy!, domains: ["invalid domain"] } }, "guide.md"),
+    ).toMatchObject({
+      success: false,
+      code: "documentation.url-generation-failed",
+    })
   })
 
   test("fails closed for malformed project-list getters and dependency results", async () => {

@@ -1,5 +1,5 @@
 import * as a from "valibot"
-import { createResult, createResultError, type Result } from "#result"
+import { createResult, createResultError, createResultErrorCode, type Result } from "#result"
 import type { Project } from "../project/Project.js"
 import { projectKey } from "../project/projectKey.js"
 import { projectSchema } from "../project/projectSchema.js"
@@ -58,7 +58,7 @@ function routeHosts(route: RouteRecord): string[] {
 }
 
 function error(): Result<unknown[]> {
-  return createResultError("caddyConfigSelect", "no server block matching selector")
+  return createResultErrorCode("caddyConfigSelect", "no server block matching selector", "caddy.not-found")
 }
 
 type ParsedSelector =

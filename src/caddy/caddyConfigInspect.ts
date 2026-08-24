@@ -49,7 +49,7 @@ export function caddyConfigInspect(
     if (selector !== undefined && selector !== "") {
       if (typeof selector !== "string") return createResultError(op, "configuration selector is invalid")
       const selected = caddyConfigSelect(config, parsed.output, selector)
-      if (!selected.success) return createResultError(op, "no server block matching selector")
+      if (!selected.success) return { ...selected, op }
       routes = selected.data
       config = configWithRoutes(config, routes)
     }

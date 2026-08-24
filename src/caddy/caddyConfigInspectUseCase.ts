@@ -12,7 +12,7 @@ export async function caddyConfigInspectUseCase(
     const visibleR = await caddyVisibleProjects(options)
     if (!visibleR.success) return visibleR
     const inspectionR = caddyConfigInspect(visibleR.data, options.configOptions, options.selector)
-    if (!inspectionR.success) return createResultError(op, inspectionR.errorMessage)
+    if (!inspectionR.success) return { ...inspectionR, op }
     return createResult(inspectionR.data)
   } catch {
     return createResultError(op, "Caddy inspection input is invalid")

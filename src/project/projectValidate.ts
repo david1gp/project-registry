@@ -1,5 +1,5 @@
 import * as a from "valibot"
-import { createResult, createResultError, type Result } from "#result"
+import { createResult, createResultErrorCode, type Result } from "#result"
 import { projectCollisions } from "./projectCollisions.js"
 import type { ProjectKey } from "./projectKey.js"
 import type { Project } from "./projectSchema.js"
@@ -14,12 +14,12 @@ export type ProjectValidateOptions = {
 export function projectValidate(input: unknown, options: ProjectValidateOptions = {}): Result<Project> {
   const op = "projectValidate"
   const parsed = a.safeParse(projectSchema, input)
-  if (!parsed.success) return createResultError(op, a.summarize(parsed.issues))
+  if (!parsed.success) return createResultErrorCode(op, a.summarize(parsed.issues), "request.invalid")
 
   if (options.projects !== undefined) {
     for (const project of options.projects) {
       const existing = a.safeParse(projectSchema, project)
-      if (!existing.success) return createResultError(op, a.summarize(existing.issues))
+      if (!existing.success) return createResultErrorCode(op, a.summarize(existing.issues), "request.invalid")
     }
 
     const collisions = projectCollisions(options.projects, {
@@ -27,7 +27,7 @@ export function projectValidate(input: unknown, options: ProjectValidateOptions 
       excludeProject: options.excludeProject,
       replacement: parsed.output,
     })
-    if (!collisions.success) return createResultError(op, collisions.errorMessage)
+    if (!collisions.success) return { ...collisions, op }
   }
 
   return createResult(parsed.output)

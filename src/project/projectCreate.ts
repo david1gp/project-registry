@@ -1,4 +1,4 @@
-import { createResultError, type PromiseResult } from "#result"
+import { createResultErrorCode, type PromiseResult } from "#result"
 import type { ProjectRepositoryMutation } from "../project-store/ProjectRepositoryMutation.js"
 import type { ProjectMutationOptions } from "./ProjectMutationOptions.js"
 import type { ProjectUseCaseOptions } from "./ProjectUseCaseOptions.js"
@@ -24,7 +24,7 @@ export async function projectCreate(
   if (!actorR.success) return actorR
 
   const owner = projectInputOwner(input)
-  if (owner === undefined) return createResultError(op, "project owner is required")
+  if (owner === undefined) return createResultErrorCode(op, "project owner is required", "request.invalid")
 
   const authorizationR = await projectOwnerAuthorize(options.access, actorR.data, owner)
   if (!authorizationR.success) return authorizationR

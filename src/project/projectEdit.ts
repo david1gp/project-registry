@@ -1,4 +1,4 @@
-import { createResultError, type PromiseResult } from "#result"
+import { createResultErrorCode, type PromiseResult } from "#result"
 import type { ProjectRepositoryMutation } from "../project-store/ProjectRepositoryMutation.js"
 import type { Project } from "./Project.js"
 import type { ProjectMutationOptions } from "./ProjectMutationOptions.js"
@@ -69,13 +69,13 @@ export async function projectEdit(
   if (!authorizationR.success) return authorizationR
 
   if (projectInputIdentityMatches(input, key) === false) {
-    return createResultError(op, "project owner and name are immutable")
+    return createResultErrorCode(op, "project owner and name are immutable", "request.invalid")
   }
 
   const snapshotR = await options.repository.read()
   if (!snapshotR.success) return snapshotR
   const existing = snapshotR.data.projects.find((project) => projectKeyEqual(project, key))
-  if (!existing) return createResultError(op, "project not found")
+  if (!existing) return createResultErrorCode(op, "project not found", "projects.not-found")
 
   const projectR = projectNormalize(projectEditInputMerge(existing, input), {
     projects: snapshotR.data.projects,
@@ -84,7 +84,8 @@ export async function projectEdit(
     excludeProject: existing,
   })
   if (!projectR.success) return projectR
-  if (!projectKeyEqual(projectR.data, key)) return createResultError(op, "project owner and name are immutable")
+  if (!projectKeyEqual(projectR.data, key))
+    return createResultErrorCode(op, "project owner and name are immutable", "request.invalid")
 
   const expectedRevisionR = projectMutationExpectedRevision(mutationOptions, snapshotR.data.revision, op)
   if (!expectedRevisionR.success) return expectedRevisionR

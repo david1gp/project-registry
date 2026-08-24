@@ -1,4 +1,4 @@
-import { createResultError, type PromiseResult } from "#result"
+import { createResultErrorCode, type PromiseResult } from "#result"
 import type { ProjectRepositoryMutation } from "../project-store/ProjectRepositoryMutation.js"
 import type { ProjectMutationOptions } from "./ProjectMutationOptions.js"
 import type { ProjectUseCaseOptions } from "./ProjectUseCaseOptions.js"
@@ -21,7 +21,7 @@ export async function projectDelete(
   const snapshotR = await options.repository.read()
   if (!snapshotR.success) return snapshotR
   if (!snapshotR.data.projects.some((project) => projectKeyEqual(project, key))) {
-    return createResultError("projectDelete", "project not found")
+    return createResultErrorCode("projectDelete", "project not found", "projects.not-found")
   }
 
   const expectedRevisionR = projectMutationExpectedRevision(mutationOptions, snapshotR.data.revision, "projectDelete")
