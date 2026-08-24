@@ -66,8 +66,8 @@ function runOptions(data: unknown, paths: string[], stdout: string[], stderr: st
 describe("projectRegistryCliRun", () => {
   test.each([
     [["project", "list"], [project], "/projects"],
-    [["project", "get", "site/name"], project, "/projects/site%2Fname"],
-    [["project", "history", "site name", "--limit", "2"], history, "/history?name=site+name&limit=2"],
+    [["project", "get", "site-name"], project, "/projects/site-name"],
+    [["project", "history", "site-name", "--limit", "2"], history, "/history?name=site-name&limit=2"],
     [["history"], history, "/history"],
     [["history", "--limit=3"], history, "/history?limit=3"],
     [["config"], { apps: {} }, "/config"],
@@ -531,6 +531,89 @@ describe("projectRegistryCliRun", () => {
     expect(stderr.join("")).toBe("error: operation failed\n")
   })
 
+  test("formats optional structured error hints for humans and JSON", async () => {
+    const human: string[] = []
+    const humanExit = await projectRegistryCliRun(["regenerate"], {
+      environment: { USER: "david" },
+      requestFetch: async () =>
+        Response.json(
+          {
+            success: false,
+            error: {
+              code: "caddy.unavailable",
+              message: "Caddy is unavailable.",
+              op: "caddyRegenerate",
+              status: 503,
+              hint: "Check that Caddy is running, then retry.",
+            },
+          },
+          { status: 503 },
+        ),
+      stderr: (text) => human.push(text),
+    })
+    expect(humanExit).toBe(1)
+    expect(human.join("")).toBe("error: Caddy is unavailable.\nhint: Check that Caddy is running, then retry.\n")
+
+    const json: string[] = []
+    const jsonExit = await projectRegistryCliRun(["regenerate", "--json"], {
+      environment: { USER: "david" },
+      requestFetch: async () =>
+        Response.json(
+          {
+            success: false,
+            error: {
+              code: "caddy.unavailable",
+              message: "Caddy is unavailable.",
+              op: "caddyRegenerate",
+              status: 503,
+              hint: "Check that Caddy is running, then retry.",
+            },
+          },
+          { status: 503 },
+        ),
+      stderr: (text) => json.push(text),
+    })
+    expect(jsonExit).toBe(1)
+    expect(JSON.parse(json.join(""))).toEqual({
+      success: false,
+      error: {
+        code: "caddy.unavailable",
+        message: "Caddy is unavailable.",
+        op: "caddyRegenerate",
+        status: 503,
+        hint: "Check that Caddy is running, then retry.",
+      },
+    })
+  })
+
+  test("prints the resolved project enablement hint for documentation failures", async () => {
+    const stderr: string[] = []
+    const exitCode = await projectRegistryCliRun(["docs", "disabled-project", "guide.md"], {
+      environment: { USER: "david" },
+      requestFetch: async () =>
+        Response.json(
+          {
+            success: false,
+            error: {
+              code: "projects.disabled",
+              message: "documentation project is disabled",
+              op: "projectDocsUrlsUseCase",
+              status: 409,
+              hint: "Run: project-registry project edit disabled-project --enabled --docs",
+            },
+          },
+          { status: 409 },
+        ),
+      stderr: (text) => stderr.push(text),
+    })
+
+    expect(exitCode).toBe(1)
+    expect(stderr.join("")).toBe(
+      "error: documentation project is disabled\n" +
+        "hint: Run: project-registry project edit disabled-project --enabled --docs\n",
+    )
+  })
+
   test("emits stable JSON errors and deterministic exit codes", async () => {
     const usageError: string[] = []
     const usageExit = await projectRegistryCliRun(["status", "--owner", "david", "--json"], {
@@ -555,9 +638,10 @@ describe("projectRegistryCliRun", () => {
       success: false,
       error: {
         code: "cli.usage",
-        message: "Unknown or invalid command: status.",
+        message: "Unknown command or invalid syntax: status.",
         op: "projectRegistryCliArgumentsParse",
         status: null,
+        hint: "Run 'project-registry --help' to see valid commands and options.",
       },
     })
     expect(serverExit).toBe(1)

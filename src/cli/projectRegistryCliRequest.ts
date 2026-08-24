@@ -1,6 +1,8 @@
 import { createResult, type Result } from "#result"
 import type { ProjectRegistryCliFetch } from "./ProjectRegistryCliFetch.js"
 
+type ProjectRegistryCliError = Extract<Result<never>, { success: false }> & { hint?: string }
+
 type ProjectRegistryCliRequestOptions = {
   method?: "GET" | "POST" | "PATCH" | "DELETE"
   body?: unknown
@@ -16,8 +18,9 @@ function errorResult(
   errorMessage: string,
   code: string,
   statusCode?: number,
+  hint?: string,
 ): Extract<Result<never>, { success: false }> {
-  return { success: false, op, errorMessage, code, statusCode }
+  return { success: false, op, errorMessage, code, statusCode, ...(hint === undefined ? {} : { hint }) }
 }
 
 export async function projectRegistryCliRequest(
@@ -25,7 +28,7 @@ export async function projectRegistryCliRequest(
   path: string,
   optionsOrFetch: ProjectRegistryCliRequestOptions | ProjectRegistryCliFetch = {},
   requestFetch: ProjectRegistryCliFetch = fetch,
-): Promise<Result<unknown>> {
+): Promise<Result<unknown> | ProjectRegistryCliError> {
   const op = "projectRegistryCliRequest"
   const options = typeof optionsOrFetch === "function" ? {} : optionsOrFetch
   const fetchRequest = typeof optionsOrFetch === "function" ? optionsOrFetch : requestFetch
@@ -41,14 +44,26 @@ export async function projectRegistryCliRequest(
       unix: socketPath,
     })
   } catch {
-    return errorResult(op, `Could not communicate with project-registryd over ${socketPath}.`, "cli.transport")
+    return errorResult(
+      op,
+      `Could not communicate with project-registryd over ${socketPath}.`,
+      "cli.transport",
+      undefined,
+      "Check that project-registryd is running and that this socket path is correct, then retry.",
+    )
   }
 
   let text: string
   try {
     text = await response.text()
   } catch {
-    return errorResult(op, "Could not read the project-registryd response.", "cli.protocol", response.status)
+    return errorResult(
+      op,
+      "Could not read the project-registryd response.",
+      "cli.protocol",
+      response.status,
+      "Check project-registryd logs, then retry.",
+    )
   }
 
   let body: unknown
@@ -61,9 +76,16 @@ export async function projectRegistryCliRequest(
         `project-registryd returned HTTP ${response.status} ${response.statusText || "Error"}.`,
         "cli.server",
         response.status,
+        "Check the daemon logs for the failed request, then retry.",
       )
     }
-    return errorResult(op, "project-registryd returned malformed JSON.", "cli.protocol", response.status)
+    return errorResult(
+      op,
+      "project-registryd returned malformed JSON.",
+      "cli.protocol",
+      response.status,
+      "Check project-registryd logs or restart the daemon, then retry.",
+    )
   }
 
   const envelope = recordValue(body)
@@ -87,7 +109,13 @@ export async function projectRegistryCliRequest(
       typeof versionedError?.status === "number" && Number.isInteger(versionedError.status)
         ? versionedError.status
         : response.status
-    return errorResult(resultOp, errorMessage, code, statusCode)
+    const hint =
+      typeof versionedError?.hint === "string"
+        ? versionedError.hint
+        : typeof envelope.hint === "string"
+          ? envelope.hint
+          : undefined
+    return errorResult(resultOp, errorMessage, code, statusCode, hint)
   }
   if (envelope?.success !== true || !Object.hasOwn(envelope, "data")) {
     if (!response.ok) {
@@ -96,9 +124,16 @@ export async function projectRegistryCliRequest(
         `project-registryd returned HTTP ${response.status} ${response.statusText || "Error"}.`,
         "cli.server",
         response.status,
+        "Check the daemon logs for the failed request, then retry.",
       )
     }
-    return errorResult(op, "project-registryd returned a malformed response envelope.", "cli.protocol", response.status)
+    return errorResult(
+      op,
+      "project-registryd returned a malformed response envelope.",
+      "cli.protocol",
+      response.status,
+      "Check that project-registryd and the CLI use compatible versions, then retry.",
+    )
   }
   if (!response.ok) {
     return errorResult(
@@ -106,6 +141,7 @@ export async function projectRegistryCliRequest(
       "project-registryd returned success with an error HTTP status.",
       "cli.protocol",
       response.status,
+      "Check that project-registryd and the CLI use compatible versions, then retry.",
     )
   }
   return createResult(envelope.data)

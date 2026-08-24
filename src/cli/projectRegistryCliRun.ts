@@ -24,6 +24,8 @@ type RequestOptions = {
   body?: unknown
 }
 
+type CliError = ResultErr & { hint?: string }
+
 function requestPath(invocation: ProjectRegistryCliInvocation): string {
   const command = invocation.command
   if (command.kind === "project-list") return "/projects"
@@ -174,20 +176,23 @@ async function commandRequest(
   return projectRegistryCliRequest(socketPath, projectPath, options, requestFetch)
 }
 
-function errorWrite(error: ResultErr, json: boolean, write: (text: string) => void): void {
+function errorWrite(error: CliError, json: boolean, write: (text: string) => void): void {
   if (!json) {
     write(`error: ${error.errorMessage}\n`)
+    if ("hint" in error && typeof error.hint === "string") write(`hint: ${error.hint}\n`)
     return
+  }
+  const errorData = {
+    code: error.code ?? "cli.error",
+    message: error.errorMessage,
+    op: error.op,
+    status: error.statusCode ?? null,
+    ...("hint" in error && typeof error.hint === "string" ? { hint: error.hint } : {}),
   }
   write(
     `${JSON.stringify({
       success: false,
-      error: {
-        code: error.code ?? "cli.error",
-        message: error.errorMessage,
-        op: error.op,
-        status: error.statusCode ?? null,
-      },
+      error: errorData,
     })}\n`,
   )
 }
@@ -197,8 +202,11 @@ export async function projectRegistryCliRun(args: readonly string[], options: Cl
   const writeError = options.stderr ?? ((text: string) => process.stderr.write(text))
   const invocationR = projectRegistryCliArgumentsParse(args)
   if (!invocationR.success) {
-    errorWrite({ ...invocationR, code: "cli.usage" }, args.includes("--json"), writeError)
-    if (!args.includes("--json")) writeError("Try 'project-registry --help'.\n")
+    const hint =
+      "hint" in invocationR && typeof invocationR.hint === "string"
+        ? invocationR.hint
+        : "Run 'project-registry --help' to see valid commands and options."
+    errorWrite({ ...invocationR, code: "cli.usage", hint }, args.includes("--json"), writeError)
     return 2
   }
 

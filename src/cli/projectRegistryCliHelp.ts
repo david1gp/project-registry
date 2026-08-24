@@ -29,6 +29,9 @@ Project create/edit options:
   --header-up <K=V>          Upstream header; repeat to provide multiple headers
   --flush-interval <number>  Reverse proxy flush interval (-1 for immediate)
 
+Project names:
+  Start with a lowercase letter or digit; use only lowercase letters, digits, and hyphens.
+
 Options:
   --socket <path>  Unix socket (then PROJECT_REGISTRY_SOCKET, then /run/project-registry/$USER.sock)
   --json           Emit a stable JSON envelope

@@ -3,6 +3,9 @@ import type { ProjectRegistryCliCaddyOptions } from "./ProjectRegistryCliCaddyOp
 import type { ProjectRegistryCliInvocation } from "./ProjectRegistryCliInvocation.js"
 
 const projectNamePattern = /^[a-z0-9][a-z0-9-]*$/
+const projectNameRequirement =
+  "Project names must start with a lowercase letter or digit and contain only lowercase letters, digits, and hyphens."
+const projectNameHint = "Use a name such as 'my-project'."
 const ownerPattern = /^[A-Za-z_][A-Za-z0-9_.-]*\$?$/
 const maximumAccessLogLimit = 1_000
 const maximumAccessLogCursorLength = 4_096
@@ -30,6 +33,17 @@ function optionValue(argument: string, name: string, args: readonly string[], in
 
 function optionUsesNextArgument(argument: string): boolean {
   return !argument.includes("=")
+}
+
+function projectNameError(op: string): Extract<Result<never>, { success: false }> & { hint: string } {
+  return { ...createResultError(op, projectNameRequirement), hint: projectNameHint }
+}
+
+function projectNameOptionError(op: string): Extract<Result<never>, { success: false }> & { hint: string } {
+  return {
+    ...createResultError(op, `Option --name requires a valid project name. ${projectNameRequirement}`),
+    hint: projectNameHint,
+  }
 }
 
 export function projectRegistryCliArgumentsParse(args: readonly string[]): Result<ProjectRegistryCliInvocation> {
@@ -118,7 +132,7 @@ export function projectRegistryCliArgumentsParse(args: readonly string[]): Resul
       }
       if (option === "--name") {
         if (value === undefined || !projectNamePattern.test(value)) {
-          return createResultError(op, "Option --name requires a project name matching ^[a-z0-9][a-z0-9-]*$.")
+          return projectNameOptionError(op)
         }
         flagName = value
         continue
@@ -258,6 +272,7 @@ export function projectRegistryCliArgumentsParse(args: readonly string[]): Resul
     !hasAccessLogOptions &&
     !hasHttp
   ) {
+    if (!projectNamePattern.test(value)) return projectNameError(op)
     return createResult({ command: { kind: "project-get", name: value }, json, socket })
   }
   if (
@@ -269,7 +284,7 @@ export function projectRegistryCliArgumentsParse(args: readonly string[]): Resul
     flagName === undefined &&
     !hasHttp
   ) {
-    if (!projectNamePattern.test(value)) return createResultError(op, "Project name is invalid.")
+    if (!projectNamePattern.test(value)) return projectNameError(op)
     if (limit !== undefined && limit > maximumAccessLogLimit) {
       return createResultError(op, "Option --limit for access logs must not exceed 1000.")
     }
@@ -296,7 +311,7 @@ export function projectRegistryCliArgumentsParse(args: readonly string[]): Resul
     !hasAccessLogOptions &&
     !hasHttp
   ) {
-    if (!projectNamePattern.test(value)) return createResultError(op, "Project name is invalid.")
+    if (!projectNamePattern.test(value)) return projectNameError(op)
     if (flagName !== undefined) return createResultError(op, "Option --name cannot edit an immutable project name.")
     return createResult({ command: { kind: "project-edit", name: value, caddy }, json, socket })
   }
@@ -336,6 +351,7 @@ export function projectRegistryCliArgumentsParse(args: readonly string[]): Resul
     !hasAccessLogOptions &&
     !hasHttp
   ) {
+    if (!projectNamePattern.test(value)) return projectNameError(op)
     return createResult({ command: { kind: "project-history", name: value, limit }, json, socket })
   }
   if (subject === "history" && action === undefined && !hasMutationOptions && !hasAccessLogOptions && !hasHttp) {
@@ -361,7 +377,7 @@ export function projectRegistryCliArgumentsParse(args: readonly string[]): Resul
     !hasMutationOptions &&
     !hasAccessLogOptions
   ) {
-    if (!projectNamePattern.test(action)) return createResultError(op, "Project name is invalid.")
+    if (!projectNamePattern.test(action)) return projectNameError(op)
     return createResult({ command: { kind: "docs", name: action, path: value, http: hasHttp }, json, socket })
   }
   if (
@@ -395,5 +411,5 @@ export function projectRegistryCliArgumentsParse(args: readonly string[]): Resul
   ) {
     return createResult({ command: { kind: "status" }, json, socket })
   }
-  return createResultError(op, `Unknown or invalid command: ${positionals.join(" ")}.`)
+  return createResultError(op, `Unknown command or invalid syntax: ${positionals.join(" ")}.`)
 }

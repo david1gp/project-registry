@@ -123,24 +123,24 @@ describe("projectRegistryCliArgumentsParse", () => {
 
   test.each([
     [[], "A command is required."],
-    [["project", "get"], "Unknown or invalid command: project get."],
-    [["project", "list", "extra"], "Unknown or invalid command: project list extra."],
-    [["project", "list", "--limit", "2"], "Unknown or invalid command: project list."],
+    [["project", "get"], "Unknown command or invalid syntax: project get."],
+    [["project", "list", "extra"], "Unknown command or invalid syntax: project list extra."],
+    [["project", "list", "--limit", "2"], "Unknown command or invalid syntax: project list."],
     [["project", "create", "--name", "site"], "Project create requires at least one --domain."],
     [["project", "create", "--domain", "site.example"], "Project create requires --name."],
     [["project", "edit", "site", "--name", "renamed"], "Option --name cannot edit an immutable project name."],
-    [["project", "delete", "site", "--port", "4321"], "Unknown or invalid command: project delete site."],
+    [["project", "delete", "site", "--port", "4321"], "Unknown command or invalid syntax: project delete site."],
     [["delete", "--port", "0"], "Option --port requires an integer from 1 through 65535."],
-    [["delete", "--port", "4321", "extra"], "Unknown or invalid command: delete extra."],
-    [["docs"], "Unknown or invalid command: docs."],
-    [["docs", "site", "guide.md", "extra"], "Unknown or invalid command: docs site guide.md extra."],
-    [["docs", "site", "guide.md", "--docs"], "Unknown or invalid command: docs site guide.md."],
+    [["delete", "--port", "4321", "extra"], "Unknown command or invalid syntax: delete extra."],
+    [["docs"], "Unknown command or invalid syntax: docs."],
+    [["docs", "site", "guide.md", "extra"], "Unknown command or invalid syntax: docs site guide.md extra."],
+    [["docs", "site", "guide.md", "--docs"], "Unknown command or invalid syntax: docs site guide.md."],
     [["project", "edit", "site", "--header-up", "invalid"], "Option --header-up requires K=V, got: invalid."],
     [["project", "edit", "site", "--port", "0"], "Option --port requires an integer from 1 through 65535."],
     [["project", "edit", "site", "--flush-interval=NaN"], "Option --flush-interval requires a finite number."],
     [["history", "--limit", "0"], "Option --limit requires a positive integer."],
     [["history", "--limit=9007199254740992"], "Option --limit requires a positive integer."],
-    [["status", "--owner", "leo"], "Unknown or invalid command: status."],
+    [["status", "--owner", "leo"], "Unknown command or invalid syntax: status."],
     [["project", "access-logs", "site", "--limit", "1001"], "Option --limit for access logs must not exceed 1000."],
     [["project", "access-logs", "site", "--owner", "../root"], "Option --owner requires a valid Unix username."],
     [["project", "access-logs", "site", "--before"], "Option --before requires a bounded cursor."],
@@ -155,5 +155,20 @@ describe("projectRegistryCliArgumentsParse", () => {
     const result = projectRegistryCliArgumentsParse(args)
 
     expect(result).toMatchObject({ success: false, op: "projectRegistryCliArgumentsParse", errorMessage: message })
+  })
+
+  test.each([
+    ["project", "get", "Invalid_Name"],
+    ["project", "history", "site/name"],
+  ] as const)("rejects invalid project names for %s %s", (subject, action, name) => {
+    const args = [subject, action, name]
+    const result = projectRegistryCliArgumentsParse(args)
+
+    expect(result).toMatchObject({
+      success: false,
+      errorMessage:
+        "Project names must start with a lowercase letter or digit and contain only lowercase letters, digits, and hyphens.",
+      hint: "Use a name such as 'my-project'.",
+    })
   })
 })

@@ -69,7 +69,13 @@ describe("projectRegistryCliRequest", () => {
       Response.json(
         {
           success: false,
-          error: { code: "caddy.forbidden", message: "Access is forbidden.", op: "configGet", status: 403 },
+          error: {
+            code: "caddy.forbidden",
+            message: "Access is forbidden.",
+            op: "configGet",
+            status: 403,
+            hint: "Check the project owner.",
+          },
         },
         { status: 403 },
       ),
@@ -87,6 +93,7 @@ describe("projectRegistryCliRequest", () => {
       errorMessage: "Access is forbidden.",
       op: "configGet",
       statusCode: 403,
+      hint: "Check the project owner.",
     })
     expect(legacy).toEqual({
       success: false,
@@ -98,22 +105,55 @@ describe("projectRegistryCliRequest", () => {
   })
 
   test.each([
-    [new Response("not json"), "cli.protocol", "project-registryd returned malformed JSON."],
-    [Response.json({ data: [] }), "cli.protocol", "project-registryd returned a malformed response envelope."],
+    [
+      new Response("not json"),
+      "cli.protocol",
+      "project-registryd returned malformed JSON.",
+      "Check project-registryd logs or restart the daemon, then retry.",
+    ],
+    [
+      Response.json({ data: [] }),
+      "cli.protocol",
+      "project-registryd returned a malformed response envelope.",
+      "Check that project-registryd and the CLI use compatible versions, then retry.",
+    ],
     [
       Response.json({ success: true, data: [] }, { status: 500 }),
       "cli.protocol",
       "project-registryd returned success with an error HTTP status.",
+      "Check that project-registryd and the CLI use compatible versions, then retry.",
     ],
     [
       new Response("unavailable", { status: 503, statusText: "Unavailable" }),
       "cli.server",
       "project-registryd returned HTTP 503 Unavailable.",
+      "Check the daemon logs for the failed request, then retry.",
     ],
-  ])("rejects malformed responses", async (response, code, message) => {
+  ] as const)("rejects malformed responses", async (response, code, message, hint) => {
     const result = await projectRegistryCliRequest("/socket", "/projects", async () => response)
 
-    expect(result).toMatchObject({ success: false, code, errorMessage: message })
+    expect(result).toMatchObject({ success: false, code, errorMessage: message, hint })
+  })
+
+  test("reports response-read failures with recovery guidance", async () => {
+    const result = await projectRegistryCliRequest(
+      "/socket",
+      "/projects",
+      async () =>
+        ({
+          status: 200,
+          text: async () => {
+            throw new Error("read failed")
+          },
+        }) as unknown as Response,
+    )
+
+    expect(result).toMatchObject({
+      success: false,
+      code: "cli.protocol",
+      errorMessage: "Could not read the project-registryd response.",
+      hint: "Check project-registryd logs, then retry.",
+    })
   })
 
   test("returns a deterministic transport error", async () => {
@@ -127,6 +167,7 @@ describe("projectRegistryCliRequest", () => {
       errorMessage: "Could not communicate with project-registryd over /missing.sock.",
       op: "projectRegistryCliRequest",
       statusCode: undefined,
+      hint: "Check that project-registryd is running and that this socket path is correct, then retry.",
     })
   })
 })
