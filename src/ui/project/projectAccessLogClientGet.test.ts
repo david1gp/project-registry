@@ -46,15 +46,15 @@ describe("projectAccessLogClientGet", () => {
     expect((requestedInit?.headers as Record<string, string> | undefined)?.accept).toBe("application/json")
   })
 
-  test("preserves expired and unavailable API errors", async () => {
+  test("preserves structured API errors and recovery hints", async () => {
     for (const [status, code] of [
       [410, "access-log.cursor-expired"],
       [503, "access-log.unavailable"],
     ] as const) {
       const result = await projectAccessLogClientGet("leo", "app", {}, async () =>
-        Response.json({ success: false, error: { code, message: "failed" } }, { status }),
+        Response.json({ success: false, error: { code, message: "failed", hint: "Try again." } }, { status }),
       )
-      expect(result).toMatchObject({ success: false, code, statusCode: status })
+      expect(result).toMatchObject({ success: false, code, statusCode: status, hint: "Try again." })
     }
   })
 

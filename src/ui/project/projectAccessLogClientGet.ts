@@ -2,14 +2,19 @@ import * as v from "valibot"
 import { createResult, createResultError, type Result } from "#result"
 import { type ProjectAccessLogPage, projectAccessLogPageSchema } from "./projectAccessLogPageSchema.js"
 
-type ProjectAccessLogClientResult = Result<ProjectAccessLogPage> & { code?: string; statusCode?: number }
+type ProjectAccessLogClientResult = Result<ProjectAccessLogPage> & { code?: string; statusCode?: number; hint?: string }
 type ProjectAccessLogFetch = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>
 type ProjectAccessLogTimer = ReturnType<typeof setTimeout>
 
 const projectAccessLogRequestTimeoutMilliseconds = 15_000
 
-function clientError(message: string, code: string, statusCode?: number): ProjectAccessLogClientResult {
-  return { ...createResultError("projectAccessLogClientGet", message), code, statusCode }
+function clientError(message: string, code: string, statusCode?: number, hint?: string): ProjectAccessLogClientResult {
+  return {
+    ...createResultError("projectAccessLogClientGet", message),
+    code,
+    statusCode,
+    ...(hint === undefined ? {} : { hint }),
+  }
 }
 
 function recordValue(input: unknown): Record<string, unknown> | undefined {
@@ -80,7 +85,8 @@ export async function projectAccessLogClientGet(
       const code = typeof error?.code === "string" ? error.code : "request.unavailable"
       const message =
         typeof error?.message === "string" ? error.message : "Die Zugriffsprotokolle sind nicht verfügbar."
-      return clientError(message, code, response.status)
+      const hint = typeof error?.hint === "string" ? error.hint : undefined
+      return clientError(message, code, response.status, hint)
     }
     if (envelope?.success !== true) {
       return clientError("Der Server hat eine ungültige Antwort gesendet.", "response.malformed", response.status)

@@ -32,8 +32,10 @@ export function projectAccessLogPanelStateCreate(
   const olderLoading = createSignalObject(false)
   const busy = createSignalObject(false)
   const initialErrorMessage = createSignalObject<string | undefined>(undefined)
+  const initialErrorHint = createSignalObject<string | undefined>(undefined)
   const expiredCursor = createSignalObject(false)
   const backgroundError = createSignalObject(false)
+  const backgroundErrorHint = createSignalObject<string | undefined>(undefined)
   let timer: Timer | undefined
   let request: AbortController | undefined
   let mounted = false
@@ -41,11 +43,42 @@ export function projectAccessLogPanelStateCreate(
 
   const initialErrorMessageGet = (code?: string, statusCode?: number) => {
     if (statusCode === 404) return "Projekt nicht gefunden oder kein Zugriff."
+    if (statusCode === 410 || code === "access-log.cursor-expired") return "Der Cursor ist abgelaufen."
+    if (
+      code === "access-log.storage-unavailable" ||
+      code === "access-log.rotation-race" ||
+      code === "access-log.symlink" ||
+      code === "access-log.non-regular-file"
+    ) {
+      return "Der Speicher der Zugriffsprotokolle ist derzeit nicht verfügbar."
+    }
     if (statusCode === 503 || code === "access-log.unavailable")
       return "Zugriffsprotokolle sind nicht aktiviert oder derzeit nicht verfügbar."
     if (statusCode === 400 || code === "access-log.invalid-input") return "Die Protokollanfrage ist ungültig."
     if (code === "response.malformed") return "Der Server hat eine ungültige Protokollantwort gesendet."
     return "Zugriffsprotokolle konnten nicht geladen werden."
+  }
+
+  const errorHintGet = (code?: string, statusCode?: number, hint?: string) => {
+    if (hint !== undefined && hint.trim() !== "") return hint
+    if (statusCode === 404) return "Prüfen Sie den Projektnamen und Ihre Berechtigung, und aktualisieren Sie die Liste."
+    if (statusCode === 410 || code === "access-log.cursor-expired")
+      return "Aktualisieren Sie die Liste, um eine neue Seite zu beginnen."
+    if (code === "access-log.invalid-input" || code === "access-log.invalid-cursor")
+      return "Verwenden Sie ein Limit von 1 bis 1.000 und einen gültigen Cursor aus der Antwort."
+    if (
+      code === "access-log.storage-unavailable" ||
+      code === "access-log.symlink" ||
+      code === "access-log.non-regular-file"
+    )
+      return "Prüfen Sie den Protokollordner und die Berechtigungen des Dienstes, und versuchen Sie es erneut."
+    if (code === "access-log.rotation-race")
+      return "Das Protokoll wurde während des Lesens geändert. Aktualisieren Sie die Liste und versuchen Sie es erneut."
+    if (code === "access-log.resource-limit") return "Verringern Sie die Seitengröße und versuchen Sie es erneut."
+    if (code === "access-log.unavailable" || statusCode === 503)
+      return "Aktivieren Sie die Zugriffsprotokollierung oder versuchen Sie es später erneut."
+    if (code === "request.unavailable") return "Prüfen Sie die Verbindung und versuchen Sie es erneut."
+    return "Versuchen Sie es erneut oder aktualisieren Sie die Liste."
   }
 
   const partialMessageGet = () => {
@@ -89,9 +122,11 @@ export function projectAccessLogPanelStateCreate(
         if (result.code === "request.aborted") return
         if (records.get().length > 0) {
           backgroundError.set(true)
+          backgroundErrorHint.set(errorHintGet(result.code, result.statusCode, result.hint))
           return
         }
         initialErrorMessage.set(initialErrorMessageGet(result.code, result.statusCode))
+        initialErrorHint.set(errorHintGet(result.code, result.statusCode, result.hint))
         return
       }
       if (background) {
@@ -109,17 +144,21 @@ export function projectAccessLogPanelStateCreate(
         malformedLines.set(result.data.malformedLines)
       }
       initialErrorMessage.set(undefined)
+      initialErrorHint.set(undefined)
       expiredCursor.set(false)
       backgroundError.set(false)
+      backgroundErrorHint.set(undefined)
     } catch {
       if (request !== controller || !mounted) return
       initialLoading.set(false)
       refreshing.set(false)
       if (records.get().length > 0) {
         backgroundError.set(true)
+        backgroundErrorHint.set(errorHintGet())
         return
       }
       initialErrorMessage.set(initialErrorMessageGet())
+      initialErrorHint.set(errorHintGet())
     } finally {
       if (request === controller) {
         request = undefined
@@ -142,8 +181,10 @@ export function projectAccessLogPanelStateCreate(
     refreshing.set(false)
     olderLoading.set(false)
     initialErrorMessage.set(undefined)
+    initialErrorHint.set(undefined)
     expiredCursor.set(false)
     backgroundError.set(false)
+    backgroundErrorHint.set(undefined)
     if (mounted) void refresh()
   }
 
@@ -179,6 +220,7 @@ export function projectAccessLogPanelStateCreate(
           return
         }
         backgroundError.set(true)
+        backgroundErrorHint.set(errorHintGet(result.code, result.statusCode, result.hint))
         return
       }
       olderPagesLoaded = true
@@ -188,9 +230,11 @@ export function projectAccessLogPanelStateCreate(
       malformedLines.set(malformedLines.get() + result.data.malformedLines)
       expiredCursor.set(false)
       backgroundError.set(false)
+      backgroundErrorHint.set(undefined)
     } catch {
       if (request !== controller || !mounted) return
       backgroundError.set(true)
+      backgroundErrorHint.set(errorHintGet())
     } finally {
       if (request === controller) {
         request = undefined
@@ -240,8 +284,10 @@ export function projectAccessLogPanelStateCreate(
     refreshing: refreshing.get,
     olderLoading: olderLoading.get,
     initialErrorMessage: initialErrorMessage.get,
+    initialErrorHint: initialErrorHint.get,
     expiredCursor: expiredCursor.get,
     backgroundError: backgroundError.get,
+    backgroundErrorHint: backgroundErrorHint.get,
     busy: busy.get,
     empty: () => !initialLoading.get() && initialErrorMessage.get() === undefined && records.get().length === 0,
     refresh: () => void refresh(),

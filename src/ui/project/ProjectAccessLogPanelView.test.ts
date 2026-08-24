@@ -6,6 +6,7 @@ describe("ProjectAccessLogPanelView", () => {
   test("uses the shared busy state for both request actions", () => {
     expect(source).toContain("onClick={p.state.refresh} disabled={p.state.busy()}")
     expect(source).toContain("onClick={p.state.olderLoad} disabled={p.state.busy()}")
+    expect(source).toContain("Erneut versuchen")
   })
 
   test("limits live updates to concise status text", () => {

@@ -104,18 +104,30 @@ export function ProjectAccessLogPanelView(p: { state: ProjectAccessLogPanelState
         </Show>
         <Show when={p.state.initialErrorMessage()} keyed>
           {(message) => (
-            <p class="rounded-md bg-red-50 p-3 text-red-800 dark:bg-red-950 dark:text-red-100" role="alert">
-              {message}
-            </p>
+            <div class="rounded-md bg-red-50 p-3 text-red-800 dark:bg-red-950 dark:text-red-100" role="alert">
+              <p>{message}</p>
+              <Show when={p.state.initialErrorHint()} keyed>
+                {(hint) => <p class="mt-1">{hint}</p>}
+              </Show>
+              <Button class="mt-2" variant="outline" onClick={p.state.refresh} disabled={p.state.busy()}>
+                Erneut versuchen
+              </Button>
+            </div>
           )}
         </Show>
         <Show when={p.state.empty()}>
           <p class="py-6 text-center text-slate-600 dark:text-slate-300">Noch keine Zugriffe vorhanden.</p>
         </Show>
         <Show when={p.state.backgroundError()}>
-          <p class="rounded-md bg-amber-50 p-3 text-amber-900 dark:bg-amber-950 dark:text-amber-100" role="status">
-            Die Aktualisierung ist fehlgeschlagen. Vorhandene Einträge bleiben sichtbar.
-          </p>
+          <div class="rounded-md bg-amber-50 p-3 text-amber-900 dark:bg-amber-950 dark:text-amber-100" role="status">
+            <p>Die Aktualisierung ist fehlgeschlagen. Vorhandene Einträge bleiben sichtbar.</p>
+            <Show when={p.state.backgroundErrorHint()} keyed>
+              {(hint) => <p class="mt-1">{hint}</p>}
+            </Show>
+            <Button class="mt-2" variant="outline" onClick={p.state.refresh} disabled={p.state.busy()}>
+              Erneut versuchen
+            </Button>
+          </div>
         </Show>
         <Show when={p.state.expiredCursor()}>
           <p class="rounded-md bg-amber-50 p-3 text-amber-900 dark:bg-amber-950 dark:text-amber-100" role="alert">

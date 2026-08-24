@@ -39,6 +39,7 @@ function harnessCreate(
   let visibilityState: DocumentVisibilityState = "visible"
   let visibilityHandler: (() => void) | undefined
   const intervalHandlers = new Map<number, () => void>()
+  const intervalElapsed = new Map<number, number>()
   const intervalMilliseconds: number[] = []
   const cleared: number[] = []
   let nextTimer = 0
@@ -60,12 +61,14 @@ function harnessCreate(
       nextTimer += 1
       intervalMilliseconds.push(milliseconds)
       intervalHandlers.set(nextTimer, handler)
+      intervalElapsed.set(nextTimer, 0)
       return nextTimer
     },
     intervalClear: (timer) => {
       const id = timer as number
       cleared.push(id)
       intervalHandlers.delete(id)
+      intervalElapsed.delete(id)
     },
   })
   return {
@@ -73,6 +76,18 @@ function harnessCreate(
     intervalHandlers,
     intervalMilliseconds,
     cleared,
+    intervalAdvance(milliseconds: number) {
+      for (const [timer, handler] of intervalHandlers) {
+        const interval = intervalMilliseconds[timer - 1]!
+        const elapsed = intervalElapsed.get(timer)! + milliseconds
+        let remaining = elapsed
+        while (remaining >= interval) {
+          remaining -= interval
+          handler()
+        }
+        intervalElapsed.set(timer, remaining)
+      }
+    },
     visibilitySet(value: DocumentVisibilityState) {
       visibilityState = value
       visibilityHandler?.()
@@ -265,8 +280,10 @@ describe("projectAccessLogPanelStateCreate", () => {
         harness.visibilitySet("visible")
         expect(harness.intervalHandlers.size).toBe(1)
 
-        const poll = [...harness.intervalHandlers.values()][0]
-        poll?.()
+        harness.intervalAdvance(9_999)
+        await settle()
+        expect(calls).toBe(1)
+        harness.intervalAdvance(1)
         await settle()
         expect(calls).toBe(2)
         harness.state.dispose()
@@ -297,10 +314,17 @@ describe("projectAccessLogPanelStateCreate", () => {
             expect(harness.state.initialErrorMessage()).toBe(
               "Zugriffsprotokolle sind nicht aktiviert oder derzeit nicht verfügbar.",
             )
+          if (kind === "unavailable")
+            expect(harness.state.initialErrorHint()).toBe(
+              "Aktivieren Sie die Zugriffsprotokollierung oder versuchen Sie es später erneut.",
+            )
           if (kind === "background") {
             harness.state.refresh()
             await settle()
             expect(harness.state.backgroundError()).toBe(true)
+            expect(harness.state.backgroundErrorHint()).toBe(
+              "Aktivieren Sie die Zugriffsprotokollierung oder versuchen Sie es später erneut.",
+            )
             expect(harness.state.records()).toEqual([record])
           }
           harness.state.dispose()
@@ -313,8 +337,9 @@ describe("projectAccessLogPanelStateCreate", () => {
 
   test("maps initial failures to concise no-leak messages", async () => {
     const cases = [
-      ["project.not-found", 404, "Projekt nicht gefunden oder kein Zugriff."],
+      ["access-log.not-found", 404, "Projekt nicht gefunden oder kein Zugriff."],
       ["access-log.unavailable", 503, "Zugriffsprotokolle sind nicht aktiviert oder derzeit nicht verfügbar."],
+      ["access-log.storage-unavailable", 503, "Der Speicher der Zugriffsprotokolle ist derzeit nicht verfügbar."],
       ["access-log.invalid-input", 400, "Die Protokollanfrage ist ungültig."],
       ["response.malformed", 200, "Der Server hat eine ungültige Protokollantwort gesendet."],
       ["request.unavailable", undefined, "Zugriffsprotokolle konnten nicht geladen werden."],
@@ -331,6 +356,7 @@ describe("projectAccessLogPanelStateCreate", () => {
           harness.state.mount()
           await settle()
           expect(harness.state.initialErrorMessage()).toBe(message)
+          expect(harness.state.initialErrorHint()).toBeDefined()
           expect(harness.state.empty()).toBe(false)
           harness.state.dispose()
           dispose()
@@ -338,6 +364,35 @@ describe("projectAccessLogPanelStateCreate", () => {
         })
       })
     }
+  })
+
+  test("prefers an API recovery hint for initial and background failures", async () => {
+    let calls = 0
+    await new Promise<void>((resolve) => {
+      createRoot(async (dispose) => {
+        const harness = harnessCreate(async () => {
+          calls += 1
+          if (calls === 1) {
+            return {
+              ...createResultError("test", "unavailable"),
+              code: "access-log.unavailable",
+              statusCode: 503,
+              hint: "Configure access-log storage, then retry.",
+            }
+          }
+          return createResult(page())
+        })
+        harness.state.mount()
+        await settle()
+        expect(harness.state.initialErrorHint()).toBe("Configure access-log storage, then retry.")
+        harness.state.refresh()
+        await settle()
+        expect(harness.state.initialErrorHint()).toBeUndefined()
+        harness.state.dispose()
+        dispose()
+        resolve()
+      })
+    })
   })
 
   test("aborts and clears old project state before loading changed accessors", async () => {
