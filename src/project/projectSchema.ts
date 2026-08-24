@@ -1,5 +1,6 @@
 import * as a from "valibot"
 import { projectHeaderUpSchema } from "./projectHeaderUpSchema.js"
+import { projectLabelsSchema } from "./projectLabelsSchema.js"
 
 const serviceUnitSchema = a.pipe(a.string(), a.regex(/^[A-Za-z0-9_.@:-]+(?:\.service)?$/))
 const nonEmptyTextSchema = a.pipe(a.string(), a.regex(/\S/))
@@ -39,6 +40,7 @@ export const projectSchema = a.strictObject({
   type: a.optional(a.picklist(["own", "internal", "customer"]), "customer"),
   order: a.optional(finiteNumberSchema, Number.MAX_SAFE_INTEGER),
   services: a.optional(projectServicesSchema, []),
+  labels: a.optional(projectLabelsSchema, {}),
   github: a.optional(a.string()),
   previewUrl: a.optional(a.string()),
   previewPort: a.optional(a.string()),

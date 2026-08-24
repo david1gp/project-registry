@@ -141,6 +141,7 @@ function projectInputNormalize(input: unknown): unknown {
     type: typeValue(record.type),
     order: orderValue(record.order),
     services: serviceValues(record.services),
+    labels: record.labels,
   }
 
   const description = stringValue(record.description)

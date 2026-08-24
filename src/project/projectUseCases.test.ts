@@ -45,6 +45,7 @@ function project(owner: string, name: string, port?: number, disabled = false): 
     type: "customer",
     order: Number.MAX_SAFE_INTEGER,
     services: [],
+    labels: {},
     ...(port === undefined
       ? {}
       : {
@@ -288,6 +289,34 @@ describe("project use cases", () => {
         },
       },
     })
+  })
+
+  test("replaces labels only when labels are included in an edit", async () => {
+    const repository = repositoryCreate([project("alice", "catalog")])
+    repository.projects[0] = { ...repository.projects[0]!, labels: { team: "platform", tier: "gold" } }
+    const access = accessCreate({ subject: "alice-subject", username: "alice", role: "own" }, { alice: "own" })
+
+    const preserveResult = await projectEdit(
+      useCaseOptions(repository, access),
+      { owner: "alice", name: "catalog" },
+      { description: "updated" },
+      { expectedRevision: currentRevision },
+    )
+    expect(preserveResult.success).toBe(true)
+    expect(repository.calls.edit[0]?.project).toMatchObject({ labels: { team: "platform", tier: "gold" } })
+
+    const replaceResult = await projectEdit(
+      useCaseOptions(repository, access),
+      { owner: "alice", name: "catalog" },
+      { labels: { team: "core" } },
+      { expectedRevision: currentRevision },
+    )
+    expect(replaceResult.success).toBe(true)
+    expect(repository.calls.edit[1]?.project).toMatchObject({ labels: { team: "core" } })
+    const replacement = repository.calls.edit[1]
+    expect(replacement).toBeDefined()
+    if (replacement === undefined) return
+    expect((replacement.project as Project).labels).toEqual({ team: "core" })
   })
 
   test("propagates not-found and role failures for delete and history", async () => {

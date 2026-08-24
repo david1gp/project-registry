@@ -16,7 +16,13 @@ describe("projectSchema", () => {
     expect(result.output.type).toBe("customer")
     expect(result.output.order).toBe(Number.MAX_SAFE_INTEGER)
     expect(result.output.services).toEqual([])
+    expect(result.output.labels).toEqual({})
     expect("caddy" in result.output).toBe(false)
+
+    const input = a.safeParse(projectInputSchema, { owner: "alice", name: "catalog" })
+    expect(input.success).toBe(true)
+    if (!input.success) return
+    expect(input.output.labels).toEqual({})
   })
 
   test("keeps caddy settings nested and rejects invalid service units", () => {
@@ -163,5 +169,47 @@ describe("projectSchema", () => {
       expect("inherited" in output).toBe(false)
       expect("polluted" in output).toBe(false)
     }
+  })
+
+  test("preserves reserved label names and rejects blank keys and non-string values", () => {
+    const labels = Object.create({ inherited: "drop" }) as Record<string, string>
+    labels.good = "value"
+    Object.defineProperty(labels, "constructor", { enumerable: true, value: "constructor-value" })
+    Object.defineProperty(labels, "prototype", { enumerable: true, value: "prototype-value" })
+    Object.defineProperty(labels, "__proto__", { enumerable: true, value: "dunder-value" })
+
+    const persisted = a.safeParse(projectSchema, {
+      schemaVersion: 1,
+      owner: "alice",
+      name: "catalog",
+      labels,
+    })
+    const blankKey = a.safeParse(projectSchema, {
+      schemaVersion: 1,
+      owner: "alice",
+      name: "catalog",
+      labels: { " ": "value" },
+    })
+    const nonStringValue = a.safeParse(projectSchema, {
+      schemaVersion: 1,
+      owner: "alice",
+      name: "catalog",
+      labels: { good: 1 },
+    })
+
+    expect(persisted.success).toBe(true)
+    expect(blankKey.success).toBe(false)
+    expect(nonStringValue.success).toBe(false)
+    if (!persisted.success) return
+    expect(persisted.output.labels).toEqual(
+      Object.fromEntries([
+        ["good", "value"],
+        ["constructor", "constructor-value"],
+        ["prototype", "prototype-value"],
+        ["__proto__", "dunder-value"],
+      ]),
+    )
+    expect(Object.getPrototypeOf(persisted.output.labels)).toBe(Object.prototype)
+    expect("inherited" in persisted.output.labels).toBe(false)
   })
 })

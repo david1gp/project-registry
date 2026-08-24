@@ -29,6 +29,11 @@ function projectEditRecordMerge(
   for (const [key, value] of Object.entries(existing)) merged[key] = value
 
   for (const [key, value] of Object.entries(patch)) {
+    if (key === "labels") {
+      merged[key] = value
+      continue
+    }
+
     const existingValue = Object.hasOwn(merged, key) ? merged[key] : undefined
     if (
       value &&

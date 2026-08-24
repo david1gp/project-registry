@@ -42,6 +42,7 @@ describe("projectNormalize", () => {
             type: "customer",
             order: 1,
             services: [],
+            labels: {},
             caddy: {
               port: 3000,
               domains: ["first.example"],
@@ -159,6 +160,26 @@ describe("projectNormalize", () => {
     expect(result.success).toBe(true)
     if (!result.success) return
     expect(result.data.services).toEqual(["api.service", "worker@preview.service"])
+  })
+
+  test("preserves safe label records and rejects invalid label entries", () => {
+    const labels = Object.create({ inherited: "drop" }) as Record<string, string>
+    labels.team = "platform"
+    Object.defineProperty(labels, "__proto__", { enumerable: true, value: "reserved" })
+
+    const result = projectNormalize({ owner: "alice", name: "catalog", labels })
+    expect(result.success).toBe(true)
+    if (!result.success) return
+    expect(result.data.labels).toEqual(
+      Object.fromEntries([
+        ["team", "platform"],
+        ["__proto__", "reserved"],
+      ]),
+    )
+    expect("inherited" in result.data.labels).toBe(false)
+
+    const invalid = projectNormalize({ owner: "alice", name: "catalog", labels: { team: 1 } })
+    expect(invalid.success).toBe(false)
   })
 
   test("omits empty legacy Caddy optionals from canonical input", () => {
