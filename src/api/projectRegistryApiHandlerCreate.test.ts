@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test"
 import { mkdtempSync, rmSync } from "node:fs"
 import { join } from "node:path"
 import type { GitStoreCommitInfo } from "#git-store"
-import { createResult, createResultError, type Result } from "#result"
+import { createResult, createResultError, createResultErrorCode, type Result } from "#result"
 import { caddyAccessLogFixture } from "../../test/fixtures/caddyAccessLogFixture.js"
 import { caddyConfigGenerateFixtures } from "../../test/fixtures/caddyConfigGenerateFixtures.js"
 import type { ProjectAccess } from "../access/ProjectAccess.js"
@@ -132,16 +132,16 @@ function repositoryCreate(): RepositoryFake {
     get: async (key) => {
       const project = repository.projects.find((item) => item.owner === key.owner && item.name === key.name)
       return project === undefined
-        ? createResultError("projectRepositoryGet", "project not found")
+        ? createResultErrorCode("projectRepositoryGet", "project not found", "projects.not-found")
         : createResult({ project, revision: repository.revision })
     },
     create: async (project, options) => {
       if (options.expectedRevision !== repository.revision) {
-        return createResultError("projectRepositoryCreate", "revision mismatch")
+        return createResultErrorCode("projectRepositoryCreate", "revision mismatch", "projects.conflict")
       }
       const value = project as Project
       if (repository.projects.some((item) => item.owner === value.owner && item.name === value.name)) {
-        return createResultError("projectRepositoryCreate", "project already exists")
+        return createResultErrorCode("projectRepositoryCreate", "project already exists", "projects.conflict")
       }
       repository.projects.push(value)
       repository.revision = nextRevision
@@ -149,10 +149,10 @@ function repositoryCreate(): RepositoryFake {
     },
     edit: async (key, project, options) => {
       if (options.expectedRevision !== repository.revision) {
-        return createResultError("projectRepositoryEdit", "revision mismatch")
+        return createResultErrorCode("projectRepositoryEdit", "revision mismatch", "projects.conflict")
       }
       const index = repository.projects.findIndex((item) => item.owner === key.owner && item.name === key.name)
-      if (index < 0) return createResultError("projectRepositoryEdit", "project not found")
+      if (index < 0) return createResultErrorCode("projectRepositoryEdit", "project not found", "projects.not-found")
       const value = project as Project
       const changed = JSON.stringify(repository.projects[index]) !== JSON.stringify(value)
       if (changed) {
@@ -163,10 +163,10 @@ function repositoryCreate(): RepositoryFake {
     },
     delete: async (key, options) => {
       if (options.expectedRevision !== repository.revision) {
-        return createResultError("projectRepositoryDelete", "revision mismatch")
+        return createResultErrorCode("projectRepositoryDelete", "revision mismatch", "projects.conflict")
       }
       const index = repository.projects.findIndex((item) => item.owner === key.owner && item.name === key.name)
-      if (index < 0) return createResultError("projectRepositoryDelete", "project not found")
+      if (index < 0) return createResultErrorCode("projectRepositoryDelete", "project not found", "projects.not-found")
       repository.projects.splice(index, 1)
       repository.revision = nextRevision
       return createResult(mutation("delete", key, true, repository.revision))
@@ -350,7 +350,11 @@ describe("projectRegistryApiHandlerCreate", () => {
 
   test("maps owner history repository failures through the legacy error envelope", async () => {
     const repository = repositoryCreate()
-    repository.ownerHistoryResult = createResultError("projectRepositoryOwnerHistory", "worktree is dirty")
+    repository.ownerHistoryResult = createResultErrorCode(
+      "projectRepositoryOwnerHistory",
+      "worktree is dirty",
+      "projects.conflict",
+    )
     const handler = projectRegistryApiHandlerCreate({ repository, caddyApplication: caddyApplicationCreate() })
 
     const history = await requestJson(handler, "/history?limit=2", { transport: "unix", username: "leo" })
@@ -364,6 +368,20 @@ describe("projectRegistryApiHandlerCreate", () => {
     })
     expect(repository.ownerHistoryCalls).toEqual([{ owner: "leo", limit: 2 }])
     expect(repository.historyKeys).toEqual([])
+  })
+
+  test("does not classify unstructured result messages as HTTP errors", async () => {
+    const repository = repositoryCreate()
+    repository.ownerHistoryResult = createResultError("projectRepositoryOwnerHistory", "project not found")
+    const handler = projectRegistryApiHandlerCreate({ repository, caddyApplication: caddyApplicationCreate() })
+
+    const history = await requestJson(handler, "/history?limit=2", {
+      transport: "unix",
+      username: "leo",
+    })
+
+    expect(history.response.status).toBe(500)
+    expect(history.body).toMatchObject({ success: false, code: "platform.internal" })
   })
 
   test("isolates leo and david and rejects cross-owner versioned reads before repository access", async () => {
@@ -699,6 +717,49 @@ describe("projectRegistryApiHandlerCreate", () => {
     expect(crossOwner.response.status).toBe(403)
   })
 
+  test("returns distinct structured documentation failures and safe enablement hints", async () => {
+    const repository = repositoryCreate()
+    repository.projects.push(
+      docsProjectCreate("leo", "docsapp", ["docs.example"]),
+      docsProjectCreate("leo", "disabled-docs", ["disabled.example"], { disabled: true }),
+      docsProjectCreate("leo", "no-docs", ["no-docs.example"], { docs: false }),
+    )
+    const handler = projectRegistryApiHandlerCreate({ repository, caddyApplication: caddyApplicationCreate() })
+    const leo = { transport: "unix", username: "leo" } as const
+
+    const disabled = await requestJson(handler, "/api/v1/users/leo/projects/disabled-docs/docs?path=guide.md", leo)
+    expect(disabled.response.status).toBe(409)
+    expect(disabled.body).toMatchObject({
+      success: false,
+      error: {
+        code: "projects.disabled",
+        hint: "Run: project-registry project edit disabled-docs --enabled --docs",
+      },
+    })
+
+    const noDocs = await requestJson(handler, "/api/v1/users/leo/projects/no-docs/docs?path=guide.md", leo)
+    expect(noDocs.response.status).toBe(409)
+    expect(noDocs.body).toMatchObject({
+      success: false,
+      error: {
+        code: "documentation.disabled",
+        hint: "Run: project-registry project edit no-docs --docs",
+      },
+    })
+
+    const invalidPath = await requestJson(handler, "/api/v1/users/leo/projects/docsapp/docs?path=guide.html", leo)
+    expect(invalidPath.response.status).toBe(400)
+    expect(invalidPath.body).toMatchObject({ success: false, error: { code: "documentation.invalid-path" } })
+
+    const invalidOptions = await requestJson(
+      handler,
+      "/api/v1/users/leo/projects/docsapp/docs?path=guide.md&scheme=ftp",
+      leo,
+    )
+    expect(invalidOptions.response.status).toBe(400)
+    expect(invalidOptions.body).toMatchObject({ success: false, error: { code: "documentation.invalid-options" } })
+  })
+
   test("keeps legacy docs errors scoped, safe, and GET-only", async () => {
     const repository = repositoryCreate()
     repository.projects.push(
@@ -722,13 +783,16 @@ describe("projectRegistryApiHandlerCreate", () => {
     expect(crossOwner.response.status).toBe(404)
     expect(crossOwner.body).toEqual(notFound.body)
 
-    for (const name of ["disabled-docs", "no-docs"]) {
+    for (const [name, errorMessage] of [
+      ["disabled-docs", "documentation project is disabled"],
+      ["no-docs", "documentation is disabled"],
+    ] as const) {
       const unavailable = await requestJson(handler, `/projects/${name}/docs?path=guide.md`, leo)
       expect(unavailable.response.status).toBe(400)
       expect(unavailable.body).toEqual({
         success: false,
         op: "projectDocsUrlsUseCase",
-        errorMessage: "documentation is unavailable",
+        errorMessage,
       })
     }
 
@@ -738,7 +802,7 @@ describe("projectRegistryApiHandlerCreate", () => {
       expect(invalid.body).toEqual({
         success: false,
         op: "projectDocsUrlsUseCase",
-        errorMessage: "documentation URL could not be generated",
+        errorMessage: "documentation path is invalid",
       })
     }
 
@@ -958,6 +1022,12 @@ describe("projectRegistryApiHandlerCreate", () => {
     expect(missing.response.status).toBe(404)
     expect(unauthorized.response.status).toBe(404)
     expect(missing.body).toEqual(unauthorized.body)
+    expect(missing.body).toMatchObject({
+      error: {
+        code: "access-log.not-found",
+        hint: "Check the project name and your access permissions, then refresh the list.",
+      },
+    })
     expect(missing.response.headers.get("cache-control")).toBe("no-store")
     expect(source.calls).toHaveLength(0)
   })
@@ -982,7 +1052,33 @@ describe("projectRegistryApiHandlerCreate", () => {
 
     const malformed = await requestJson(handler, "/api/v1/users/leo/projects/opencode/access-logs?limit=0", leo)
     expect(malformed.response.status).toBe(400)
-    expect(malformed.body).toMatchObject({ success: false, error: { code: "access-log.invalid-input", status: 400 } })
+    expect(malformed.body).toMatchObject({
+      success: false,
+      error: {
+        code: "access-log.invalid-input",
+        status: 400,
+        hint: "Use a limit from 1 through 1000 and a cursor returned by the API.",
+      },
+    })
+
+    source.result = {
+      ...createResultError("projectAccessLogSourceFile", "access log cursor is invalid"),
+      code: "access-log.invalid-cursor",
+    } as unknown as Result<ProjectAccessLogPage>
+    const invalidCursor = await requestJson(
+      handler,
+      "/api/v1/users/leo/projects/opencode/access-logs?before=opaque",
+      leo,
+    )
+    expect(invalidCursor.response.status).toBe(400)
+    expect(invalidCursor.body).toMatchObject({
+      success: false,
+      error: {
+        code: "access-log.invalid-cursor",
+        status: 400,
+        hint: "Use a cursor returned by the API.",
+      },
+    })
 
     source.result = {
       ...createResultError("projectAccessLogSourceFile", "access log cursor has expired"),
@@ -990,7 +1086,14 @@ describe("projectRegistryApiHandlerCreate", () => {
     } as unknown as Result<ProjectAccessLogPage>
     const expired = await requestJson(handler, "/api/v1/users/leo/projects/opencode/access-logs?before=opaque", leo)
     expect(expired.response.status).toBe(410)
-    expect(expired.body).toMatchObject({ success: false, error: { code: "access-log.cursor-expired", status: 410 } })
+    expect(expired.body).toMatchObject({
+      success: false,
+      error: {
+        code: "access-log.cursor-expired",
+        status: 410,
+        hint: "Refresh the access-log list to start a new page.",
+      },
+    })
 
     source.result = {
       ...createResultError("projectAccessLogSourceFile", "access log storage is unavailable"),
@@ -1000,7 +1103,28 @@ describe("projectRegistryApiHandlerCreate", () => {
     expect(storageUnavailable.response.status).toBe(503)
     expect(storageUnavailable.body).toMatchObject({
       success: false,
-      error: { code: "access-log.storage-unavailable", status: 503, retryable: true },
+      error: {
+        code: "access-log.storage-unavailable",
+        status: 503,
+        retryable: true,
+        hint: "Check the configured access-log directory and daemon permissions, then retry.",
+      },
+    })
+
+    source.result = {
+      ...createResultError("projectAccessLogSourceFile", "access log changed while being read"),
+      code: "access-log.rotation-race",
+    } as unknown as Result<ProjectAccessLogPage>
+    const transient = await requestJson(handler, "/api/v1/users/leo/projects/opencode/access-logs", leo)
+    expect(transient.response.status).toBe(503)
+    expect(transient.body).toMatchObject({
+      success: false,
+      error: {
+        code: "access-log.rotation-race",
+        status: 503,
+        retryable: true,
+        hint: "The log changed while it was being read. Refresh the list and retry.",
+      },
     })
 
     for (const name of ["disabled", "catalog"]) {
@@ -1008,10 +1132,15 @@ describe("projectRegistryApiHandlerCreate", () => {
       expect(unavailable.response.status).toBe(503)
       expect(unavailable.body).toMatchObject({
         success: false,
-        error: { code: "access-log.unavailable", status: 503, retryable: true },
+        error: {
+          code: "access-log.unavailable",
+          status: 503,
+          retryable: true,
+          hint: "Enable access-log storage in the daemon configuration and retry.",
+        },
       })
     }
-    expect(source.calls).toHaveLength(2)
+    expect(source.calls).toHaveLength(4)
 
     const storageDisabled = projectRegistryApiHandlerCreate({
       repository,
@@ -1019,7 +1148,14 @@ describe("projectRegistryApiHandlerCreate", () => {
     })
     const storage = await requestJson(storageDisabled, "/api/v1/users/leo/projects/opencode/access-logs", leo)
     expect(storage.response.status).toBe(503)
-    expect(storage.body).toMatchObject({ success: false, error: { code: "access-log.unavailable", status: 503 } })
+    expect(storage.body).toMatchObject({
+      success: false,
+      error: {
+        code: "access-log.unavailable",
+        status: 503,
+        hint: "Enable access-log storage in the daemon configuration and retry.",
+      },
+    })
     expect(storage.response.headers.get("cache-control")).toBe("no-store")
   })
 

@@ -67,8 +67,8 @@ function inputValidate(input: unknown): Result<{ limit: number; before?: string 
   return createResult({ limit: limit as number, ...(before === undefined ? {} : { before }) })
 }
 
-function projectFailureCode(errorMessage: string): ProjectAccessLogListErrorCode {
-  if (/not found|not authorized|current role|actor|session|identity|owner|role|mapping/i.test(errorMessage)) {
+function projectFailureCode(code: unknown): ProjectAccessLogListErrorCode {
+  if (code === "projects.not-found" || code === "projects.forbidden") {
     return "access-log.not-found"
   }
   return "access-log.unavailable"
@@ -101,8 +101,7 @@ export async function projectAccessLogListUseCase(
   if (!inputR.success) return inputR
 
   const projectR = await projectGetUseCase(options, key)
-  if (!projectR.success)
-    return listError(projectFailureCode(projectR.errorMessage), "Project access logs are unavailable.")
+  if (!projectR.success) return listError(projectFailureCode(projectR.code), "Project access logs are unavailable.")
 
   const caddy = projectR.data.project.caddy
   if (caddy === undefined || caddy === null || caddy.disabled) {

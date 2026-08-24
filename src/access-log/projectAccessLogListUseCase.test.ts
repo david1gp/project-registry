@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { createResult, createResultError, type Result } from "#result"
+import { createResult, createResultError, createResultErrorCode, type Result } from "#result"
 import { caddyAccessLogFixture } from "../../test/fixtures/caddyAccessLogFixture.js"
 import type { Actor } from "../access/Actor.js"
 import type { ProjectAccess } from "../access/ProjectAccess.js"
@@ -42,7 +42,8 @@ function repositoryCreate(
   return {
     get: async () => {
       if (failure !== undefined) return failure
-      if (value === undefined) return createResultError("projectRepositoryGet", "project not found")
+      if (value === undefined)
+        return createResultErrorCode("projectRepositoryGet", "project not found", "projects.not-found")
       return createResult({ project: value, revision })
     },
   } as unknown as ProjectRepository
@@ -133,6 +134,21 @@ describe("projectAccessLogListUseCase", () => {
 
     expect(missing).toEqual(unauthorized)
     expect(missing).toMatchObject({ success: false, code: "access-log.not-found" })
+  })
+
+  test("does not infer inaccessible projects from unstructured repository messages", async () => {
+    const result = await projectAccessLogListUseCase(
+      {
+        repository: repositoryCreate(
+          project("alice", "site"),
+          createResultError("projectRepositoryGet", "project not found"),
+        ),
+        access: accessCreate({ subject: "s", username: "alice", role: "own" }, "own"),
+      },
+      { owner: "alice", name: "site" },
+    )
+
+    expect(result).toMatchObject({ success: false, code: "access-log.unavailable" })
   })
 
   test.each([undefined, true])("does not read disabled, catalog-only, or disabled storage", async (disabled) => {

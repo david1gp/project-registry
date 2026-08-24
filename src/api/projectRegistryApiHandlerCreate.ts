@@ -1,4 +1,4 @@
-import { createResult, createResultError, type Result } from "#result"
+import { createResult, createResultError, type Result, type ResultErr } from "#result"
 import type { ProjectAccess } from "../access/ProjectAccess.js"
 import type { ProjectAccessLogSource } from "../access-log/ProjectAccessLogSource.js"
 import { projectAccessLogListUseCase } from "../access-log/projectAccessLogListUseCase.js"
@@ -44,11 +44,7 @@ type ApiRoute =
   | { kind: "status"; legacy: false }
   | { kind: "regenerate"; legacy: boolean }
 
-type ResultFailure = {
-  success: false
-  op: string
-  errorMessage: string
-}
+type ResultFailure = ResultErr & { hint?: string }
 
 type ApiFailure = {
   code: string
@@ -57,11 +53,36 @@ type ApiFailure = {
   status: number
   retryable: boolean
   details: Record<string, never>
+  hint?: string
 }
 
 type ApiFailureInput = Omit<ApiFailure, "retryable" | "details"> & { retryable?: boolean }
 
+const apiFailureStatus: Record<string, number> = {
+  "api.method-not-allowed": 405,
+  "api.not-found": 404,
+  "api.unauthenticated": 401,
+  "caddy.conflict": 409,
+  "caddy.forbidden": 403,
+  "caddy.not-found": 404,
+  "caddy.unavailable": 503,
+  "documentation.disabled": 409,
+  "documentation.invalid-configuration": 500,
+  "documentation.invalid-options": 400,
+  "documentation.invalid-path": 400,
+  "documentation.url-generation-failed": 500,
+  "platform.internal": 500,
+  "projects.conflict": 409,
+  "projects.disabled": 409,
+  "projects.forbidden": 403,
+  "projects.not-found": 404,
+  "request.invalid": 400,
+}
+
 const responseHeaders = { "cache-control": "no-store", "content-type": "application/json" }
+const browserAuthenticationHint = "Sign in again, then retry. If the problem persists, contact an administrator."
+const socketAuthenticationHint =
+  "Check your account access, then retry. If the problem persists, contact an administrator."
 const ownerPattern = /^[A-Za-z_][A-Za-z0-9_.-]*\$?$/
 const projectNamePattern = /^[a-z0-9][a-z0-9-]*$/
 
@@ -82,10 +103,17 @@ function successResponse(data: unknown): Response {
 
 function errorResponse(failure: ApiFailureInput, legacy: boolean, headers?: Record<string, string>): Response {
   if (legacy) {
-    return new Response(
-      JSON.stringify({ success: false, op: failure.op, errorMessage: failure.message, code: failure.code }),
-      { status: failure.status, headers: { ...responseHeaders, ...headers } },
-    )
+    const legacyError = {
+      success: false,
+      op: failure.op,
+      errorMessage: failure.message,
+      code: failure.code,
+      ...(failure.hint === undefined ? {} : { hint: failure.hint }),
+    }
+    return new Response(JSON.stringify(legacyError), {
+      status: failure.status,
+      headers: { ...responseHeaders, ...headers },
+    })
   }
   const { retryable = false, ...failureData } = failure
   const error: ApiFailure = { ...failureData, retryable, details: {} }
@@ -226,26 +254,53 @@ function routeRequiresProjectAccess(route: ApiRoute): boolean {
 }
 
 function resultErrorResponse(result: ResultFailure, legacy: boolean, feature: "projects" | "caddy"): Response {
-  const message = result.errorMessage
-  if (/not found|no server block matching/i.test(message)) {
-    return errorResponse({ code: `${feature}.not-found`, message, op: result.op, status: 404 }, legacy)
-  }
-  if (/not authorized|current role is unavailable|requires superadmin/i.test(message)) {
+  const code = result.code
+  const status = code === undefined ? undefined : apiFailureStatus[code]
+  if (code === undefined || status === undefined) {
     return errorResponse(
-      { code: `${feature}.forbidden`, message: "Access is forbidden.", op: result.op, status: 403 },
+      {
+        code: "platform.internal",
+        message: legacy ? result.errorMessage : "The request could not be completed.",
+        op: result.op,
+        status: 500,
+        ...(result.hint === undefined ? {} : { hint: result.hint }),
+      },
       legacy,
     )
   }
-  if (/already exists|collision|conflict|revision mismatch|revision changed|worktree is dirty/i.test(message)) {
-    return errorResponse({ code: `${feature}.conflict`, message, op: result.op, status: 409 }, legacy)
-  }
-  if (/invalid|required|positive integer|must be|immutable|expectedRevision|no free port|port range/i.test(message)) {
-    return errorResponse({ code: "request.invalid", message, op: result.op, status: 400 }, legacy)
-  }
+
   return errorResponse(
-    { code: "platform.internal", message: "The request could not be completed.", op: result.op, status: 500 },
+    {
+      code,
+      message: code === `${feature}.forbidden` ? "Access is forbidden." : result.errorMessage,
+      op: result.op,
+      status,
+      ...(result.hint === undefined ? {} : { hint: result.hint }),
+    },
     legacy,
   )
+}
+
+function resultHint(result: ResultFailure): { hint?: string } {
+  return result.hint === undefined ? {} : { hint: result.hint }
+}
+
+const accessLogHints: Record<string, string> = {
+  "access-log.not-found": "Check the project name and your access permissions, then refresh the list.",
+  "access-log.unavailable": "Enable access-log storage in the daemon configuration and retry.",
+  "access-log.invalid-input": "Use a limit from 1 through 1000 and a cursor returned by the API.",
+  "access-log.invalid-cursor": "Use a cursor returned by the API.",
+  "access-log.cursor-expired": "Refresh the access-log list to start a new page.",
+  "access-log.rotation-race": "The log changed while it was being read. Refresh the list and retry.",
+  "access-log.storage-unavailable": "Check the configured access-log directory and daemon permissions, then retry.",
+  "access-log.resource-limit": "Reduce the requested page size and retry.",
+  "access-log.symlink": "Check the access-log directory and daemon permissions, then retry.",
+  "access-log.non-regular-file": "Check the access-log directory and daemon permissions, then retry.",
+}
+
+function accessLogHint(code: string | undefined, result?: ResultFailure): { hint?: string } {
+  if (result?.hint !== undefined) return { hint: result.hint }
+  return code === undefined || accessLogHints[code] === undefined ? {} : { hint: accessLogHints[code] }
 }
 
 function accessLogErrorResponse(result: ResultFailure): Response {
@@ -257,15 +312,22 @@ function accessLogErrorResponse(result: ResultFailure): Response {
         message: "Project access logs are unavailable.",
         op: result.op,
         status: 404,
+        ...accessLogHint(code, result),
       },
       false,
     )
   }
   if (code === "access-log.invalid-input" || code === "access-log.invalid-cursor") {
-    return errorResponse({ code, message: result.errorMessage, op: result.op, status: 400 }, false)
+    return errorResponse(
+      { code, message: result.errorMessage, op: result.op, status: 400, ...accessLogHint(code, result) },
+      false,
+    )
   }
   if (code === "access-log.cursor-expired") {
-    return errorResponse({ code, message: result.errorMessage, op: result.op, status: 410 }, false)
+    return errorResponse(
+      { code, message: result.errorMessage, op: result.op, status: 410, ...accessLogHint(code, result) },
+      false,
+    )
   }
   if (code === "access-log.unavailable" || code === undefined || code.startsWith("access-log.")) {
     return errorResponse(
@@ -275,6 +337,7 @@ function accessLogErrorResponse(result: ResultFailure): Response {
         op: result.op,
         status: 503,
         retryable: true,
+        ...accessLogHint(code ?? "access-log.unavailable", result),
       },
       false,
     )
@@ -285,6 +348,7 @@ function accessLogErrorResponse(result: ResultFailure): Response {
       message: "The request could not be completed.",
       op: result.op,
       status: 500,
+      ...resultHint(result),
     },
     false,
   )
@@ -507,6 +571,7 @@ export function projectRegistryApiHandlerCreate(options: ApiHandlerOptions): Pro
           message: "Authentication is required.",
           op: "projectRegistryApiAuthenticate",
           status: 401,
+          hint: browserAuthenticationHint,
         },
         route.legacy,
       )
@@ -535,6 +600,7 @@ export function projectRegistryApiHandlerCreate(options: ApiHandlerOptions): Pro
             message: "Authentication is required.",
             op: "projectRegistryApiSocketAccessResolve",
             status: 401,
+            hint: socketAuthenticationHint,
           },
           route.legacy,
         )
@@ -547,6 +613,7 @@ export function projectRegistryApiHandlerCreate(options: ApiHandlerOptions): Pro
             message: "Authentication is required.",
             op: accessR.op,
             status: 401,
+            hint: socketAuthenticationHint,
           },
           route.legacy,
         )
@@ -560,6 +627,7 @@ export function projectRegistryApiHandlerCreate(options: ApiHandlerOptions): Pro
           message: "Authentication is required.",
           op: "projectRegistryApiAuthenticate",
           status: 401,
+          hint: context.transport === "http" ? browserAuthenticationHint : socketAuthenticationHint,
         },
         route.legacy,
       )
@@ -583,42 +651,37 @@ export function projectRegistryApiHandlerCreate(options: ApiHandlerOptions): Pro
         owner,
         projectName: route.name,
         relativePath: url.searchParams.get("path") ?? "",
-        scheme: url.searchParams.get("scheme") === "http" ? "http" : "https",
+        scheme: url.searchParams.get("scheme") ?? undefined,
       })
       if (docsR.success) return successResponse(docsR.data)
-      if (!docsR.errorMessage.startsWith("documentation")) {
-        return resultErrorResponse(docsR, route.legacy, "projects")
+      if (route.legacy) {
+        const status =
+          docsR.code === "projects.not-found"
+            ? 404
+            : [
+                  "documentation.disabled",
+                  "documentation.invalid-options",
+                  "documentation.invalid-path",
+                  "projects.disabled",
+                ].includes(docsR.code ?? "")
+              ? 400
+              : 500
+        return legacyDocsErrorResponse(docsR, status)
       }
-
-      const status =
-        docsR.errorMessage === "documentation project is unavailable"
-          ? 404
-          : docsR.errorMessage.startsWith("documentation")
-            ? 400
-            : 500
-      if (route.legacy) return legacyDocsErrorResponse(docsR, status)
-      if (status === 404) {
-        return errorResponse({ code: "projects.not-found", message: docsR.errorMessage, op: docsR.op, status }, false)
-      }
-      if (status === 400) {
-        return errorResponse({ code: "request.invalid", message: docsR.errorMessage, op: docsR.op, status }, false)
-      }
-      return errorResponse(
-        {
-          code: "platform.internal",
-          message: "The request could not be completed.",
-          op: docsR.op,
-          status: 500,
-        },
-        false,
-      )
+      return resultErrorResponse(docsR, false, "projects")
     }
 
     if (route.kind === "access-logs" || route.kind === "self-access-logs") {
       const inputR = accessLogInputParse(url)
       if (!inputR.success) {
         return errorResponse(
-          { code: "access-log.invalid-input", message: inputR.errorMessage, op: inputR.op, status: 400 },
+          {
+            code: "access-log.invalid-input",
+            message: inputR.errorMessage,
+            op: inputR.op,
+            status: 400,
+            ...accessLogHint("access-log.invalid-input"),
+          },
           false,
         )
       }

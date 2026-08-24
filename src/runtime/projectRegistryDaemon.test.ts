@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import { chmod as fsChmod, chown as fsChown, lstat as fsLstat, mkdtemp, rm, symlink } from "node:fs/promises"
 import { join } from "node:path"
-import { createResult, createResultError } from "#result"
+import { createResult, createResultError, createResultErrorCode } from "#result"
 import { caddyConfigGenerateFixtures } from "../../test/fixtures/caddyConfigGenerateFixtures.js"
 import type { ProjectAccess } from "../access/ProjectAccess.js"
 import type { Role } from "../access/Role.js"
@@ -607,7 +607,13 @@ describe("projectRegistryDaemonCreate", () => {
 
     const denied = await http.fetch(new Request("http://localhost/api/v1/users/leo/projects"))
     expect(denied.status).toBe(401)
-    expect(await denied.json()).toMatchObject({ success: false, error: { code: "api.unauthenticated" } })
+    expect(await denied.json()).toMatchObject({
+      success: false,
+      error: {
+        code: "api.unauthenticated",
+        hint: "Sign in again, then retry. If the problem persists, contact an administrator.",
+      },
+    })
 
     const listed = await unix.fetch(new Request("http://localhost/api/v1/users/leo/projects"))
     expect(listed.status).toBe(200)
@@ -633,7 +639,7 @@ describe("projectRegistryDaemonCreate", () => {
     apiRepository.get = async (key) => {
       const project = projects.find((item) => item.owner === key.owner && item.name === key.name)
       return project === undefined
-        ? createResultError("projectRepositoryGet", "project not found")
+        ? createResultErrorCode("projectRepositoryGet", "project not found", "projects.not-found")
         : createResult({ project, revision: "a".repeat(40) })
     }
     const ownerRoles: Record<string, Role | undefined> = { alice: "own", bob: "own", root: "superadmin" }
@@ -719,7 +725,7 @@ describe("projectRegistryDaemonCreate", () => {
     apiRepository.get = async (key) => {
       const project = projects.find((item) => item.owner === key.owner && item.name === key.name)
       return project === undefined
-        ? createResultError("projectRepositoryGet", "project not found")
+        ? createResultErrorCode("projectRepositoryGet", "project not found", "projects.not-found")
         : createResult({ project, revision: "a".repeat(40) })
     }
     const daemonR = projectRegistryDaemonCreate({
