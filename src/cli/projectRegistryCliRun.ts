@@ -1,6 +1,7 @@
 import * as a from "valibot"
 import { createResult, createResultError, type Result, type ResultErr } from "#result"
 import type { Project } from "../project/Project.js"
+import { projectLabelsSchema } from "../project/projectLabelsSchema.js"
 import { projectSchema } from "../project/projectSchema.js"
 import type { ProjectRegistryCliFetch } from "./ProjectRegistryCliFetch.js"
 import type { ProjectRegistryCliInvocation } from "./ProjectRegistryCliInvocation.js"
@@ -79,13 +80,104 @@ function revisionParse(data: unknown): Result<string> {
   return createResult(revision)
 }
 
+function recordValue(input: unknown): Record<string, unknown> | undefined {
+  if (typeof input !== "object" || input === null || Array.isArray(input)) return undefined
+  return input as Record<string, unknown>
+}
+
+function currentProjectLabelsParse(data: unknown): Result<Record<string, string>> {
+  const op = "projectRegistryCliCurrentProjectLabelsParse"
+  const response = recordValue(data)
+  const project = recordValue(response?.project)
+  if (project === undefined) return createResultError(op, "project-registryd returned malformed current project data.")
+  const labels = Object.hasOwn(project, "labels") ? project.labels : {}
+  const parsed = a.safeParse(projectLabelsSchema, labels)
+  if (!parsed.success) return createResultError(op, "project-registryd returned malformed current project labels.")
+  return createResult(parsed.output)
+}
+
+function projectLabelSet(labels: Record<string, string>, key: string, value: string): void {
+  Object.defineProperty(labels, key, {
+    configurable: true,
+    enumerable: true,
+    value,
+    writable: true,
+  })
+}
+
 const projectListResponseSchema = a.object({ projects: a.array(projectSchema) })
+const projectResponseSchema = a.object({ project: projectSchema, revision: a.string() })
 
 function projectListResponseParse(data: unknown): Result<readonly Project[]> {
   const op = "projectRegistryCliProjectListResponseParse"
   const parsed = a.safeParse(projectListResponseSchema, data)
   if (!parsed.success) return createResultError(op, "project-registryd returned malformed project list data.")
   return createResult(parsed.output.projects)
+}
+
+function projectCliReadMap(project: Project): Record<string, unknown> {
+  const caddy = project.caddy
+  return {
+    name: project.name,
+    user: project.owner,
+    port: caddy?.port,
+    domains: caddy?.domains ?? [],
+    path: caddy?.path ?? "",
+    access: caddy?.access ?? "external",
+    kind: caddy?.kind ?? "proxy",
+    docs: caddy?.docs ?? false,
+    browse: caddy?.browse ?? false,
+    headerUp: caddy?.headerUp ?? {},
+    disabled: caddy?.disabled ?? true,
+    routed: caddy?.routed,
+    oidcPaths: caddy?.oidcPaths,
+    docsPath: caddy?.docsPath,
+    browseTemplate: caddy?.browseTemplate,
+    staticAllow: caddy?.staticAllow,
+    denyDotfiles: caddy?.denyDotfiles,
+    spa: caddy?.spa,
+    flushInterval: caddy?.flushInterval,
+    labels: project.labels,
+  }
+}
+
+async function jsonProjectReadRequest(
+  command: Extract<ProjectRegistryCliInvocation["command"], { kind: "project-list" | "project-get" }>,
+  socketPath: string,
+  environment: Readonly<Record<string, string | undefined>>,
+  requestFetch?: ProjectRegistryCliFetch,
+): Promise<Result<unknown>> {
+  const ownerR = ownerResolve(environment)
+  if (!ownerR.success) return ownerR
+  const ownerPath = encodeURIComponent(ownerR.data)
+  const path =
+    command.kind === "project-list"
+      ? `/api/v1/users/${ownerPath}/projects`
+      : `/api/v1/users/${ownerPath}/projects/${encodeURIComponent(command.name)}`
+  const responseR = await projectRegistryCliRequest(socketPath, path, {}, requestFetch)
+  if (!responseR.success) return responseR
+
+  if (command.kind === "project-list") {
+    if (Array.isArray(responseR.data)) return responseR
+    const parsedR = a.safeParse(projectListResponseSchema, responseR.data)
+    if (!parsedR.success)
+      return createResultError(
+        "projectRegistryCliProjectListResponseParse",
+        "project-registryd returned malformed project list data.",
+      )
+    return createResult(parsedR.output.projects.map(projectCliReadMap))
+  }
+  const legacyProject = recordValue(responseR.data)
+  if (legacyProject !== undefined && typeof legacyProject.name === "string" && typeof legacyProject.user === "string") {
+    return responseR
+  }
+  const parsedR = a.safeParse(projectResponseSchema, responseR.data)
+  if (!parsedR.success)
+    return createResultError(
+      "projectRegistryCliProjectResponseParse",
+      "project-registryd returned malformed project data.",
+    )
+  return createResult(projectCliReadMap(parsedR.output.project))
 }
 
 async function commandRequest(
@@ -95,6 +187,9 @@ async function commandRequest(
   requestFetch?: ProjectRegistryCliFetch,
 ): Promise<Result<unknown>> {
   const command = invocation.command
+  if (invocation.json && (command.kind === "project-list" || command.kind === "project-get")) {
+    return jsonProjectReadRequest(command, socketPath, environment, requestFetch)
+  }
   if (
     command.kind !== "project-create" &&
     command.kind !== "project-edit" &&
@@ -164,11 +259,27 @@ async function commandRequest(
   if (command.kind === "project-create") {
     options = {
       method: "POST",
-      body: { expectedRevision: revisionR.data, name: command.name, caddy: command.caddy },
+      body: {
+        expectedRevision: revisionR.data,
+        name: command.name,
+        caddy: command.caddy,
+        ...(command.labels === undefined ? {} : { labels: command.labels }),
+      },
     }
   } else if (command.kind === "project-edit") {
     const body: Record<string, unknown> = { expectedRevision: revisionR.data }
     if (Object.keys(command.caddy).length > 0) body.caddy = command.caddy
+    const hasLabelOptions =
+      command.labels !== undefined || command.removeLabels !== undefined || command.clearLabels === true
+    if (hasLabelOptions) {
+      const labelsR = currentProjectLabelsParse(currentR.data)
+      if (!labelsR.success) return labelsR
+      let labels = labelsR.data
+      if (command.clearLabels === true) labels = {}
+      for (const key of command.removeLabels ?? []) delete labels[key]
+      for (const [key, value] of Object.entries(command.labels ?? {})) projectLabelSet(labels, key, value)
+      body.labels = labels
+    }
     options = { method: "PATCH", body }
   } else {
     options = { method: "DELETE", body: { expectedRevision: revisionR.data } }

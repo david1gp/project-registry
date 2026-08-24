@@ -6,8 +6,15 @@ export type ProjectRegistryCliInvocation = {
     | { kind: "version" }
     | { kind: "project-list" }
     | { kind: "project-get"; name: string }
-    | { kind: "project-create"; name: string; caddy: ProjectRegistryCliCaddyOptions }
-    | { kind: "project-edit"; name: string; caddy: ProjectRegistryCliCaddyOptions }
+    | { kind: "project-create"; name: string; caddy: ProjectRegistryCliCaddyOptions; labels?: Record<string, string> }
+    | {
+        kind: "project-edit"
+        name: string
+        caddy: ProjectRegistryCliCaddyOptions
+        labels?: Record<string, string>
+        removeLabels?: string[]
+        clearLabels?: boolean
+      }
     | { kind: "project-delete"; name: string }
     | { kind: "project-delete-by-port"; port: number }
     | { kind: "project-history"; name: string; limit?: number }

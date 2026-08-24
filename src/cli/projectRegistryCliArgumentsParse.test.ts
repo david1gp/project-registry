@@ -110,6 +110,58 @@ describe("projectRegistryCliArgumentsParse", () => {
     })
   })
 
+  test("parses repeatable label edits without unsafe key assignment", () => {
+    const result = projectRegistryCliArgumentsParse([
+      "project",
+      "edit",
+      "site",
+      "--label",
+      "team=platform",
+      "--label=team=core",
+      "--label",
+      "__proto__=safe=value",
+      "--remove-label",
+      "old",
+      "--remove-label=other",
+      "--clear-labels",
+    ])
+
+    expect(result).toEqual({
+      success: true,
+      data: {
+        command: {
+          kind: "project-edit",
+          name: "site",
+          caddy: {},
+          labels: { team: "core", ["__proto__"]: "safe=value" },
+          removeLabels: ["old", "other"],
+          clearLabels: true,
+        },
+        json: false,
+        socket: undefined,
+      },
+    })
+  })
+
+  test("accepts labels on create and preserves empty values", () => {
+    const result = projectRegistryCliArgumentsParse([
+      "project",
+      "create",
+      "--name",
+      "site",
+      "--domain",
+      "site.example",
+      "--label",
+      "team=",
+      "--label=note=value=with=equals",
+    ])
+
+    expect(result).toMatchObject({
+      success: true,
+      data: { command: { labels: { team: "", note: "value=with=equals" } } },
+    })
+  })
+
   test.each([
     ["--docs", "--no-docs"],
     ["--browse", "--no-browse"],
@@ -136,6 +188,13 @@ describe("projectRegistryCliArgumentsParse", () => {
     [["docs", "site", "guide.md", "extra"], "Unknown command or invalid syntax: docs site guide.md extra."],
     [["docs", "site", "guide.md", "--docs"], "Unknown command or invalid syntax: docs site guide.md."],
     [["project", "edit", "site", "--header-up", "invalid"], "Option --header-up requires K=V, got: invalid."],
+    [["project", "edit", "site", "--label", "invalid"], "Option --label requires K=V, got: invalid."],
+    [["project", "edit", "site", "--label", "=value"], "Option --label requires a non-blank key."],
+    [["project", "edit", "site", "--remove-label", " "], "Option --remove-label requires a non-blank key."],
+    [
+      ["project", "create", "--name", "site", "--domain", "site.example", "--clear-labels"],
+      "Options --remove-label and --clear-labels are only valid for project edit.",
+    ],
     [["project", "edit", "site", "--port", "0"], "Option --port requires an integer from 1 through 65535."],
     [["project", "edit", "site", "--flush-interval=NaN"], "Option --flush-interval requires a finite number."],
     [["history", "--limit", "0"], "Option --limit requires a positive integer."],

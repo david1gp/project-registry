@@ -51,6 +51,8 @@ export function projectRegistryCliArgumentsParse(args: readonly string[]): Resul
   const positionals: string[] = []
   const domains: string[] = []
   const headerUpEntries: string[] = []
+  const labels: Record<string, string> = {}
+  const removeLabels: string[] = []
   const seen = new Set<string>()
   const booleans = new Set<string>()
   let socket: string | undefined
@@ -66,6 +68,8 @@ export function projectRegistryCliArgumentsParse(args: readonly string[]): Resul
   let json = false
   let help = false
   let version = false
+  let hasLabels = false
+  let clearLabels = false
 
   for (let index = 0; index < args.length; index += 1) {
     const argument = args[index]!
@@ -89,10 +93,12 @@ export function projectRegistryCliArgumentsParse(args: readonly string[]): Resul
       "--spa",
       "--no-spa",
       "--http",
+      "--clear-labels",
     ]
     if (booleanNames.includes(argument)) {
       if (booleans.has(argument)) return createResultError(op, `Option ${argument} may only be provided once.`)
       booleans.add(argument)
+      if (argument === "--clear-labels") clearLabels = true
       continue
     }
 
@@ -106,13 +112,16 @@ export function projectRegistryCliArgumentsParse(args: readonly string[]): Resul
       "--kind",
       "--access",
       "--header-up",
+      "--label",
+      "--remove-label",
       "--flush-interval",
       "--owner",
       "--before",
     ]
     const option = optionNames.find((name) => argument === name || argument.startsWith(`${name}=`))
     if (option !== undefined) {
-      const repeatable = option === "--domain" || option === "--header-up"
+      const repeatable =
+        option === "--domain" || option === "--header-up" || option === "--label" || option === "--remove-label"
       if (!repeatable && seen.has(option)) return createResultError(op, `Option ${option} may only be provided once.`)
       seen.add(option)
       const value = optionValue(argument, option, args, index)
@@ -197,6 +206,28 @@ export function projectRegistryCliArgumentsParse(args: readonly string[]): Resul
         headerUpEntries.push(value)
         continue
       }
+      if (option === "--label") {
+        if (value === undefined || !value.includes("=")) {
+          return createResultError(op, `Option --label requires K=V${value === undefined ? "." : `, got: ${value}.`}`)
+        }
+        const separator = value.indexOf("=")
+        const key = value.slice(0, separator)
+        if (key.trim() === "") return createResultError(op, "Option --label requires a non-blank key.")
+        Object.defineProperty(labels, key, {
+          configurable: true,
+          enumerable: true,
+          value: value.slice(separator + 1),
+          writable: true,
+        })
+        hasLabels = true
+        continue
+      }
+      if (option === "--remove-label") {
+        if (value === undefined || value.trim() === "")
+          return createResultError(op, "Option --remove-label requires a non-blank key.")
+        removeLabels.push(value)
+        continue
+      }
 
       flushInterval = finiteNumberParse(value)
       if (flushInterval === undefined) return createResultError(op, "Option --flush-interval requires a finite number.")
@@ -247,7 +278,8 @@ export function projectRegistryCliArgumentsParse(args: readonly string[]): Resul
   const [subject, action, value, ...extra] = positionals
   const hasCaddyOptions = Object.keys(caddy).length > 0
   const hasOnlyPortOption = port !== undefined && Object.keys(caddy).length === 1
-  const hasMutationOptions = hasCaddyOptions || flagName !== undefined
+  const hasLabelOptions = hasLabels || removeLabels.length > 0 || clearLabels
+  const hasMutationOptions = hasCaddyOptions || flagName !== undefined || hasLabelOptions
   const hasAccessLogOptions = owner !== undefined || before !== undefined
   const hasHttp = booleans.has("--http")
 
@@ -300,7 +332,14 @@ export function projectRegistryCliArgumentsParse(args: readonly string[]): Resul
   ) {
     if (flagName === undefined) return createResultError(op, "Project create requires --name.")
     if (caddy.domains === undefined) return createResultError(op, "Project create requires at least one --domain.")
-    return createResult({ command: { kind: "project-create", name: flagName, caddy }, json, socket })
+    if (removeLabels.length > 0 || clearLabels) {
+      return createResultError(op, "Options --remove-label and --clear-labels are only valid for project edit.")
+    }
+    return createResult({
+      command: { kind: "project-create", name: flagName, caddy, ...(hasLabels ? { labels } : {}) },
+      json,
+      socket,
+    })
   }
   if (
     subject === "project" &&
@@ -313,7 +352,18 @@ export function projectRegistryCliArgumentsParse(args: readonly string[]): Resul
   ) {
     if (!projectNamePattern.test(value)) return projectNameError(op)
     if (flagName !== undefined) return createResultError(op, "Option --name cannot edit an immutable project name.")
-    return createResult({ command: { kind: "project-edit", name: value, caddy }, json, socket })
+    return createResult({
+      command: {
+        kind: "project-edit",
+        name: value,
+        caddy,
+        ...(hasLabels ? { labels } : {}),
+        ...(removeLabels.length > 0 ? { removeLabels } : {}),
+        ...(clearLabels ? { clearLabels: true } : {}),
+      },
+      json,
+      socket,
+    })
   }
   if (
     subject === "delete" &&

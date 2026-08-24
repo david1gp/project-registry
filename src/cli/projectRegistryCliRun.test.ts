@@ -8,6 +8,7 @@ const project = {
   port: 4321,
   domains: ["site.example"],
   kind: "proxy",
+  labels: {},
   access: "external",
 }
 const history = [{ sha: "1234567890abcdef", date: "2026-08-20T12:00:00Z", author: "Registry", message: "created" }]
@@ -202,6 +203,46 @@ describe("projectRegistryCliRun", () => {
     expect(stdout.join("")).toBe(`${JSON.stringify({ success: true, data: [project] })}\n`)
   })
 
+  test("includes labels in versioned JSON list and get reads", async () => {
+    const versionedProject = {
+      schemaVersion: 1,
+      owner: "david",
+      name: "site",
+      labels: { team: "platform", ["__proto__"]: "safe" },
+      caddy: { port: 4321, domains: ["site.example"] },
+    }
+    const paths: string[] = []
+    const requestFetch = async (input: string | URL | Request) => {
+      const path = new URL(String(input)).pathname
+      paths.push(path)
+      const data = path.endsWith("/projects")
+        ? { projects: [versionedProject], revision: "current" }
+        : { project: versionedProject, revision: "current" }
+      return Response.json({ success: true, data })
+    }
+    const listOutput: string[] = []
+    const getOutput: string[] = []
+
+    expect(
+      await projectRegistryCliRun(["project", "list", "--json"], {
+        environment: { USER: "david" },
+        requestFetch,
+        stdout: (text) => listOutput.push(text),
+      }),
+    ).toBe(0)
+    expect(
+      await projectRegistryCliRun(["project", "get", "site", "--json"], {
+        environment: { USER: "david" },
+        requestFetch,
+        stdout: (text) => getOutput.push(text),
+      }),
+    ).toBe(0)
+
+    expect(paths).toEqual(["/api/v1/users/david/projects", "/api/v1/users/david/projects/site"])
+    expect(JSON.parse(listOutput.join("")).data[0].labels).toEqual({ team: "platform", ["__proto__"]: "safe" })
+    expect(JSON.parse(getOutput.join("")).data.labels).toEqual({ team: "platform", ["__proto__"]: "safe" })
+  })
+
   test("creates with the current revision and exact nested Caddy payload", async () => {
     const requests: Array<{ path: string; method: string; body?: unknown }> = []
     const stdout: string[] = []
@@ -220,6 +261,8 @@ describe("projectRegistryCliRun", () => {
         "--no-docs",
         "--header-up",
         "Host=localhost",
+        "--label",
+        "team=platform",
       ],
       {
         environment: { USER: "david" },
@@ -252,6 +295,7 @@ describe("projectRegistryCliRun", () => {
             docs: false,
             headerUp: { Host: "localhost" },
           },
+          labels: { team: "platform" },
         },
       },
     ])
@@ -306,6 +350,54 @@ describe("projectRegistryCliRun", () => {
     expect(bodies).toEqual([
       { expectedRevision: "current", caddy: { domains: ["new.example"], disabled: false, spa: false } },
     ])
+  })
+
+  test("computes a complete replacement map for label edits", async () => {
+    const bodies: unknown[] = []
+    const exitCode = await projectRegistryCliRun(
+      ["project", "edit", "site", "--label", "team=core", "--remove-label", "old"],
+      {
+        environment: { USER: "david" },
+        requestFetch: async (_input, init) => {
+          if (init?.method === "PATCH") {
+            bodies.push(typeof init.body === "string" ? JSON.parse(init.body) : undefined)
+            return Response.json({ success: true, data: mutation("edit") })
+          }
+          return Response.json({
+            success: true,
+            data: {
+              project: { labels: { team: "platform", old: "remove", ["__proto__"]: "safe" } },
+              revision: "current",
+            },
+          })
+        },
+        stdout: () => {},
+      },
+    )
+
+    expect(exitCode).toBe(0)
+    expect(bodies).toEqual([{ expectedRevision: "current", labels: { team: "core", ["__proto__"]: "safe" } }])
+  })
+
+  test("clears current labels before applying new labels", async () => {
+    const bodies: unknown[] = []
+    const exitCode = await projectRegistryCliRun(
+      ["project", "edit", "site", "--clear-labels", "--label", "new=value"],
+      {
+        environment: { USER: "david" },
+        requestFetch: async (_input, init) => {
+          if (init?.method === "PATCH") {
+            bodies.push(typeof init.body === "string" ? JSON.parse(init.body) : undefined)
+            return Response.json({ success: true, data: mutation("edit") })
+          }
+          return Response.json({ success: true, data: { project: { labels: { old: "value" } }, revision: "current" } })
+        },
+        stdout: () => {},
+      },
+    )
+
+    expect(exitCode).toBe(0)
+    expect(bodies).toEqual([{ expectedRevision: "current", labels: { new: "value" } }])
   })
 
   test("deletes directly with the fetched revision, matching the legacy non-confirming behavior", async () => {
@@ -669,6 +761,9 @@ describe("projectRegistryCliRun", () => {
     expect(requests).toBe(0)
     expect(output.join("")).toContain("Usage: project-registry")
     expect(output.join("")).toContain("delete --port <port>")
+    expect(output.join("")).toContain("--label <KEY=VALUE>")
+    expect(output.join("")).toContain("--remove-label <KEY>")
+    expect(output.join("")).toContain("--clear-labels")
     expect(output.join("")).toContain(`project-registry ${pkg.version}`)
   })
 

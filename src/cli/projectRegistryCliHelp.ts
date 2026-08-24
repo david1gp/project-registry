@@ -27,6 +27,9 @@ Project create/edit options:
   --disabled | --enabled
   --spa | --no-spa
   --header-up <K=V>          Upstream header; repeat to provide multiple headers
+  --label <KEY=VALUE>        Project label; repeat to provide multiple labels
+  --remove-label <KEY>       Remove a project label; repeat (edit only)
+  --clear-labels              Clear all project labels (edit only)
   --flush-interval <number>  Reverse proxy flush interval (-1 for immediate)
 
 Project names:

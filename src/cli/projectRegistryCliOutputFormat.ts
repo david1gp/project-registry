@@ -1,5 +1,6 @@
 import * as a from "valibot"
 import { createResult, createResultError, type Result } from "#result"
+import { projectLabelsSchema } from "../project/projectLabelsSchema.js"
 import type { ProjectRegistryCliInvocation } from "./ProjectRegistryCliInvocation.js"
 
 const projectSchema = a.looseObject({
@@ -8,6 +9,7 @@ const projectSchema = a.looseObject({
   port: a.optional(a.number()),
   domains: a.array(a.string()),
   kind: a.picklist(["proxy", "static"]),
+  labels: a.optional(projectLabelsSchema, {}),
 })
 const historyEntrySchema = a.looseObject({
   sha: a.string(),
