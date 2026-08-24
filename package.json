@@ -15,6 +15,7 @@
     "typecheck": "bun tsc -p ./tsconfig.json --noEmit",
     "typecheck:ui": "bun tsc -p ./tsconfig.ui.json --noEmit",
     "test:w": "bun test --watch",
+    "deploy": "bash ./ops/deploy.sh",
     "release": "bash ./ops/release.sh",
     "update": "bun update",
     "update:commit": "bun update && git add package.json && bun run tsc && git commit -m \"chore(deps): update dependencies\" && git push",
