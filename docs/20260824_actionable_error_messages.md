@@ -29,8 +29,8 @@ Make user-visible CLI, API, documentation, access-log, session/login, and direct
 - [x] 4. Improve access-log API and UI errors with actionable recovery guidance.
 - [x] 5. Improve user-facing session, login-provider, and directory failure guidance while preserving safe ambiguity.
 - [x] 6. Run focused and full verification, fixing regressions.
-- [ ] 7. Create and push conventional commits using the commits workflow.
-- [ ] 8. Create the release, inspect GitHub Actions runs, and fix runner failures if any occur.
+- [x] 7. Create and push conventional commits using the commits workflow.
+- [x] 8. Create the release, inspect GitHub Actions runs, and fix runner failures if any occur.
 
 ## Paths
 
