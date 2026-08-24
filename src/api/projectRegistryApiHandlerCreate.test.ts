@@ -64,12 +64,14 @@ function socketAccessCreate(username: string, role: Role, ownerRoles: Record<str
 }
 
 function projectsCreate(): Project[] {
+  const { caddy, ...proxy } = caddyConfigGenerateFixtures.proxy
   return [
-    caddyConfigGenerateFixtures.proxy,
+    { ...proxy, labels: {}, caddy },
     {
       ...caddyConfigGenerateFixtures.static,
       owner: "david",
       name: "david-app",
+      labels: {},
       caddy: {
         ...caddyConfigGenerateFixtures.static.caddy,
         port: 4100,
@@ -93,6 +95,7 @@ function docsProjectCreate(
     type: "customer",
     order: 0,
     services: [],
+    labels: {},
     caddy: {
       port: 4400,
       domains,
@@ -273,14 +276,14 @@ describe("projectRegistryApiHandlerCreate", () => {
     expect(listed.response.status).toBe(200)
     expect(listed.body).toMatchObject({
       success: true,
-      data: { revision, projects: [{ owner: "leo", name: "opencode" }] },
+      data: { revision, projects: [{ owner: "leo", name: "opencode", labels: {} }] },
     })
 
     const project = await requestJson(handler, "/api/v1/users/leo/projects/opencode", leo)
     expect(project.response.status).toBe(200)
     expect(project.body).toMatchObject({
       success: true,
-      data: { revision, project: { owner: "leo", name: "opencode" } },
+      data: { revision, project: { owner: "leo", name: "opencode", labels: {} } },
     })
 
     const history = await requestJson(handler, "/api/v1/users/leo/projects/opencode/history?limit=1", leo)
@@ -442,7 +445,12 @@ describe("projectRegistryApiHandlerCreate", () => {
       data: { action: "create", changed: true, key: { owner: "leo", name: "new-app" } },
     })
     expect(repository.projects).toContainEqual(
-      expect.objectContaining({ owner: "leo", name: "new-app", caddy: expect.objectContaining({ port: 4101 }) }),
+      expect.objectContaining({
+        owner: "leo",
+        name: "new-app",
+        labels: {},
+        caddy: expect.objectContaining({ port: 4101 }),
+      }),
     )
 
     const updated = await requestJson(handler, "/api/v1/users/leo/projects/new-app", leo, "PATCH", {
@@ -460,6 +468,54 @@ describe("projectRegistryApiHandlerCreate", () => {
     expect(deleted.body).toMatchObject({ success: true, data: { action: "delete", changed: true } })
     expect(repository.projects.some((project) => project.name === "new-app")).toBe(false)
     expect(application.projectChanges).toBe(3)
+  })
+
+  test("round-trips versioned labels and replaces or preserves the complete map", async () => {
+    const repository = repositoryCreate()
+    const handler = projectRegistryApiHandlerCreate({ repository, caddyApplication: caddyApplicationCreate() })
+    const leo = { transport: "unix", username: "leo" } as const
+    const initialLabels = { team: "platform", tier: "gold", constructor: "safe", ["__proto__"]: "reserved" }
+
+    const created = await requestJson(handler, "/api/v1/users/leo/projects", leo, "POST", {
+      expectedRevision: revision,
+      name: "labels-app",
+      labels: initialLabels,
+      caddy: { domains: ["labels.example"] },
+    })
+    expect(created.response.status).toBe(201)
+    expect(repository.projects).toContainEqual(expect.objectContaining({ name: "labels-app", labels: initialLabels }))
+
+    const read = await requestJson(handler, "/api/v1/users/leo/projects/labels-app", leo)
+    expect(read.response.status).toBe(200)
+    expect(read.body).toMatchObject({ success: true, data: { project: { labels: initialLabels } } })
+
+    const listed = await requestJson(handler, "/api/v1/users/leo/projects", leo)
+    expect(listed.response.status).toBe(200)
+    expect(listed.body.success).toBe(true)
+    const listedProjects = (listed.body.data as { projects: Project[] }).projects
+    expect(Array.isArray(listedProjects)).toBe(true)
+    expect(listedProjects).toContainEqual(expect.objectContaining({ name: "labels-app", labels: initialLabels }))
+
+    const replacement = await requestJson(handler, "/api/v1/users/leo/projects/labels-app", leo, "PATCH", {
+      expectedRevision: nextRevision,
+      labels: { team: "core" },
+    })
+    expect(replacement.response.status).toBe(200)
+    expect(repository.projects.find((project) => project.name === "labels-app")?.labels).toEqual({ team: "core" })
+
+    const preserved = await requestJson(handler, "/api/v1/users/leo/projects/labels-app", leo, "PATCH", {
+      expectedRevision: nextRevision,
+      description: "keeps labels",
+    })
+    expect(preserved.response.status).toBe(200)
+    expect(repository.projects.find((project) => project.name === "labels-app")?.labels).toEqual({ team: "core" })
+
+    const cleared = await requestJson(handler, "/api/v1/users/leo/projects/labels-app", leo, "PATCH", {
+      expectedRevision: nextRevision,
+      labels: {},
+    })
+    expect(cleared.response.status).toBe(200)
+    expect(repository.projects.find((project) => project.name === "labels-app")?.labels).toEqual({})
   })
 
   test("does not trigger Caddy or advance the revision for a no-op update", async () => {
@@ -517,6 +573,29 @@ describe("projectRegistryApiHandlerCreate", () => {
     expect(duplicatePort.response.status).toBe(409)
     expect(duplicatePort.body).toMatchObject({ success: false, error: { code: "projects.conflict" } })
     expect(application.projectChanges).toBe(0)
+  })
+
+  test("rejects invalid labels in versioned create and edit requests", async () => {
+    const repository = repositoryCreate()
+    const handler = projectRegistryApiHandlerCreate({ repository, caddyApplication: caddyApplicationCreate() })
+    const leo = { transport: "unix", username: "leo" } as const
+
+    const invalidCreate = await requestJson(handler, "/api/v1/users/leo/projects", leo, "POST", {
+      expectedRevision: revision,
+      name: "invalid-labels",
+      labels: { team: 1 },
+      caddy: { domains: ["invalid-labels.example"] },
+    })
+    expect(invalidCreate.response.status).toBe(400)
+    expect(invalidCreate.body).toMatchObject({ success: false, error: { code: "request.invalid", status: 400 } })
+
+    const invalidEdit = await requestJson(handler, "/api/v1/users/leo/projects/opencode", leo, "PATCH", {
+      expectedRevision: revision,
+      labels: { " ": "blank-key" },
+    })
+    expect(invalidEdit.response.status).toBe(400)
+    expect(invalidEdit.body).toMatchObject({ success: false, error: { code: "request.invalid", status: 400 } })
+    expect(repository.projects.find((project) => project.name === "opencode")?.labels).toEqual({})
   })
 
   test("denies cross-owner and HTTP mutations before repository changes", async () => {
@@ -1041,6 +1120,7 @@ describe("projectRegistryApiHandlerCreate", () => {
       type: "customer",
       order: 0,
       services: [],
+      labels: {},
     })
     const source = accessLogSourceCreate(createResult({ records: [], partial: false, malformedLines: 0 }))
     const handler = projectRegistryApiHandlerCreate({
