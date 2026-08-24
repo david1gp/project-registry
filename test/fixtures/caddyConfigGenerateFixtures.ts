@@ -8,6 +8,7 @@ export const caddyConfigGenerateFixtures = {
     type: "customer",
     order: 0,
     services: [],
+    labels: {},
     caddy: {
       port: 4096,
       domains: ["opencode.example", "oc.example"],
@@ -30,6 +31,7 @@ export const caddyConfigGenerateFixtures = {
     type: "customer",
     order: 0,
     services: [],
+    labels: {},
     caddy: {
       port: 3999,
       domains: ["demos.example"],
@@ -51,6 +53,7 @@ export const caddyConfigGenerateFixtures = {
     type: "customer",
     order: 0,
     services: [],
+    labels: {},
     caddy: {
       port: 3121,
       domains: ["startup.example"],
@@ -72,6 +75,7 @@ export const caddyConfigGenerateFixtures = {
     type: "customer",
     order: 0,
     services: [],
+    labels: {},
     caddy: {
       port: 9119,
       domains: ["hermes.example"],
@@ -97,6 +101,7 @@ export const caddyConfigGenerateFixtures = {
     type: "customer",
     order: 0,
     services: [],
+    labels: {},
     caddy: {
       port: 3998,
       domains: ["blue.example"],
@@ -122,6 +127,7 @@ export const caddyConfigGenerateFixtures = {
     type: "customer",
     order: 0,
     services: [],
+    labels: {},
     caddy: {
       port: 3998,
       domains: ["disabled.example"],
@@ -143,6 +149,7 @@ export const caddyConfigGenerateFixtures = {
     type: "customer",
     order: 0,
     services: [],
+    labels: {},
     caddy: null,
   } satisfies Project,
   oidcOptions: {
@@ -165,6 +172,7 @@ export const caddyConfigGenerateFixtures = {
       type: "customer",
       order: 0,
       services: [],
+      labels: {},
     },
     caddy: {
       port: 9119,
@@ -192,6 +200,7 @@ export const caddyConfigGenerateFixtures = {
       type: "customer",
       order: 0,
       services: [],
+      labels: {},
     },
     caddy: {
       port: 3999,
@@ -215,6 +224,7 @@ export const caddyConfigGenerateFixtures = {
       type: "customer",
       order: 0,
       services: [],
+      labels: {},
     },
     caddy: {
       port: 9119,
@@ -239,6 +249,7 @@ export const caddyConfigGenerateFixtures = {
       type: "customer",
       order: 0,
       services: [],
+      labels: {},
     },
     caddy: {
       port: 3999,

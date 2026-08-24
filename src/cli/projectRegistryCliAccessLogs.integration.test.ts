@@ -51,6 +51,7 @@ function projectCreate(owner: string, name: string, disabled = false): Project {
     type: "customer",
     order: 0,
     services: [],
+    labels: {},
     caddy: {
       port: 4321,
       domains: [`${owner}.example`],

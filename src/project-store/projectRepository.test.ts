@@ -22,6 +22,7 @@ function project(name: string, port: number): Project {
     type: "customer",
     order: Number.MAX_SAFE_INTEGER,
     services: [],
+    labels: {},
     caddy: {
       port,
       domains: [`${name}.example`],
