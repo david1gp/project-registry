@@ -10,6 +10,24 @@ import { sessionRecordValidate } from "./sessionRecordValidate.js"
 import type { TokenReferenceTokens } from "./TokenReferenceTokens.js"
 import { tokenReferenceTokensValidate } from "./tokenReferenceTokensValidate.js"
 
+const sessionIdentityHint = "Sign in again, then retry. If the problem persists, contact an administrator."
+const sessionMappingHint =
+  "Sign in again, then retry. If the problem persists, ask an administrator to verify your account mapping."
+const sessionRoleHint =
+  "Sign in again, then retry. If the problem persists, ask an administrator to verify your Project Registry role."
+
+function sessionIdentityError(op: string) {
+  return { ...createResultError(op, "session identity is unavailable"), hint: sessionIdentityHint }
+}
+
+function sessionMappingError(op: string) {
+  return { ...createResultError(op, "session user mapping is unavailable"), hint: sessionMappingHint }
+}
+
+function sessionRoleError(op: string) {
+  return { ...createResultError(op, "current role is unavailable"), hint: sessionRoleHint }
+}
+
 function sessionRecordsEqual(left: Result<SessionRecord>, right: unknown): boolean {
   if (!left.success) return false
   const rightR = sessionRecordValidate(right)
@@ -39,28 +57,27 @@ export async function sessionActorResolve(id: string, options: SessionActorResol
   const op = "sessionActorResolve"
   try {
     if (typeof id !== "string" || id.length === 0 || id.length > 256) {
-      return createResultError(op, "session identity is unavailable")
+      return sessionIdentityError(op)
     }
     const initialNowR = clockNowResolve(options.clock ?? Date.now)
-    if (!initialNowR.success) return createResultError(op, "session identity is unavailable")
+    if (!initialNowR.success) return sessionIdentityError(op)
     const sessionR = await promiseBoundedRace(
       Promise.resolve().then(() => options.sessions.resolve(id)),
       options,
     )
-    if (!sessionR.success || sessionR.data.success !== true)
-      return createResultError(op, "session identity is unavailable")
+    if (!sessionR.success || sessionR.data.success !== true) return sessionIdentityError(op)
     const sessionRecordR = sessionRecordValidate(sessionR.data.data)
     if (!sessionRecordR.success || sessionRecordR.data.id !== id) {
-      return createResultError(op, "session identity is unavailable")
+      return sessionIdentityError(op)
     }
     const session = sessionRecordR.data
     const tokenR = await promiseBoundedRace(
       Promise.resolve().then(() => options.tokenReferences.resolve(session.tokenReference)),
       options,
     )
-    if (!tokenR.success || tokenR.data.success !== true) return createResultError(op, "session identity is unavailable")
+    if (!tokenR.success || tokenR.data.success !== true) return sessionIdentityError(op)
     const tokensR = tokenReferenceTokensValidate(tokenR.data.data)
-    if (!tokensR.success) return createResultError(op, "session identity is unavailable")
+    if (!tokensR.success) return sessionIdentityError(op)
     const tokens = tokensR.data
     const tokenExpiresAt = tokens.expiresAt
     const tokenIsCurrent = (): boolean => {
@@ -68,10 +85,10 @@ export async function sessionActorResolve(id: string, options: SessionActorResol
       return nowR.success && session.expiresAt > nowR.data && tokenExpiresAt > nowR.data
     }
     if (!tokenIsCurrent()) {
-      return createResultError(op, "session identity is unavailable")
+      return sessionIdentityError(op)
     }
     if (typeof options.identityDirectory.userPreferredUsernameResolve !== "function") {
-      return createResultError(op, "session user mapping is unavailable")
+      return sessionMappingError(op)
     }
     const preferredUsernameR = await promiseBoundedRace(
       Promise.resolve().then(() =>
@@ -80,39 +97,39 @@ export async function sessionActorResolve(id: string, options: SessionActorResol
       options,
     )
     if (!preferredUsernameR.success || preferredUsernameR.data.success !== true || !tokenIsCurrent()) {
-      return createResultError(op, "session user mapping is unavailable")
+      return sessionMappingError(op)
     }
     if (preferredUsernameR.data.data !== session.username) {
-      return createResultError(op, "session user mapping is unavailable")
+      return sessionMappingError(op)
     }
     const usernameR = await preferredUsernameMap(preferredUsernameR.data.data, options.posixUsers, options)
     if (!usernameR.success || !tokenIsCurrent() || usernameR.data !== session.username) {
-      return createResultError(op, "session user mapping is unavailable")
+      return sessionMappingError(op)
     }
     const roleR = await userRoleResolve(session.subject, tokens.accessToken, options.identityDirectory, options)
-    if (!roleR.success || !tokenIsCurrent()) return createResultError(op, "current role is unavailable")
+    if (!roleR.success || !tokenIsCurrent()) return sessionRoleError(op)
     const currentTokenR = await promiseBoundedRace(
       Promise.resolve().then(() => options.tokenReferences.resolve(session.tokenReference)),
       options,
     )
     if (!currentTokenR.success || currentTokenR.data.success !== true) {
-      return createResultError(op, "session identity is unavailable")
+      return sessionIdentityError(op)
     }
     if (!tokenReferencesEqual(tokensR, currentTokenR.data.data) || !tokenIsCurrent()) {
-      return createResultError(op, "session identity is unavailable")
+      return sessionIdentityError(op)
     }
     const currentSessionR = await promiseBoundedRace(
       Promise.resolve().then(() => options.sessions.resolve(id)),
       options,
     )
     if (!currentSessionR.success || currentSessionR.data.success !== true) {
-      return createResultError(op, "session identity is unavailable")
+      return sessionIdentityError(op)
     }
     if (!sessionRecordsEqual(sessionRecordR, currentSessionR.data.data)) {
-      return createResultError(op, "session identity is unavailable")
+      return sessionIdentityError(op)
     }
     return createResult({ subject: session.subject, username: session.username, role: roleR.data })
   } catch {
-    return createResultError(op, "session identity is unavailable")
+    return sessionIdentityError(op)
   }
 }

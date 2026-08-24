@@ -168,10 +168,18 @@ describe("session security", () => {
     }
     expect((await sessionActorResolve(sessionR.data.id, options)).success).toBe(true)
     preferredUsername = "bob"
-    expect((await sessionActorResolve(sessionR.data.id, options)).success).toBe(false)
+    expect(await sessionActorResolve(sessionR.data.id, options)).toMatchObject({
+      success: false,
+      errorMessage: "session user mapping is unavailable",
+      hint: "Sign in again, then retry. If the problem persists, ask an administrator to verify your account mapping.",
+    })
     preferredUsername = "alice"
     usernameExists = false
-    expect((await sessionActorResolve(sessionR.data.id, options)).success).toBe(false)
+    expect(await sessionActorResolve(sessionR.data.id, options)).toMatchObject({
+      success: false,
+      errorMessage: "session user mapping is unavailable",
+      hint: "Sign in again, then retry. If the problem persists, ask an administrator to verify your account mapping.",
+    })
   })
 
   test("rechecks token and session expiry after identity and role lookups", async () => {
@@ -285,7 +293,11 @@ describe("session security", () => {
         return createResult({ id: "s".repeat(43), subject: "subject" })
       },
     }
-    expect((await sessionRequestResolve(cookieR.data, malformedSessions as never)).success).toBe(false)
+    expect(await sessionRequestResolve(cookieR.data, malformedSessions as never)).toMatchObject({
+      success: false,
+      errorMessage: "session is unavailable",
+      hint: "Sign in again, then retry. If the problem persists, contact an administrator.",
+    })
     expect(
       (
         await sessionActorResolve("s".repeat(43), {

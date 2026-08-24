@@ -31,7 +31,10 @@ describe("identity boundaries", () => {
     const users = { usernameExists: async (username: string) => createResult(username === "alice") }
     expect((await preferredUsernameMap("alice", users)).success).toBe(true)
     expect((await preferredUsernameMap(" Alice ", users)).success).toBe(false)
-    expect((await preferredUsernameMap("bob", users)).success).toBe(false)
+    expect(await preferredUsernameMap("bob", users)).toMatchObject({
+      success: false,
+      hint: "Ask an administrator to verify that your login account maps to a local user, then retry.",
+    })
     expect(
       (await preferredUsernameMap("alice", { usernameExists: async () => createResult("true" as never) })).success,
     ).toBe(false)
@@ -43,7 +46,10 @@ describe("identity boundaries", () => {
     expect(roleR.success).toBe(true)
     if (!roleR.success) return
     expect(roleR.data).toBe("superadmin")
-    expect((await userRoleResolve("actor", "access-token", directory({ actor: [] }))).success).toBe(false)
+    expect(await userRoleResolve("actor", "access-token", directory({ actor: [] }))).toMatchObject({
+      success: false,
+      hint: "Ask an administrator to verify that your account has a Project Registry role, then retry.",
+    })
     expect((await userRoleResolve("actor", "access-token", directory({ actor: ["operator"] }))).success).toBe(false)
   })
 
@@ -61,7 +67,11 @@ describe("identity boundaries", () => {
       identityDirectory: current,
       posixUsers: users,
     })
-    expect(visibleR.success).toBe(false)
+    expect(visibleR).toMatchObject({
+      success: false,
+      errorMessage: "user directory contains an invalid mapping",
+      hint: "Ask an administrator to fix the user directory mapping, then retry.",
+    })
     const visibleUsersR = await visibleUserDirectoryList(
       { ...actor, role: "admin" },
       {
@@ -123,6 +133,10 @@ describe("identity boundaries", () => {
       identityDirectory: tooManyUsers,
       posixUsers: { usernameExists: async () => createResult(true) },
     })
-    expect(tooManyR.success).toBe(false)
+    expect(tooManyR).toMatchObject({
+      success: false,
+      errorMessage: "user directory is too large",
+      hint: "Ask an administrator to reduce the user directory size, then retry.",
+    })
   })
 })

@@ -410,6 +410,18 @@ describe("Zitadel browser identity", () => {
     expect(oversized.success).toBe(false)
 
     const transactions = zitadelLoginTransactionStoreCreate({ clock: () => now })
+    const unavailableStartR = await zitadelLoginStart({
+      config,
+      http: async () => new Response(null, { status: 503 }),
+      transactions,
+      clock: () => now,
+      randomBytes: fakeRandom(2),
+    })
+    expect(unavailableStartR).toMatchObject({
+      success: false,
+      errorMessage: "login provider is unavailable",
+      hint: "Retry sign-in. If the problem persists, contact an administrator.",
+    })
     const malformedRandom = await zitadelLoginStart({
       config,
       http: async () => new Response(discoveryBody),

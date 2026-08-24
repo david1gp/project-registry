@@ -6,6 +6,12 @@ import type { SessionStore } from "./SessionStore.js"
 import { sessionCookieParse } from "./sessionCookieParse.js"
 import { sessionRecordValidate } from "./sessionRecordValidate.js"
 
+const sessionRetryHint = "Sign in again, then retry. If the problem persists, contact an administrator."
+
+function sessionError(op: string) {
+  return { ...createResultError(op, "session is unavailable"), hint: sessionRetryHint }
+}
+
 export async function sessionRequestResolve(
   cookieHeader: string | null | undefined,
   sessions: SessionStore,
@@ -14,17 +20,17 @@ export async function sessionRequestResolve(
 ): PromiseResult<SessionRecord> {
   const op = "sessionRequestResolve"
   const cookieR = sessionCookieParse(cookieHeader, cookieOptions)
-  if (!cookieR.success) return createResultError(op, "session is unavailable")
+  if (!cookieR.success) return sessionError(op)
   try {
     const sessionR = await promiseBoundedRace(
       Promise.resolve().then(() => sessions.resolve(cookieR.data)),
       operationOptions,
     )
-    if (!sessionR.success || sessionR.data.success !== true) return createResultError(op, "session is unavailable")
+    if (!sessionR.success || sessionR.data.success !== true) return sessionError(op)
     const recordR = sessionRecordValidate(sessionR.data.data)
-    if (!recordR.success || recordR.data.id !== cookieR.data) return createResultError(op, "session is unavailable")
+    if (!recordR.success || recordR.data.id !== cookieR.data) return sessionError(op)
     return recordR
   } catch {
-    return createResultError(op, "session is unavailable")
+    return sessionError(op)
   }
 }

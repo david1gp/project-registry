@@ -13,6 +13,13 @@ import { zitadelDiscoveryFetch } from "./zitadelDiscoveryFetch.js"
 import { zitadelPreAuthCookieHash } from "./zitadelPreAuthCookieHash.js"
 import { zitadelPreAuthCookieSerialize } from "./zitadelPreAuthCookieSerialize.js"
 
+const loginRetryHint = "Retry sign-in. If the problem persists, contact an administrator."
+const loginConfigurationHint = "Ask an administrator to verify the login provider configuration, then retry."
+
+function loginError(op: string, message: string, hint = loginRetryHint) {
+  return { ...createResultError(op, message), hint }
+}
+
 function base64UrlEncode(bytes: Uint8Array): string {
   let binary = ""
   for (const byte of bytes) binary += String.fromCharCode(byte)
@@ -42,34 +49,34 @@ async function randomValue(randomBytes: RandomBytes): Promise<string | undefined
 export async function zitadelLoginStart(options: ZitadelLoginStartOptions): PromiseResult<ZitadelLoginStartResult> {
   const op = "zitadelLoginStart"
   const configR = zitadelConfigValidate(options.config)
-  if (!configR.success) return createResultError(op, "login configuration is invalid")
+  if (!configR.success) return loginError(op, "login configuration is invalid", loginConfigurationHint)
   const clock: Clock = options.clock ?? Date.now
   const randomBytes: RandomBytes = options.randomBytes ?? randomBytesGenerate
   const nowR = clockNowResolve(clock)
-  if (!nowR.success) return createResultError(op, "login transaction could not be created")
+  if (!nowR.success) return loginError(op, "login transaction could not be created")
   const maxAgeSeconds = configR.data.loginTransactionMaxAgeSeconds ?? 600
   const expiresAtR = timeExpiryResolve(nowR.data, maxAgeSeconds)
-  if (!expiresAtR.success) return createResultError(op, "login transaction could not be created")
+  if (!expiresAtR.success) return loginError(op, "login transaction could not be created")
   try {
     const discoveryR = await zitadelDiscoveryFetch(configR.data, options.http, {
       timeoutMs: options.timeoutMs,
       signal: options.signal,
       maxBodyBytes: options.maxBodyBytes,
     })
-    if (!discoveryR.success) return createResultError(op, "login provider is unavailable")
+    if (!discoveryR.success) return loginError(op, "login provider is unavailable")
     const state = await randomValue(randomBytes)
     const nonce = await randomValue(randomBytes)
     const codeVerifier = await randomValue(randomBytes)
     const preAuthCookieSecret = await randomValue(randomBytes)
     if (state === undefined || nonce === undefined || codeVerifier === undefined || preAuthCookieSecret === undefined) {
-      return createResultError(op, "login transaction could not be created")
+      return loginError(op, "login transaction could not be created")
     }
     const preAuthCookieHashR = await zitadelPreAuthCookieHash(preAuthCookieSecret)
-    if (!preAuthCookieHashR.success) return createResultError(op, "login transaction could not be created")
+    if (!preAuthCookieHashR.success) return loginError(op, "login transaction could not be created")
     const challenge = await pkceChallenge(codeVerifier)
-    if (challenge === undefined) return createResultError(op, "login transaction could not be created")
+    if (challenge === undefined) return loginError(op, "login transaction could not be created")
     const cookieR = zitadelPreAuthCookieSerialize(preAuthCookieSecret, { maxAgeSeconds })
-    if (!cookieR.success) return createResultError(op, "login transaction could not be created")
+    if (!cookieR.success) return loginError(op, "login transaction could not be created")
     const transactionR = await promiseBoundedRace(
       Promise.resolve().then(() =>
         options.transactions.put({
@@ -84,7 +91,7 @@ export async function zitadelLoginStart(options: ZitadelLoginStartOptions): Prom
       options,
     )
     if (!transactionR.success || !transactionR.data.success) {
-      return createResultError(op, "login transaction could not be created")
+      return loginError(op, "login transaction could not be created")
     }
     const authorizationUrl = new URL(discoveryR.data.authorizationEndpoint)
     authorizationUrl.searchParams.set("response_type", "code")
@@ -97,6 +104,6 @@ export async function zitadelLoginStart(options: ZitadelLoginStartOptions): Prom
     authorizationUrl.searchParams.set("code_challenge_method", "S256")
     return createResult({ authorizationUrl: authorizationUrl.toString(), state, setCookie: cookieR.data })
   } catch {
-    return createResultError(op, "login transaction could not be created")
+    return loginError(op, "login transaction could not be created")
   }
 }

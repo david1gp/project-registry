@@ -18,9 +18,17 @@ import { zitadelPreAuthCookieHash } from "./zitadelPreAuthCookieHash.js"
 import { zitadelPreAuthCookieParse } from "./zitadelPreAuthCookieParse.js"
 import { zitadelTokenExchange } from "./zitadelTokenExchange.js"
 
-function callbackError(op: string, message: string) {
+const loginRetryHint = "Restart sign-in, then retry."
+const loginProviderHint = "Retry sign-in. If the problem persists, contact an administrator."
+const loginMappingHint = "Sign in with an account mapped to a local user, or contact an administrator."
+const loginRoleHint = "Ask an administrator to grant your account a Project Registry role, then sign in again."
+
+function callbackError(op: string, message: string, hint = loginRetryHint) {
   const clearR = zitadelPreAuthCookieClear()
-  return createResultError(op, message, clearR.success ? clearR.data : null)
+  return {
+    ...createResultError(op, message, clearR.success ? clearR.data : null),
+    hint,
+  }
 }
 
 async function callbackCleanup(
@@ -150,7 +158,7 @@ export async function zitadelCallbackHandle(options: ZitadelCallbackOptions): Pr
       signal: options.signal,
       maxBodyBytes: options.maxBodyBytes,
     })
-    if (!discoveryR.success) return callbackError(op, "login provider is unavailable")
+    if (!discoveryR.success) return callbackError(op, "login provider is unavailable", loginProviderHint)
     const tokensR = await zitadelTokenExchange({
       config: configR.data,
       discovery: discoveryR.data,
@@ -162,13 +170,13 @@ export async function zitadelCallbackHandle(options: ZitadelCallbackOptions): Pr
       signal: options.signal,
       maxBodyBytes: options.maxBodyBytes,
     })
-    if (!tokensR.success) return callbackError(op, "login provider rejected the callback")
+    if (!tokensR.success) return callbackError(op, "login provider rejected the callback", loginProviderHint)
     const jwksR = await zitadelJwksFetch(discoveryR.data.jwksUri, options.http, {
       timeoutMs: options.timeoutMs,
       signal: options.signal,
       maxBodyBytes: options.maxBodyBytes,
     })
-    if (!jwksR.success) return callbackError(op, "login provider is unavailable")
+    if (!jwksR.success) return callbackError(op, "login provider is unavailable", loginProviderHint)
     const claimsR = await zitadelIdTokenValidate(
       tokensR.data.idToken,
       configR.data,
@@ -176,7 +184,7 @@ export async function zitadelCallbackHandle(options: ZitadelCallbackOptions): Pr
       jwksR.data,
       clock,
     )
-    if (!claimsR.success) return callbackError(op, "login provider returned an invalid identity")
+    if (!claimsR.success) return callbackError(op, "login provider returned an invalid identity", loginProviderHint)
     const tokenExpiresAt = tokensR.data.expiresAt ?? claimsR.data.expiresAt
     const expiresAt = Math.min(tokenExpiresAt, claimsR.data.expiresAt)
     const tokenIsCurrent = (): boolean => {
@@ -190,20 +198,21 @@ export async function zitadelCallbackHandle(options: ZitadelCallbackOptions): Pr
       options,
     )
     if (!currentUsernameR.success || currentUsernameR.data.success !== true || !tokenIsCurrent()) {
-      return callbackError(op, "login user mapping is unavailable")
+      return callbackError(op, "login user mapping is unavailable", loginMappingHint)
     }
     if (currentUsernameR.data.data !== claimsR.data.preferredUsername) {
-      return callbackError(op, "login user mapping is unavailable")
+      return callbackError(op, "login user mapping is unavailable", loginMappingHint)
     }
     const usernameR = await preferredUsernameMap(claimsR.data.preferredUsername, options.posixUsers, options)
-    if (!usernameR.success || !tokenIsCurrent()) return callbackError(op, "login user mapping is unavailable")
+    if (!usernameR.success || !tokenIsCurrent())
+      return callbackError(op, "login user mapping is unavailable", loginMappingHint)
     const roleR = await userRoleResolve(
       claimsR.data.subject,
       tokensR.data.accessToken,
       options.identityDirectory,
       options,
     )
-    if (!roleR.success || !tokenIsCurrent()) return callbackError(op, "login user role is unavailable")
+    if (!roleR.success || !tokenIsCurrent()) return callbackError(op, "login user role is unavailable", loginRoleHint)
     if (!timeMillisecondsValidate(expiresAt)) {
       return callbackError(op, "login session could not be created")
     }

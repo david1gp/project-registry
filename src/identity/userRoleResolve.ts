@@ -4,6 +4,12 @@ import { roleResolve } from "../access/roleResolve.js"
 import { promiseBoundedRace } from "../runtime/promiseBoundedRace.js"
 import type { IdentityDirectory } from "./IdentityDirectory.js"
 
+const roleHint = "Ask an administrator to verify that your account has a Project Registry role, then retry."
+
+function roleError(op: string) {
+  return { ...createResultError(op, "current role is unavailable"), hint: roleHint }
+}
+
 export async function userRoleResolve(
   subject: string,
   accessToken: string,
@@ -19,7 +25,7 @@ export async function userRoleResolve(
     accessToken.length === 0 ||
     accessToken.length > 8192
   ) {
-    return createResultError(op, "current role is unavailable")
+    return roleError(op)
   }
   try {
     const rolesR = await promiseBoundedRace(
@@ -32,12 +38,12 @@ export async function userRoleResolve(
       !Array.isArray(rolesR.data.data) ||
       rolesR.data.data.length > 32
     ) {
-      return createResultError(op, "current role is unavailable")
+      return roleError(op)
     }
     const roleR = roleResolve(rolesR.data.data)
-    if (!roleR.success) return createResultError(op, "current role is unavailable")
+    if (!roleR.success) return roleError(op)
     return createResult(roleR.data)
   } catch {
-    return createResultError(op, "current role is unavailable")
+    return roleError(op)
   }
 }
