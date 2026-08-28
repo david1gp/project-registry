@@ -1,4 +1,5 @@
 import { createResult, createResultError, type Result } from "#result"
+import { projectDomainValidate } from "../project/projectDomainValidate.js"
 import type { ProjectRegistryCliCaddyOptions } from "./ProjectRegistryCliCaddyOptions.js"
 import type { ProjectRegistryCliInvocation } from "./ProjectRegistryCliInvocation.js"
 
@@ -295,6 +296,44 @@ export function projectRegistryCliArgumentsParse(args: readonly string[]): Resul
     return createResult({ command: { kind: "project-list" }, json, socket })
   }
   if (
+    subject === "user" &&
+    action === "default-domain" &&
+    value === "get" &&
+    extra.length === 0 &&
+    limit === undefined &&
+    !hasMutationOptions &&
+    !hasAccessLogOptions &&
+    !hasHttp
+  ) {
+    return createResult({ command: { kind: "user-default-domain-get" }, json, socket })
+  }
+  if (
+    subject === "user" &&
+    action === "default-domain" &&
+    value === "set" &&
+    extra.length === 1 &&
+    limit === undefined &&
+    !hasMutationOptions &&
+    !hasAccessLogOptions &&
+    !hasHttp
+  ) {
+    const domainR = projectDomainValidate(extra[0], op)
+    if (!domainR.success) return domainR
+    return createResult({ command: { kind: "user-default-domain-set", domain: domainR.data }, json, socket })
+  }
+  if (
+    subject === "user" &&
+    action === "default-domain" &&
+    value === "unset" &&
+    extra.length === 0 &&
+    limit === undefined &&
+    !hasMutationOptions &&
+    !hasAccessLogOptions &&
+    !hasHttp
+  ) {
+    return createResult({ command: { kind: "user-default-domain-unset" }, json, socket })
+  }
+  if (
     subject === "project" &&
     action === "get" &&
     value !== undefined &&
@@ -330,8 +369,6 @@ export function projectRegistryCliArgumentsParse(args: readonly string[]): Resul
     !hasAccessLogOptions &&
     !hasHttp
   ) {
-    if (flagName === undefined) return createResultError(op, "Project create requires --name.")
-    if (caddy.domains === undefined) return createResultError(op, "Project create requires at least one --domain.")
     if (removeLabels.length > 0 || clearLabels) {
       return createResultError(op, "Options --remove-label and --clear-labels are only valid for project edit.")
     }

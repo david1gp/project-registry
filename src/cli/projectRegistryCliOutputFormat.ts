@@ -38,6 +38,25 @@ const mutationSchema = a.looseObject({
     errorMessage: a.optional(a.string()),
   }),
 })
+const userDefaultDomainSchema = a.looseObject({
+  owner: a.string(),
+  domain: a.nullable(a.string()),
+  source: a.picklist(["explicit", "environment", "none"]),
+  revision: a.string(),
+})
+const userDefaultDomainMutationSchema = a.looseObject({
+  action: a.picklist(["set", "unset"]),
+  owner: a.string(),
+  domain: a.nullable(a.string()),
+  changed: a.boolean(),
+  revision: a.string(),
+  localCommit: a.looseObject({ status: a.picklist(["committed", "unchanged"]), revision: a.string() }),
+  push: a.looseObject({
+    requested: a.boolean(),
+    status: a.picklist(["not-requested", "pushed", "failed"]),
+    errorMessage: a.optional(a.string()),
+  }),
+})
 const legacyDeleteSchema = a.object({ deleted: a.string() })
 const docsSchema = a.object({ urls: a.array(a.string()) })
 const regenerateSchema = a.looseObject({
@@ -110,6 +129,20 @@ export function projectRegistryCliOutputFormat(
     }
     parsedData = parsedR.data
   }
+  if (command.kind === "user-default-domain-get") {
+    const parsedR = dataParse(userDefaultDomainSchema, data, "user default-domain")
+    if (!parsedR.success) return parsedR
+    parsedData = parsedR.data
+  }
+  if (command.kind === "user-default-domain-set" || command.kind === "user-default-domain-unset") {
+    const parsedR = dataParse(userDefaultDomainMutationSchema, data, "user default-domain mutation")
+    if (!parsedR.success) return parsedR
+    const expectedAction = command.kind === "user-default-domain-set" ? "set" : "unset"
+    if (parsedR.data.action !== expectedAction) {
+      return createResultError("projectRegistryCliOutputFormat", "project-registryd returned mismatched mutation data.")
+    }
+    parsedData = parsedR.data
+  }
   if (command.kind === "project-delete-by-port") {
     const parsedR = dataParse(legacyDeleteSchema, data, "project deletion")
     if (!parsedR.success) return parsedR
@@ -175,6 +208,15 @@ export function projectRegistryCliOutputFormat(
     const verb = mutation.action === "create" ? "created" : mutation.action === "delete" ? "deleted" : "updated"
     if (!mutation.changed) return createResult(`unchanged ${mutation.key.owner}/${mutation.key.name}\n`)
     return createResult(`${verb} ${mutation.key.owner}/${mutation.key.name}\n`)
+  }
+  if (command.kind === "user-default-domain-get") {
+    const defaultDomain = parsedData as a.InferOutput<typeof userDefaultDomainSchema>
+    return createResult(`${defaultDomain.owner}\t${defaultDomain.domain ?? "-"}\t${defaultDomain.source}\n`)
+  }
+  if (command.kind === "user-default-domain-set" || command.kind === "user-default-domain-unset") {
+    const mutation = parsedData as a.InferOutput<typeof userDefaultDomainMutationSchema>
+    if (!mutation.changed) return createResult(`unchanged ${mutation.owner}/default-domain\n`)
+    return createResult(`${mutation.action} ${mutation.owner}/default-domain\n`)
   }
   if (command.kind === "project-delete-by-port") {
     const deleted = parsedData as a.InferOutput<typeof legacyDeleteSchema>

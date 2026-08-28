@@ -39,9 +39,11 @@ function repository(ready = true): ProjectRepository {
   return {
     read: () => Promise.resolve(createResult({ projects: [], revision: "revision" })),
     get: async () => createResultError("test", "not found"),
+    getUserDefaultDomain: async () => createResultError("test", "not implemented"),
     create: async () => createResultError("test", "not implemented"),
     edit: async () => createResultError("test", "not implemented"),
     delete: async () => createResultError("test", "not implemented"),
+    setUserDefaultDomain: async () => createResultError("test", "not implemented"),
     history: async () => createResult([]),
     ownerHistory: async () => createResult([]),
     readiness,
@@ -340,6 +342,21 @@ describe("projectRegistryDaemonConfigValidate", () => {
       projectRegistryDaemonConfigFromEnv({
         PROJECT_REGISTRY_REPOSITORY_PATH: "/tmp/repository",
         PROJECT_REGISTRY_CADDY_INITIALIZE_FROM_GENERATED_CONFIG: "sometimes",
+      }).success,
+    ).toBe(false)
+  })
+
+  test("parses and normalizes default user domains", () => {
+    const result = projectRegistryDaemonConfigFromEnv({
+      PROJECT_REGISTRY_REPOSITORY_PATH: "/tmp/repository",
+      PROJECT_REGISTRY_DEFAULT_USER_DOMAINS: '{"leo":" Leonardomora.DE. "}',
+    })
+
+    expect(result).toMatchObject({ success: true, data: { defaultUserDomains: { leo: "leonardomora.de" } } })
+    expect(
+      projectRegistryDaemonConfigFromEnv({
+        PROJECT_REGISTRY_REPOSITORY_PATH: "/tmp/repository",
+        PROJECT_REGISTRY_DEFAULT_USER_DOMAINS: '{"leo":"not a domain"}',
       }).success,
     ).toBe(false)
   })

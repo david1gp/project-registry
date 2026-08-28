@@ -311,6 +311,151 @@ describe("projectRepositoryOpen", () => {
     expect(readR.data.projects.map((item) => item.name)).toEqual(["one"])
   })
 
+  test("distinguishes an absent decision from an explicit unset and persists normalized updates", async () => {
+    const directory = temporaryRepository()
+    const openR = await projectRepositoryOpen({ dir: directory })
+    expect(openR.success).toBe(true)
+    if (!openR.success) return
+
+    const missingR = await openR.data.getUserDefaultDomain("alice")
+    expect(missingR.success).toBe(true)
+    if (!missingR.success) return
+    expect(missingR.data).toEqual({ owner: "alice", domain: undefined, revision: "" })
+
+    const setR = await openR.data.setUserDefaultDomain("alice", "  Example.COM...  ", {
+      actor: "alice",
+      expectedRevision: "",
+    })
+    expect(setR.success).toBe(true)
+    if (!setR.success) return
+    expect(setR.data).toMatchObject({ action: "set", owner: "alice", domain: "example.com", changed: true })
+    expect(readFileSync(join(directory, "users", "alice", "default-domain.json"), "utf8")).toBe(
+      '{\n  "owner": "alice",\n  "domain": "example.com"\n}\n',
+    )
+
+    const sameR = await openR.data.setUserDefaultDomain("alice", "EXAMPLE.COM.", {
+      actor: "alice",
+      expectedRevision: setR.data.revision,
+    })
+    expect(sameR.success).toBe(true)
+    if (!sameR.success) return
+    expect(sameR.data).toMatchObject({
+      action: "set",
+      domain: "example.com",
+      changed: false,
+      revision: setR.data.revision,
+    })
+
+    const unsetR = await openR.data.setUserDefaultDomain("alice", null, {
+      actor: "alice",
+      expectedRevision: setR.data.revision,
+    })
+    expect(unsetR.success).toBe(true)
+    if (!unsetR.success) return
+    expect(unsetR.data).toMatchObject({ action: "unset", owner: "alice", domain: null, changed: true })
+
+    const reopenedR = await projectRepositoryOpen({ dir: directory })
+    expect(reopenedR.success).toBe(true)
+    if (!reopenedR.success) return
+    const unsetReadR = await reopenedR.data.getUserDefaultDomain("alice")
+    expect(unsetReadR.success).toBe(true)
+    if (!unsetReadR.success) return
+    expect(unsetReadR.data).toMatchObject({ owner: "alice", domain: null, revision: unsetR.data.revision })
+
+    const gitR = await gitStoreOpen({ dir: directory })
+    expect(gitR.success).toBe(true)
+    if (!gitR.success) return
+    const historyR = await gitStoreRun(gitR.data, ["log", "--format=%s", "--", "users/alice/default-domain.json"])
+    expect(historyR.success).toBe(true)
+    if (!historyR.success) return
+    expect(historyR.data.trim().split("\n")).toEqual([
+      "project-registry unset-default-domain alice actor=alice",
+      "project-registry set-default-domain alice actor=alice",
+    ])
+  })
+
+  test("validates default domains and revision expectations before writing", async () => {
+    const openR = await projectRepositoryOpen({ dir: temporaryRepository() })
+    expect(openR.success).toBe(true)
+    if (!openR.success) return
+
+    for (const domain of ["", "  ", ".example", "example..com", "-example.com", `${"a".repeat(64)}.com`]) {
+      const result = await openR.data.setUserDefaultDomain("alice", domain, { actor: "alice", expectedRevision: "" })
+      expect(result.success).toBe(false)
+    }
+
+    const invalidOwnerR = await openR.data.setUserDefaultDomain("../alice", "example.com", {
+      actor: "alice",
+      expectedRevision: "",
+    })
+    expect(invalidOwnerR.success).toBe(false)
+
+    const setR = await openR.data.setUserDefaultDomain("alice", "example.com", {
+      actor: "alice",
+      expectedRevision: "",
+    })
+    expect(setR.success).toBe(true)
+    if (!setR.success) return
+
+    const staleR = await openR.data.setUserDefaultDomain("alice", "other.example", {
+      actor: "alice",
+      expectedRevision: "",
+    })
+    expect(staleR.success).toBe(false)
+    if (staleR.success) return
+    expect(staleR.errorMessage).toContain("expectedRevision must be a non-empty string")
+  })
+
+  test("recovers dirty user default-domain files with the rest of the worktree", async () => {
+    const directory = temporaryRepository()
+    const openR = await projectRepositoryOpen({ dir: directory })
+    expect(openR.success).toBe(true)
+    if (!openR.success) return
+
+    const setR = await openR.data.setUserDefaultDomain("alice", "example.com", {
+      actor: "alice",
+      expectedRevision: "",
+    })
+    expect(setR.success).toBe(true)
+    if (!setR.success) return
+
+    const path = join(directory, "users", "alice", "default-domain.json")
+    writeFileSync(path, '{\n  "owner": "alice",\n  "domain": "changed.example"\n}\n', "utf8")
+    writeFileSync(join(directory, "users", "alice", "untracked.json"), "invalid\n", "utf8")
+
+    const readinessR = await openR.data.readiness()
+    expect(readinessR.success).toBe(true)
+    if (!readinessR.success) return
+    expect(readinessR.data).toMatchObject({ ready: false, clean: false })
+
+    const readR = await openR.data.getUserDefaultDomain("alice")
+    expect(readR.success).toBe(false)
+
+    const recoverR = await openR.data.recover()
+    expect(recoverR.success).toBe(true)
+    if (!recoverR.success) return
+    expect(recoverR.data.ready).toBe(true)
+    expect(JSON.parse(readFileSync(path, "utf8"))).toEqual({ owner: "alice", domain: "example.com" })
+    expect(existsSync(join(directory, "users", "alice", "untracked.json"))).toBe(false)
+  })
+
+  test("serializes concurrent user default-domain changes with expected revisions", async () => {
+    const openR = await projectRepositoryOpen({ dir: temporaryRepository() })
+    expect(openR.success).toBe(true)
+    if (!openR.success) return
+
+    const changes = await Promise.all([
+      openR.data.setUserDefaultDomain("alice", "one.example", { actor: "alice", expectedRevision: "" }),
+      openR.data.setUserDefaultDomain("alice", "two.example", { actor: "alice", expectedRevision: "" }),
+    ])
+    expect(changes.filter((result) => result.success)).toHaveLength(1)
+
+    const readR = await openR.data.getUserDefaultDomain("alice")
+    expect(readR.success).toBe(true)
+    if (!readR.success) return
+    expect(readR.data.domain === "one.example" || readR.data.domain === "two.example").toBe(true)
+  })
+
   test("forces the daemon author and committer despite inherited Git identity variables", async () => {
     const directory = temporaryRepository()
     const keys = ["GIT_AUTHOR_NAME", "GIT_AUTHOR_EMAIL", "GIT_COMMITTER_NAME", "GIT_COMMITTER_EMAIL"] as const

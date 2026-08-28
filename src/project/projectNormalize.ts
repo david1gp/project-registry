@@ -10,6 +10,8 @@ import { projectValidate } from "./projectValidate.js"
 export type ProjectNormalizeOptions = {
   projects?: readonly Project[]
   portRange?: ProjectPortRange
+  defaultUserDomains?: Readonly<Record<string, string>>
+  defaultUserDomain?: string | null
   excludeKey?: ProjectKey
   excludeProject?: Project
 }
@@ -83,16 +85,27 @@ function optionalText(record: Record<string, unknown>, ...keys: string[]): strin
   return undefined
 }
 
-function caddyNormalize(value: unknown): unknown {
+function caddyNormalize(
+  value: unknown,
+  owner: string | undefined,
+  name: string | undefined,
+  defaultUserDomains: Readonly<Record<string, string>> | undefined,
+  defaultUserDomain: string | null | undefined,
+): unknown {
   if (value === null || value === undefined) return value
   const record = recordValue(value)
   if (!record) return value
 
-  const caddy: Record<string, unknown> = {
-    domains: Array.isArray(record.domains)
-      ? [...new Set(record.domains.map(domainValue).filter((domain): domain is string => domain !== undefined))]
-      : record.domains,
-  }
+  const domains = Array.isArray(record.domains)
+    ? [...new Set(record.domains.map(domainValue).filter((domain): domain is string => domain !== undefined))]
+    : defaultUserDomain !== undefined
+      ? defaultUserDomain === null || owner === undefined || name === undefined
+        ? record.domains
+        : [`${name}.${projectDomainNormalize(defaultUserDomain)}`]
+      : owner !== undefined && name !== undefined && defaultUserDomains?.[owner] !== undefined
+        ? [`${name}.${projectDomainNormalize(defaultUserDomains[owner]!)}`]
+        : record.domains
+  const caddy: Record<string, unknown> = { domains }
 
   if (record.port !== undefined) caddy.port = numberValue(record.port)
 
@@ -130,7 +143,7 @@ function caddyNormalize(value: unknown): unknown {
   return caddy
 }
 
-function projectInputNormalize(input: unknown): unknown {
+function projectInputNormalize(input: unknown, options: ProjectNormalizeOptions): unknown {
   const record = recordValue(input)
   if (!record) return input
 
@@ -158,13 +171,20 @@ function projectInputNormalize(input: unknown): unknown {
   if (productionUrl !== undefined) normalized.productionUrl = productionUrl
   if (productionAssetsUrl !== undefined) normalized.productionAssetsUrl = productionAssetsUrl
 
-  if ("caddy" in record) normalized.caddy = caddyNormalize(record.caddy)
+  if ("caddy" in record)
+    normalized.caddy = caddyNormalize(
+      record.caddy,
+      typeof normalized.owner === "string" ? normalized.owner : undefined,
+      typeof normalized.name === "string" ? normalized.name : undefined,
+      options.defaultUserDomains,
+      options.defaultUserDomain,
+    )
   return normalized
 }
 
 export function projectNormalize(input: unknown, options: ProjectNormalizeOptions = {}): Result<Project> {
   const op = "projectNormalize"
-  const parsed = a.safeParse(projectInputSchema, projectInputNormalize(input))
+  const parsed = a.safeParse(projectInputSchema, projectInputNormalize(input, options))
   if (!parsed.success) return createResultErrorCode(op, a.summarize(parsed.issues), "request.invalid")
 
   let normalized: ProjectInput = parsed.output

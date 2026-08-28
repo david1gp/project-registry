@@ -4,7 +4,7 @@ import type { ProjectRegistryCliFetch } from "./ProjectRegistryCliFetch.js"
 type ProjectRegistryCliError = Extract<Result<never>, { success: false }> & { hint?: string }
 
 type ProjectRegistryCliRequestOptions = {
-  method?: "GET" | "POST" | "PATCH" | "DELETE"
+  method?: "GET" | "POST" | "PUT" | "PATCH" | "DELETE"
   body?: unknown
 }
 

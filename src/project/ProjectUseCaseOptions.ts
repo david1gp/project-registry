@@ -6,4 +6,5 @@ export type ProjectUseCaseOptions = {
   repository: ProjectRepository
   access: ProjectAccess
   portRange?: ProjectPortRange
+  defaultUserDomains?: Readonly<Record<string, string>>
 }

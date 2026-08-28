@@ -19,6 +19,7 @@ import type { ProjectRepository } from "../project-store/ProjectRepository.js"
 import type { ProjectRepositoryMutation } from "../project-store/ProjectRepositoryMutation.js"
 import { projectRepositoryOpen } from "../project-store/projectRepositoryOpen.js"
 import type { ProjectRegistryDaemonRequestContext } from "../runtime/ProjectRegistryDaemonRequestContext.js"
+import type { UserDefaultDomainMutation } from "../user-default-domain/UserDefaultDomainMutation.js"
 import { projectRegistryApiHandlerCreate as projectRegistryApiHandlerCreateProduction } from "./projectRegistryApiHandlerCreate.js"
 
 const revision = "a".repeat(40)
@@ -28,6 +29,13 @@ const temporaryDirectories: string[] = []
 type RepositoryFake = ProjectRepository & {
   historyKeys: ProjectKey[]
   ownerHistoryCalls: { owner: string; limit: number | undefined }[]
+  defaultDomains: Record<string, string | null | undefined>
+  defaultDomainCalls: string[]
+  defaultDomainMutations: {
+    owner: string
+    domain: string | null
+    options: { actor: string; expectedRevision: string }
+  }[]
   reads: number
   projects: Project[]
   revision: string
@@ -125,6 +133,9 @@ function repositoryCreate(): RepositoryFake {
   const repository: RepositoryFake = {
     historyKeys: [],
     ownerHistoryCalls: [],
+    defaultDomains: {},
+    defaultDomainCalls: [],
+    defaultDomainMutations: [],
     reads: 0,
     projects,
     revision,
@@ -137,6 +148,10 @@ function repositoryCreate(): RepositoryFake {
       return project === undefined
         ? createResultErrorCode("projectRepositoryGet", "project not found", "projects.not-found")
         : createResult({ project, revision: repository.revision })
+    },
+    getUserDefaultDomain: async (owner) => {
+      repository.defaultDomainCalls.push(owner)
+      return createResult({ owner, domain: repository.defaultDomains[owner], revision: repository.revision })
     },
     create: async (project, options) => {
       if (options.expectedRevision !== repository.revision) {
@@ -174,6 +189,15 @@ function repositoryCreate(): RepositoryFake {
       repository.revision = nextRevision
       return createResult(mutation("delete", key, true, repository.revision))
     },
+    setUserDefaultDomain: async (owner, domain, options) => {
+      repository.defaultDomainMutations.push({ owner, domain, options })
+      if (options.expectedRevision !== repository.revision) {
+        return createResultErrorCode("projectRepositorySetUserDefaultDomain", "revision mismatch", "projects.conflict")
+      }
+      repository.defaultDomains[owner] = domain
+      repository.revision = nextRevision
+      return createResult(defaultDomainMutation(owner, domain, repository.revision))
+    },
     history: async (key) => {
       if (key === undefined) return createResultError("test", "unscoped history is forbidden")
       repository.historyKeys.push(key)
@@ -209,6 +233,22 @@ function mutation(
     changed,
     revision: mutationRevision,
     localCommit: { status: changed ? "committed" : "unchanged", revision: mutationRevision },
+    push: { requested: false, status: "not-requested" },
+  }
+}
+
+function defaultDomainMutation(
+  owner: string,
+  domain: string | null,
+  mutationRevision: string,
+): UserDefaultDomainMutation {
+  return {
+    action: domain === null ? "unset" : "set",
+    owner,
+    domain,
+    changed: true,
+    revision: mutationRevision,
+    localCommit: { status: "committed", revision: mutationRevision },
     push: { requested: false, status: "not-requested" },
   }
 }
@@ -468,6 +508,180 @@ describe("projectRegistryApiHandlerCreate", () => {
     expect(deleted.body).toMatchObject({ success: true, data: { action: "delete", changed: true } })
     expect(repository.projects.some((project) => project.name === "new-app")).toBe(false)
     expect(application.projectChanges).toBe(3)
+  })
+
+  test("generates a default project subdomain when the request omits domains", async () => {
+    const repository = repositoryCreate()
+    const handler = projectRegistryApiHandlerCreate({
+      repository,
+      caddyApplication: caddyApplicationCreate(),
+      defaultUserDomains: { leo: "leonardomora.de" },
+    })
+
+    const created = await requestJson(
+      handler,
+      "/api/v1/users/leo/projects",
+      { transport: "unix", username: "leo" },
+      "POST",
+      {
+        expectedRevision: revision,
+        name: "api",
+        caddy: {},
+      },
+    )
+
+    expect(created.response.status).toBe(201)
+    expect(repository.projects).toContainEqual(
+      expect.objectContaining({ name: "api", caddy: expect.objectContaining({ domains: ["api.leonardomora.de"] }) }),
+    )
+  })
+
+  test("reports environment, persisted, and explicitly unset default-domain decisions", async () => {
+    const repository = repositoryCreate()
+    const handler = projectRegistryApiHandlerCreate({
+      repository,
+      caddyApplication: caddyApplicationCreate(),
+      defaultUserDomains: { leo: "leonardomora.de" },
+    })
+    const leo = { transport: "unix", username: "leo" } as const
+
+    const environment = await requestJson(handler, "/api/v1/users/leo/default-domain", leo)
+    expect(environment.response.status).toBe(200)
+    expect(environment.body).toMatchObject({
+      success: true,
+      data: { owner: "leo", domain: "leonardomora.de", source: "environment", revision },
+    })
+
+    repository.defaultDomains.leo = "persisted.example"
+    const persisted = await requestJson(handler, "/api/v1/users/leo/default-domain", leo)
+    expect(persisted.body).toMatchObject({
+      success: true,
+      data: { owner: "leo", domain: "persisted.example", source: "explicit", revision },
+    })
+
+    repository.defaultDomains.leo = null
+    const unset = await requestJson(handler, "/api/v1/users/leo/default-domain", leo)
+    expect(unset.body).toEqual({
+      success: true,
+      data: { owner: "leo", domain: null, source: "explicit", revision },
+    })
+  })
+
+  test("sets and unsets an owner default-domain with validation and revision checks", async () => {
+    const repository = repositoryCreate()
+    const handler = projectRegistryApiHandlerCreate({
+      repository,
+      caddyApplication: caddyApplicationCreate(),
+      defaultUserDomains: { leo: "leonardomora.de" },
+    })
+    const leo = { transport: "unix", username: "leo" } as const
+
+    const invalid = await requestJson(handler, "/api/v1/users/leo/default-domain", leo, "PUT", {
+      expectedRevision: revision,
+      domain: "not a domain",
+    })
+    expect(invalid.response.status).toBe(400)
+    expect(invalid.body).toMatchObject({ success: false, error: { code: "request.invalid", status: 400 } })
+    expect(repository.defaultDomainMutations).toHaveLength(0)
+
+    const set = await requestJson(handler, "/api/v1/users/leo/default-domain", leo, "PUT", {
+      expectedRevision: revision,
+      domain: " Persisted.Example. ",
+    })
+    expect(set.response.status).toBe(200)
+    expect(set.body).toMatchObject({
+      success: true,
+      data: { action: "set", owner: "leo", domain: "persisted.example", changed: true, revision: nextRevision },
+    })
+    expect(repository.defaultDomainMutations).toEqual([
+      { owner: "leo", domain: "persisted.example", options: { actor: "leo", expectedRevision: revision } },
+    ])
+
+    const unset = await requestJson(handler, "/api/v1/users/leo/default-domain", leo, "DELETE", {
+      expectedRevision: nextRevision,
+    })
+    expect(unset.response.status).toBe(200)
+    expect(unset.body).toMatchObject({
+      success: true,
+      data: { action: "unset", owner: "leo", domain: null, changed: true },
+    })
+    expect(repository.defaultDomains.leo).toBe(null)
+
+    const afterUnset = await requestJson(handler, "/api/v1/users/leo/projects", leo, "POST", {
+      expectedRevision: nextRevision,
+      name: "after-unset",
+      caddy: {},
+    })
+    expect(afterUnset.response.status).toBe(400)
+    expect(afterUnset.body).toMatchObject({ success: false, error: { code: "request.invalid", status: 400 } })
+    expect(repository.projects.some((project) => project.name === "after-unset")).toBe(false)
+  })
+
+  test("authorizes default-domain routes before reading or mutating the requested owner", async () => {
+    const repository = repositoryCreate()
+    const handler = projectRegistryApiHandlerCreate({
+      repository,
+      caddyApplication: caddyApplicationCreate(),
+      defaultUserDomains: { leo: "leonardomora.de" },
+    })
+    const david = { transport: "unix", username: "david" } as const
+
+    const get = await requestJson(handler, "/api/v1/users/leo/default-domain", david)
+    const set = await requestJson(handler, "/api/v1/users/leo/default-domain", david, "PUT", {
+      expectedRevision: revision,
+      domain: "forged.example",
+    })
+    const unset = await requestJson(handler, "/api/v1/users/leo/default-domain", david, "DELETE", {
+      expectedRevision: revision,
+    })
+
+    for (const response of [get, set, unset]) {
+      expect(response.response.status).toBe(403)
+      expect(response.body).toMatchObject({ success: false, error: { code: "projects.forbidden", status: 403 } })
+    }
+    expect(repository.defaultDomainCalls).toHaveLength(0)
+    expect(repository.defaultDomainMutations).toHaveLength(0)
+  })
+
+  test("uses persisted defaults for new projects, preserves explicit domains, and keeps projects unchanged", async () => {
+    const repository = repositoryCreate()
+    repository.defaultDomains.leo = "persisted.example"
+    const handler = projectRegistryApiHandlerCreate({
+      repository,
+      caddyApplication: caddyApplicationCreate(),
+      defaultUserDomains: { leo: "environment.example" },
+      portRange: { from: 4100, to: 4199 },
+    })
+    const leo = { transport: "unix", username: "leo" } as const
+
+    const persisted = await requestJson(handler, "/api/v1/users/leo/projects", leo, "POST", {
+      expectedRevision: revision,
+      name: "persisted-app",
+      caddy: {},
+    })
+    expect(persisted.response.status).toBe(201)
+    expect(repository.projects).toContainEqual(
+      expect.objectContaining({
+        name: "persisted-app",
+        caddy: expect.objectContaining({ domains: ["persisted-app.persisted.example"] }),
+      }),
+    )
+
+    repository.revision = revision
+    const callsBeforeExplicit = repository.defaultDomainCalls.length
+    const explicit = await requestJson(handler, "/api/v1/users/leo/projects", leo, "POST", {
+      expectedRevision: revision,
+      name: "explicit-app",
+      caddy: { domains: ["explicit.example"] },
+    })
+    expect(explicit.response.status).toBe(201)
+    expect(repository.projects).toContainEqual(
+      expect.objectContaining({
+        name: "explicit-app",
+        caddy: expect.objectContaining({ domains: ["explicit.example"] }),
+      }),
+    )
+    expect(repository.defaultDomainCalls.length).toBe(callsBeforeExplicit)
   })
 
   test("round-trips versioned labels and replaces or preserves the complete map", async () => {

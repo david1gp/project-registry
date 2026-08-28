@@ -1,14 +1,31 @@
 import * as a from "valibot"
 import { createResult, createResultError, type Result } from "#result"
 import { projectAccessLogRootValidate } from "../access-log/projectAccessLogRootValidate.js"
+import { projectDomainValidate } from "../project/projectDomainValidate.js"
 import type { ProjectRegistryDaemonConfig } from "./ProjectRegistryDaemonConfig.js"
 import { projectRegistryDaemonConfigSchema } from "./projectRegistryDaemonConfigSchema.js"
+
+function defaultUserDomainsNormalize(domains: Readonly<Record<string, string>>): Result<Record<string, string>> {
+  const op = "projectRegistryDaemonConfigValidate"
+  const normalized: Record<string, string> = {}
+  for (const [username, value] of Object.entries(domains)) {
+    const domainR = projectDomainValidate(value, op)
+    if (!domainR.success) {
+      return createResultError(op, `default domain for ${username} is invalid`)
+    }
+    normalized[username] = domainR.data
+  }
+  return createResult(normalized)
+}
 
 export function projectRegistryDaemonConfigValidate(input: unknown): Result<ProjectRegistryDaemonConfig> {
   const op = "projectRegistryDaemonConfigValidate"
   try {
     const parsed = a.safeParse(projectRegistryDaemonConfigSchema, input)
     if (!parsed.success) return createResultError(op, a.summarize(parsed.issues))
+
+    const defaultUserDomainsR = defaultUserDomainsNormalize(parsed.output.defaultUserDomains)
+    if (!defaultUserDomainsR.success) return defaultUserDomainsR
 
     if (
       parsed.output.oidc !== undefined &&
@@ -56,6 +73,7 @@ export function projectRegistryDaemonConfigValidate(input: unknown): Result<Proj
     return createResult({
       ...parsed.output,
       mappedUsers: [...parsed.output.mappedUsers],
+      defaultUserDomains: { ...defaultUserDomainsR.data },
       oidc:
         parsed.output.oidc === undefined
           ? undefined

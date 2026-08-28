@@ -20,6 +20,12 @@ import { projectMutationExpectedRevision } from "../project/projectMutationExpec
 import { projectRevisionValidate } from "../project/projectRevisionValidate.js"
 import { projectSchema } from "../project/projectSchema.js"
 import { projectValidate } from "../project/projectValidate.js"
+import type { UserDefaultDomain } from "../user-default-domain/UserDefaultDomain.js"
+import type { UserDefaultDomainEntry } from "../user-default-domain/UserDefaultDomainEntry.js"
+import type { UserDefaultDomainMutation } from "../user-default-domain/UserDefaultDomainMutation.js"
+import { userDefaultDomainPath } from "../user-default-domain/userDefaultDomainPath.js"
+import { userDefaultDomainSchema } from "../user-default-domain/userDefaultDomainSchema.js"
+import { userDefaultDomainValidate } from "../user-default-domain/userDefaultDomainValidate.js"
 import type { ProjectRepository } from "./ProjectRepository.js"
 import type { ProjectRepositoryEntry } from "./ProjectRepositoryEntry.js"
 import type { ProjectRepositoryMutation } from "./ProjectRepositoryMutation.js"
@@ -223,15 +229,17 @@ function projectRepositoryMissing(error: unknown): boolean {
   return typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT"
 }
 
-async function projectRepositoryProjectsDirectorySafe(
+async function projectRepositoryDirectorySafe(
   directory: string,
   relativeDirectory: string,
+  rootName: string,
+  op: string,
 ): PromiseResult<void> {
   let entries: Dirent[]
   try {
     entries = await readdir(directory, { withFileTypes: true })
   } catch (error) {
-    return createResultError("projectRepositoryProjectsSafe", errorMessage(error), relativeDirectory)
+    return createResultError(op, errorMessage(error), relativeDirectory)
   }
 
   for (const entry of entries) {
@@ -241,19 +249,19 @@ async function projectRepositoryProjectsDirectorySafe(
     try {
       pathStat = await lstat(path)
     } catch (error) {
-      return createResultError("projectRepositoryProjectsSafe", errorMessage(error), relativePath)
+      return createResultError(op, errorMessage(error), relativePath)
     }
 
     if (entry.name === ".git" || pathStat.isSymbolicLink()) {
       return createResultError(
-        "projectRepositoryProjectsSafe",
-        "symbolic links and reserved .git paths are not allowed beneath projects",
+        op,
+        `symbolic links and reserved .git paths are not allowed beneath ${rootName}`,
         relativePath,
       )
     }
 
     if (pathStat.isDirectory()) {
-      const safeR = await projectRepositoryProjectsDirectorySafe(path, relativePath)
+      const safeR = await projectRepositoryDirectorySafe(path, relativePath, rootName, op)
       if (!safeR.success) return safeR
     }
   }
@@ -261,35 +269,43 @@ async function projectRepositoryProjectsDirectorySafe(
   return createResult(undefined)
 }
 
-async function projectRepositoryProjectsSafe(store: GitProjectRepository): PromiseResult<void> {
+async function projectRepositoryRootSafe(
+  store: GitProjectRepository,
+  rootName: string,
+  op: string,
+): PromiseResult<void> {
   let currentDir: string
   try {
     currentDir = await realpath(store.git.dir)
   } catch (error) {
-    return createResultError("projectRepositoryProjectsSafe", errorMessage(error), store.git.dir)
+    return createResultError(op, errorMessage(error), store.git.dir)
   }
   if (currentDir !== store.queueKey) {
-    return createResultError("projectRepositoryProjectsSafe", "worktree path is not the canonical real worktree")
+    return createResultError(op, "worktree path is not the canonical real worktree")
   }
 
-  const root = join(store.git.dir, "projects")
+  const root = join(store.git.dir, rootName)
   let rootStat: Awaited<ReturnType<typeof lstat>>
   try {
     rootStat = await lstat(root)
   } catch (error) {
     if (projectRepositoryMissing(error)) return createResult(undefined)
-    return createResultError("projectRepositoryProjectsSafe", errorMessage(error), "projects")
+    return createResultError(op, errorMessage(error), rootName)
   }
 
   if (rootStat.isSymbolicLink()) {
-    return createResultError(
-      "projectRepositoryProjectsSafe",
-      "symbolic links and reserved .git paths are not allowed beneath projects",
-      "projects",
-    )
+    return createResultError(op, `symbolic links and reserved .git paths are not allowed beneath ${rootName}`, rootName)
   }
-  if (!rootStat.isDirectory()) return createResultError("projectRepositoryProjectsSafe", "projects is not a directory")
-  return projectRepositoryProjectsDirectorySafe(root, "projects")
+  if (!rootStat.isDirectory()) return createResultError(op, `${rootName} is not a directory`)
+  return projectRepositoryDirectorySafe(root, rootName, rootName, op)
+}
+
+async function projectRepositoryProjectsSafe(store: GitProjectRepository): PromiseResult<void> {
+  return projectRepositoryRootSafe(store, "projects", "projectRepositoryProjectsSafe")
+}
+
+async function projectRepositoryUsersSafe(store: GitProjectRepository): PromiseResult<void> {
+  return projectRepositoryRootSafe(store, "users", "projectRepositoryUserDefaultDomainSafe")
 }
 
 async function projectRepositoryTrackedPaths(store: GitProjectRepository): PromiseResult<Set<string>> {
@@ -388,7 +404,7 @@ async function projectRepositoryCommitGit(store: GitProjectRepository, message: 
 async function projectRepositoryWrite(
   store: GitProjectRepository,
   relPath: string,
-  project: Project,
+  data: unknown,
   message: string,
 ): PromiseResult<string> {
   const segments = relPath.split("/")
@@ -406,7 +422,7 @@ async function projectRepositoryWrite(
       constants.O_WRONLY | constants.O_CREAT | constants.O_TRUNC | constants.O_NOFOLLOW,
       0o666,
     )
-    await fileHandle.writeFile(`${JSON.stringify(project, null, 2)}\n`, "utf8")
+    await fileHandle.writeFile(`${JSON.stringify(data, null, 2)}\n`, "utf8")
   } catch (error) {
     return createResultError("projectRepositoryWrite", errorMessage(error), relPath)
   } finally {
@@ -444,10 +460,86 @@ function projectRepositoryPathKey(relPath: string): Result<ProjectKey> {
   return createResult({ owner, name })
 }
 
+function projectRepositoryUserDefaultDomainPathOwner(relPath: string): Result<string> {
+  const op = "projectRepositoryRead"
+  const match = /^users\/([^/]+)\/default-domain\.json$/.exec(relPath)
+  const owner = match?.[1]
+  if (owner === undefined) return createResultError(op, "invalid user default-domain path", relPath)
+
+  const pathR = userDefaultDomainPath(owner)
+  if (!pathR.success) return createResultError(op, pathR.errorMessage, relPath)
+  if (pathR.data !== relPath) return createResultError(op, "invalid user default-domain path", relPath)
+  return createResult(owner)
+}
+
+async function projectRepositoryReadUserDefaultDomains(
+  store: GitProjectRepository,
+): PromiseResult<UserDefaultDomain[]> {
+  const op = "projectRepositoryRead"
+  const safeR = await projectRepositoryUsersSafe(store)
+  if (!safeR.success) return safeR
+
+  const listR = await gitStoreList(store.git, "users")
+  if (!listR.success) return listR
+
+  const trackedR = await projectRepositoryTrackedPaths(store)
+  if (!trackedR.success) return trackedR
+
+  const domains: UserDefaultDomain[] = []
+  for (const relPath of listR.data) {
+    if (!trackedR.data.has(relPath)) {
+      return createResultError(op, `${relPath}: user default-domain file is not tracked by Git`, relPath)
+    }
+
+    const ownerR = projectRepositoryUserDefaultDomainPathOwner(relPath)
+    if (!ownerR.success) return ownerR
+
+    const domainR = await gitStoreRead(store.git, relPath, userDefaultDomainSchema)
+    if (!domainR.success) return createResultError(op, `${relPath}: ${domainR.errorMessage}`, relPath)
+
+    const validatedR = userDefaultDomainValidate(domainR.data)
+    if (!validatedR.success) return createResultError(op, `${relPath}: ${validatedR.errorMessage}`, relPath)
+    if (validatedR.data.owner !== ownerR.data) {
+      return createResultError(op, `${relPath}: user does not match its path`, relPath)
+    }
+    domains.push(validatedR.data)
+  }
+  return createResult(domains)
+}
+
+async function projectRepositoryReadUserDefaultDomain(
+  store: GitProjectRepository,
+  owner: string,
+): PromiseResult<UserDefaultDomain | undefined> {
+  const op = "projectRepositoryUserDefaultDomainRead"
+  const pathR = userDefaultDomainPath(owner)
+  if (!pathR.success) return pathR
+
+  let pathStat: Awaited<ReturnType<typeof lstat>>
+  try {
+    pathStat = await lstat(join(store.git.dir, pathR.data))
+  } catch (error) {
+    if (projectRepositoryMissing(error)) return createResult(undefined)
+    return createResultError(op, errorMessage(error), pathR.data)
+  }
+  if (pathStat.isSymbolicLink() || !pathStat.isFile()) {
+    return createResultError(op, "user default-domain path must be a regular file", pathR.data)
+  }
+
+  const domainR = await gitStoreRead(store.git, pathR.data, userDefaultDomainSchema)
+  if (!domainR.success) return domainR
+  const validatedR = userDefaultDomainValidate(domainR.data)
+  if (!validatedR.success) return validatedR
+  if (validatedR.data.owner !== owner) return createResultError(op, "user does not match its path", pathR.data)
+  return createResult(validatedR.data)
+}
+
 async function projectRepositoryReadSnapshot(store: GitProjectRepository): PromiseResult<ProjectRepositorySnapshot> {
   const op = "projectRepositoryRead"
   const safeR = await projectRepositoryProjectsSafe(store)
   if (!safeR.success) return safeR
+  const usersSafeR = await projectRepositoryUsersSafe(store)
+  if (!usersSafeR.success) return usersSafeR
 
   const cleanR = await projectRepositoryRequireClean(store, op)
   if (!cleanR.success) return cleanR
@@ -485,6 +577,9 @@ async function projectRepositoryReadSnapshot(store: GitProjectRepository): Promi
 
   const collisionsR = projectCollisions(projects)
   if (!collisionsR.success) return createResultError(op, collisionsR.errorMessage)
+
+  const domainsR = await projectRepositoryReadUserDefaultDomains(store)
+  if (!domainsR.success) return domainsR
 
   const revisionR = await projectRepositoryRevision(store)
   if (!revisionR.success) return revisionR
@@ -676,6 +771,100 @@ async function projectRepositoryCommit(
   })
 }
 
+function projectRepositoryUserDefaultDomainNoop(
+  owner: string,
+  domain: string | null,
+  revision: string,
+): Result<UserDefaultDomainMutation> {
+  const action = domain === null ? "unset" : "set"
+  return createResult({
+    action,
+    owner,
+    domain,
+    changed: false,
+    revision,
+    localCommit: { status: "unchanged", revision },
+    push: { requested: false, status: "not-requested" },
+  })
+}
+
+async function projectRepositoryUserDefaultDomainCommit(
+  store: GitProjectRepository,
+  owner: string,
+  domain: UserDefaultDomain,
+  actor: string,
+  path: string,
+  existing: boolean,
+  expectedRevision: string,
+): PromiseResult<UserDefaultDomainMutation> {
+  const op = "projectRepositoryUserDefaultDomainMutation"
+  const action = domain.domain === null ? "unset" : "set"
+  const branchR = await projectRepositoryRequireConfiguredBranch(store.git, op)
+  if (!branchR.success) return branchR
+
+  const currentRevisionR = await projectRepositoryRevision(store)
+  if (!currentRevisionR.success) return currentRevisionR
+  if (currentRevisionR.data !== expectedRevision) {
+    return createResultError(
+      op,
+      `revision changed during mutation: expected ${expectedRevision}, current ${currentRevisionR.data}`,
+    )
+  }
+
+  const safeR = await projectRepositoryUsersSafe(store)
+  if (!safeR.success) return safeR
+  if (existing) {
+    const clearFlagsR = await projectRepositoryClearTrackedFlags(store, path)
+    if (!clearFlagsR.success) return clearFlagsR
+  }
+
+  const commitR = await projectRepositoryWrite(
+    store,
+    path,
+    domain,
+    `project-registry ${action}-default-domain ${owner} actor=${actor}`,
+  )
+  if (!commitR.success) return createResultError(op, `${action} commit failed: ${commitR.errorMessage}`, path)
+
+  const revision = commitR.data.trim()
+  if (revision === "") return createResultError(op, `${action} did not produce a local commit`, path)
+
+  if (!store.autoPush) {
+    return createResult({
+      action,
+      owner,
+      domain: domain.domain,
+      changed: true,
+      revision,
+      localCommit: { status: "committed", revision },
+      push: { requested: false, status: "not-requested" },
+    })
+  }
+
+  const pushR = await projectRepositoryPush(store, revision, op)
+  if (!pushR.success) {
+    return createResult({
+      action,
+      owner,
+      domain: domain.domain,
+      changed: true,
+      revision,
+      localCommit: { status: "committed", revision },
+      push: { requested: true, status: "failed", errorMessage: pushR.errorMessage },
+    })
+  }
+
+  return createResult({
+    action,
+    owner,
+    domain: domain.domain,
+    changed: true,
+    revision,
+    localCommit: { status: "committed", revision },
+    push: { requested: true, status: "pushed" },
+  })
+}
+
 function projectRepositoryExpectedRevision(options: unknown, currentRevision: unknown, op: string): Result<void> {
   const expectedR = projectMutationExpectedRevision(options, currentRevision, op)
   if (!expectedR.success) return expectedR
@@ -777,6 +966,44 @@ async function projectRepositoryDelete(
   return projectRepositoryCommit(store, "delete", key, actorR.data, pathR.data, undefined, snapshotR.data.revision)
 }
 
+async function projectRepositorySetUserDefaultDomain(
+  store: GitProjectRepository,
+  owner: string,
+  domain: string | null,
+  options: ProjectRepositoryMutationOptions,
+): PromiseResult<UserDefaultDomainMutation> {
+  const op = "projectRepositorySetUserDefaultDomain"
+  const pathR = userDefaultDomainPath(owner)
+  if (!pathR.success) return pathR
+
+  const domainR = userDefaultDomainValidate({ owner, domain })
+  if (!domainR.success) return { ...domainR, op }
+
+  const snapshotR = await projectRepositoryReadSnapshot(store)
+  if (!snapshotR.success) return snapshotR
+
+  const expectedR = projectRepositoryExpectedRevision(options, snapshotR.data.revision, op)
+  if (!expectedR.success) return expectedR
+  const actorR = projectRepositoryActor(options, op)
+  if (!actorR.success) return actorR
+
+  const existingR = await projectRepositoryReadUserDefaultDomain(store, owner)
+  if (!existingR.success) return existingR
+  if (existingR.data?.domain === domainR.data.domain) {
+    return projectRepositoryUserDefaultDomainNoop(owner, domainR.data.domain, snapshotR.data.revision)
+  }
+
+  return projectRepositoryUserDefaultDomainCommit(
+    store,
+    owner,
+    domainR.data,
+    actorR.data,
+    pathR.data,
+    existingR.data !== undefined,
+    snapshotR.data.revision,
+  )
+}
+
 function projectRepositoryQueue<T>(
   store: GitProjectRepository,
   op: string,
@@ -807,6 +1034,8 @@ async function projectRepositoryRecover(store: GitProjectRepository): PromiseRes
   const op = "projectRepositoryRecover"
   const safeR = await projectRepositoryProjectsSafe(store)
   if (!safeR.success) return safeR
+  const usersSafeR = await projectRepositoryUsersSafe(store)
+  if (!usersSafeR.success) return usersSafeR
 
   const revisionR = await projectRepositoryRevision(store)
   if (!revisionR.success) return revisionR
@@ -893,6 +1122,21 @@ export async function projectRepositoryOpen(options: unknown): PromiseResult<Pro
         const entry: ProjectRepositoryEntry = { project, revision: snapshotR.data.revision }
         return createResult(entry)
       }),
+    getUserDefaultDomain: (owner) =>
+      projectRepositoryQueue(store, "projectRepositoryUserDefaultDomainGet", async () => {
+        const pathR = userDefaultDomainPath(owner)
+        if (!pathR.success) return pathR
+        const snapshotR = await projectRepositoryReadSnapshot(store)
+        if (!snapshotR.success) return snapshotR
+        const domainR = await projectRepositoryReadUserDefaultDomain(store, owner)
+        if (!domainR.success) return domainR
+        const entry: UserDefaultDomainEntry = {
+          owner,
+          domain: domainR.data?.domain,
+          revision: snapshotR.data.revision,
+        }
+        return createResult(entry)
+      }),
     create: (project, mutationOptions) =>
       projectRepositoryQueue(store, "projectRepositoryCreate", () =>
         projectRepositoryCreate(store, project, mutationOptions),
@@ -904,6 +1148,10 @@ export async function projectRepositoryOpen(options: unknown): PromiseResult<Pro
     delete: (key, mutationOptions) =>
       projectRepositoryQueue(store, "projectRepositoryDelete", () =>
         projectRepositoryDelete(store, key, mutationOptions),
+      ),
+    setUserDefaultDomain: (owner, domain, mutationOptions) =>
+      projectRepositoryQueue(store, "projectRepositorySetUserDefaultDomain", () =>
+        projectRepositorySetUserDefaultDomain(store, owner, domain, mutationOptions),
       ),
     history: (key, limit) =>
       projectRepositoryQueue(store, "projectRepositoryHistory", async () => {

@@ -92,6 +92,7 @@ function repositoryCreate(initialProjects: Project[] = []): RepositoryFake {
     if (!found) return createResultError("fakeGet", "project not found")
     return createResult({ project: found, revision: repository.revision })
   }
+  repository.getUserDefaultDomain = async () => createResultError("fakeUserDefaultDomainGet", "not implemented")
   repository.create = async (newProject, options) => {
     repository.calls.create.push({ project: newProject, options })
     if (repository.mutationResult !== undefined) return repository.mutationResult
@@ -115,6 +116,7 @@ function repositoryCreate(initialProjects: Project[] = []): RepositoryFake {
     repository.projects.splice(index, 1)
     return createResult(mutation("delete", key))
   }
+  repository.setUserDefaultDomain = async () => createResultError("fakeUserDefaultDomainSet", "not implemented")
   repository.history = async (key, limit) => {
     repository.calls.history.push({ key, limit })
     if (repository.historyResult !== undefined) return repository.historyResult

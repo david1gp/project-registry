@@ -12,10 +12,12 @@ import type { Project } from "../project/Project.js"
 import type { ProjectMutationOptions } from "../project/ProjectMutationOptions.js"
 import { projectCreate } from "../project/projectCreate.js"
 import { projectDelete } from "../project/projectDelete.js"
+import { projectDomainValidate } from "../project/projectDomainValidate.js"
 import { projectEdit } from "../project/projectEdit.js"
 import { projectGetUseCase } from "../project/projectGetUseCase.js"
 import { projectHistory } from "../project/projectHistory.js"
 import { projectListUseCase } from "../project/projectListUseCase.js"
+import { projectOwnerAuthorize } from "../project/projectOwnerAuthorize.js"
 import type { ProjectPortRange } from "../project/projectPortNext.js"
 import type { ProjectRepository } from "../project-store/ProjectRepository.js"
 import type { ProjectRepositoryMutation } from "../project-store/ProjectRepositoryMutation.js"
@@ -28,6 +30,7 @@ type ApiHandlerOptions = {
   caddyApplication: Pick<CaddyApplication, "projectChange" | "regenerate" | "status">
   configOptions?: CaddyConfigOptions
   portRange?: ProjectPortRange
+  defaultUserDomains?: Readonly<Record<string, string>>
   projectAccessLogSource?: ProjectAccessLogSource
   socketAccessResolve?: ProjectRegistryDaemonSocketAccessResolve
 }
@@ -43,6 +46,7 @@ type ApiRoute =
   | { kind: "config"; legacy: boolean }
   | { kind: "status"; legacy: false }
   | { kind: "regenerate"; legacy: boolean }
+  | { kind: "default-domain"; legacy: false; owner: string }
 
 type ResultFailure = ResultErr & { hint?: string }
 
@@ -145,6 +149,13 @@ function routeParse(path: string): ApiRoute | undefined {
   if (path === "/api/v1/caddy/status") return { kind: "status", legacy: false }
   if (path === "/api/v1/caddy/regenerate") return { kind: "regenerate", legacy: false }
   if (path === "/regenerate") return { kind: "regenerate", legacy: true }
+
+  const versionedDefaultDomain = path.match(/^\/api\/v1\/users\/([^/]+)\/default-domain$/)
+  if (versionedDefaultDomain !== null) {
+    const owner = segmentDecode(versionedDefaultDomain[1]!, ownerPattern)
+    if (owner === undefined) return undefined
+    return { kind: "default-domain", legacy: false, owner }
+  }
 
   const versionedHistory = path.match(/^\/api\/v1\/users\/([^/]+)\/projects\/([^/]+)\/history$/)
   if (versionedHistory !== null) {
@@ -249,7 +260,8 @@ function routeRequiresProjectAccess(route: ApiRoute): boolean {
     route.kind === "access-logs" ||
     route.kind === "self-access-logs" ||
     route.kind === "history" ||
-    route.kind === "config"
+    route.kind === "config" ||
+    route.kind === "default-domain"
   )
 }
 
@@ -359,6 +371,7 @@ function routeMethods(route: ApiRoute): readonly string[] {
   if (route.kind === "docs") return ["GET"]
   if (route.kind === "project") return route.legacy ? ["GET", "PUT", "PATCH", "DELETE"] : ["GET", "PATCH", "DELETE"]
   if (route.kind === "project-by-port") return ["DELETE"]
+  if (route.kind === "default-domain") return ["GET", "PUT", "DELETE"]
   if (route.kind === "regenerate") return ["POST"]
   return ["GET"]
 }
@@ -634,7 +647,78 @@ export function projectRegistryApiHandlerCreate(options: ApiHandlerOptions): Pro
     }
     const resolvedAccess = access ?? requestAccessCreate(username)
     const owner = "owner" in route && route.owner !== undefined ? route.owner : username
-    const useCaseOptions = { repository: options.repository, access: resolvedAccess, portRange: options.portRange }
+    const useCaseOptions = {
+      repository: options.repository,
+      access: resolvedAccess,
+      portRange: options.portRange,
+      defaultUserDomains: options.defaultUserDomains,
+    }
+
+    if (route.kind === "default-domain") {
+      const actorR = await resolvedAccess.actorResolve()
+      if (!actorR.success) return resultErrorResponse(actorR, false, "projects")
+      const authorizationR = await projectOwnerAuthorize(resolvedAccess, actorR.data, owner)
+      if (!authorizationR.success) return resultErrorResponse(authorizationR, false, "projects")
+
+      if (request.method === "GET") {
+        const entryR = await options.repository.getUserDefaultDomain(owner)
+        if (!entryR.success) return resultErrorResponse(entryR, false, "projects")
+
+        const environmentDomain = options.defaultUserDomains?.[owner]
+        if (entryR.data.domain === null) {
+          return successResponse({ owner, domain: null, source: "explicit", revision: entryR.data.revision })
+        }
+        if (entryR.data.domain !== undefined) {
+          return successResponse({
+            owner,
+            domain: entryR.data.domain,
+            source: "explicit",
+            revision: entryR.data.revision,
+          })
+        }
+        if (environmentDomain !== undefined) {
+          const environmentDomainR = projectDomainValidate(environmentDomain, "projectRegistryApiDefaultDomainGet")
+          if (!environmentDomainR.success) return resultErrorResponse(environmentDomainR, false, "projects")
+          return successResponse({
+            owner,
+            domain: environmentDomainR.data,
+            source: "environment",
+            revision: entryR.data.revision,
+          })
+        }
+        return successResponse({ owner, domain: null, source: "none", revision: entryR.data.revision })
+      }
+
+      const body = await requestBodyJson(request, false)
+      if (body instanceof Response) return body
+
+      let domain: string | null
+      if (request.method === "PUT") {
+        const bodyRecord = recordValue(body)
+        const domainR = projectDomainValidate(bodyRecord?.domain, "projectRegistryApiDefaultDomainSet")
+        if (!domainR.success) {
+          return errorResponse(
+            {
+              code: "request.invalid",
+              message: domainR.errorMessage,
+              op: domainR.op,
+              status: 400,
+            },
+            false,
+          )
+        }
+        domain = domainR.data
+      } else {
+        domain = null
+      }
+
+      const mutationR = await options.repository.setUserDefaultDomain(owner, domain, {
+        actor: actorR.data.username,
+        ...expectedRevision(body),
+      })
+      if (!mutationR.success) return resultErrorResponse(mutationR, false, "projects")
+      return successResponse(mutationR.data)
+    }
 
     if (route.kind === "regenerate") {
       const regeneratedR = await options.caddyApplication.regenerate()

@@ -58,6 +58,15 @@ describe("projectNameFromPath", () => {
     expect(result.success).toBe(false)
     if (result.success) return
     expect(result.op).toBe("projectNameFromPath")
+    expect(result.hint).toBe("Run: project-registry project create --docs")
+  })
+
+  test("requires explicit create arguments when the inferred name already exists", () => {
+    const result = projectNameFromPath([project("other", "/tmp/different")], "/tmp/other")
+
+    expect(result.success).toBe(false)
+    if (result.success) return
+    expect(result.hint).toBe("Run: project-registry project create --name <name> --path /tmp/other --docs")
   })
 
   test("does not match a path with only a shared prefix", () => {

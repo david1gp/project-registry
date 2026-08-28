@@ -33,6 +33,7 @@ export function projectRegistryDaemonConfigFromEnv(
       "PROJECT_REGISTRY_REPOSITORY_PATH",
       "PROJECT_REGISTRY_REPOSITORY_BRANCH",
       "PROJECT_REGISTRY_USERS",
+      "PROJECT_REGISTRY_DEFAULT_USER_DOMAINS",
       "PROJECT_REGISTRY_SOCKET_DIRECTORY",
       "PROJECT_REGISTRY_WEB_HOST",
       "PROJECT_REGISTRY_CADDY_BINARY",
@@ -85,6 +86,15 @@ export function projectRegistryDaemonConfigFromEnv(
       values,
       "PROJECT_REGISTRY_CADDY_INITIALIZE_FROM_GENERATED_CONFIG",
     )
+    let defaultUserDomains: unknown
+    const defaultUserDomainsValue = values.PROJECT_REGISTRY_DEFAULT_USER_DOMAINS?.trim()
+    if (defaultUserDomainsValue !== undefined && defaultUserDomainsValue !== "") {
+      try {
+        defaultUserDomains = JSON.parse(defaultUserDomainsValue)
+      } catch {
+        return createResultError(op, "PROJECT_REGISTRY_DEFAULT_USER_DOMAINS must be valid JSON")
+      }
+    }
     const caddyAccessLogRoot =
       values.PROJECT_REGISTRY_CADDY_ACCESS_LOG_ROOT?.trim() === ""
         ? undefined
@@ -127,6 +137,7 @@ export function projectRegistryDaemonConfigFromEnv(
       mappedUsers: values.PROJECT_REGISTRY_USERS?.split(",")
         .map((user) => user.trim())
         .filter(Boolean),
+      ...(defaultUserDomains === undefined ? {} : { defaultUserDomains }),
       socketDirectory: values.PROJECT_REGISTRY_SOCKET_DIRECTORY,
       webListener: {
         hostname: values.PROJECT_REGISTRY_WEB_HOST ?? "127.0.0.1",

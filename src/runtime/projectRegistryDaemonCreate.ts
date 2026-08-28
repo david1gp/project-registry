@@ -1038,12 +1038,18 @@ export function projectRegistryDaemonCreate(options: ProjectRegistryDaemonOption
   const guardedRepository: ProjectRepository = {
     read: () => gitQueueRun("projectRegistryRepositoryRead", () => repository.read()),
     get: (key) => gitQueueRun("projectRegistryRepositoryGet", () => repository.get(key)),
+    getUserDefaultDomain: (owner) =>
+      gitQueueRun("projectRegistryRepositoryUserDefaultDomainGet", () => repository.getUserDefaultDomain(owner)),
     create: (project, mutationOptions) =>
       gitQueueRun("projectRegistryRepositoryCreate", () => repository.create(project, mutationOptions)),
     edit: (key, project, mutationOptions) =>
       gitQueueRun("projectRegistryRepositoryEdit", () => repository.edit(key, project, mutationOptions)),
     delete: (key, mutationOptions) =>
       gitQueueRun("projectRegistryRepositoryDelete", () => repository.delete(key, mutationOptions)),
+    setUserDefaultDomain: (owner, domain, mutationOptions) =>
+      gitQueueRun("projectRegistryRepositoryUserDefaultDomainSet", () =>
+        repository.setUserDefaultDomain(owner, domain, mutationOptions),
+      ),
     history: (key, limit) => gitQueueRun("projectRegistryRepositoryHistory", () => repository.history(key, limit)),
     ownerHistory: (owner, limit) =>
       gitQueueRun("projectRegistryRepositoryOwnerHistory", () => repository.ownerHistory(owner, limit)),
@@ -1073,6 +1079,7 @@ export function projectRegistryDaemonCreate(options: ProjectRegistryDaemonOption
         ...(config.caddyAccessLogRoot === undefined ? {} : { caddyAccessLogRoot: config.caddyAccessLogRoot }),
       },
       portRange: config.portRange,
+      defaultUserDomains: config.defaultUserDomains,
     })
 
   function caddyStop(): Promise<string[]> {

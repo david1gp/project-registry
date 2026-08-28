@@ -4,9 +4,12 @@ export type ProjectRegistryCliInvocation = {
   command:
     | { kind: "help" }
     | { kind: "version" }
+    | { kind: "user-default-domain-get" }
+    | { kind: "user-default-domain-set"; domain: string }
+    | { kind: "user-default-domain-unset" }
     | { kind: "project-list" }
     | { kind: "project-get"; name: string }
-    | { kind: "project-create"; name: string; caddy: ProjectRegistryCliCaddyOptions; labels?: Record<string, string> }
+    | { kind: "project-create"; name?: string; caddy: ProjectRegistryCliCaddyOptions; labels?: Record<string, string> }
     | {
         kind: "project-edit"
         name: string

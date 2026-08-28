@@ -3,7 +3,7 @@ export const projectRegistryCliHelp = `Usage: project-registry [--socket <path>]
 Commands:
   project list
   project get <name>
-  project create --name <name> --domain <hostname> [options]
+  project create [--name <name>] [--domain <hostname>] [options]
   project edit <name> [options]
   project delete <name>
   delete --port <port>
@@ -15,11 +15,15 @@ Commands:
   config [selector]
   regenerate
   status
+  user default-domain get
+  user default-domain set <domain>
+  user default-domain unset
 
 Project create/edit options:
   --port <port>              Upstream port (create allocates one when omitted)
-  --domain <hostname>        Domain; repeat to provide multiple domains
-  --path <path>              Static/docs filesystem path
+  --domain <hostname>        Domain; repeat to provide multiple domains; defaults to the configured user domain
+  --path <path>              Static/docs filesystem path (defaults to the current directory)
+  --name <name>              Project name (defaults to the path folder name)
   --kind <proxy|static>      Caddy route kind
   --access <internal|external>
   --docs | --no-docs

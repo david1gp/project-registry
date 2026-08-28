@@ -1,8 +1,10 @@
+import { basename, resolve } from "node:path"
 import * as a from "valibot"
 import { createResult, createResultError, type Result, type ResultErr } from "#result"
 import type { Project } from "../project/Project.js"
 import { projectLabelsSchema } from "../project/projectLabelsSchema.js"
 import { projectSchema } from "../project/projectSchema.js"
+import type { ProjectRegistryCliCaddyOptions } from "./ProjectRegistryCliCaddyOptions.js"
 import type { ProjectRegistryCliFetch } from "./ProjectRegistryCliFetch.js"
 import type { ProjectRegistryCliInvocation } from "./ProjectRegistryCliInvocation.js"
 import { projectNameFromPath } from "./projectNameFromPath.js"
@@ -21,7 +23,7 @@ type CliRunOptions = {
 }
 
 type RequestOptions = {
-  method?: "GET" | "POST" | "PATCH" | "DELETE"
+  method?: "GET" | "POST" | "PUT" | "PATCH" | "DELETE"
   body?: unknown
 }
 
@@ -141,6 +143,36 @@ function projectCliReadMap(project: Project): Record<string, unknown> {
   }
 }
 
+function projectCreateDefaults(command: Extract<ProjectRegistryCliInvocation["command"], { kind: "project-create" }>): {
+  name: string
+  caddy: ProjectRegistryCliCaddyOptions
+} {
+  const path = command.caddy.path ?? resolve(process.cwd())
+  return {
+    name: command.name ?? basename(path),
+    caddy: { ...command.caddy, ...(command.caddy.path === undefined ? { path } : {}) },
+  }
+}
+
+function projectCreateDefaultsCollision(
+  projects: readonly Project[],
+  name: string,
+  path: string,
+  command: Extract<ProjectRegistryCliInvocation["command"], { kind: "project-create" }>,
+): boolean {
+  if (command.name !== undefined && command.caddy.path !== undefined) return false
+  return projects.some((project) => {
+    if (command.name === undefined && project.name === name) return true
+    const projectPath = project.caddy?.path
+    return (
+      command.caddy.path === undefined &&
+      projectPath !== undefined &&
+      projectPath !== "" &&
+      resolve(projectPath) === path
+    )
+  })
+}
+
 async function jsonProjectReadRequest(
   command: Extract<ProjectRegistryCliInvocation["command"], { kind: "project-list" | "project-get" }>,
   socketPath: string,
@@ -185,7 +217,7 @@ async function commandRequest(
   socketPath: string,
   environment: Readonly<Record<string, string | undefined>>,
   requestFetch?: ProjectRegistryCliFetch,
-): Promise<Result<unknown>> {
+): Promise<Result<unknown> & { hint?: string }> {
   const command = invocation.command
   if (invocation.json && (command.kind === "project-list" || command.kind === "project-get")) {
     return jsonProjectReadRequest(command, socketPath, environment, requestFetch)
@@ -198,7 +230,10 @@ async function commandRequest(
     command.kind !== "docs" &&
     command.kind !== "docs-local" &&
     command.kind !== "regenerate" &&
-    command.kind !== "project-access-logs"
+    command.kind !== "project-access-logs" &&
+    command.kind !== "user-default-domain-get" &&
+    command.kind !== "user-default-domain-set" &&
+    command.kind !== "user-default-domain-unset"
   ) {
     return projectRegistryCliRequest(socketPath, requestPath(invocation), {}, requestFetch)
   }
@@ -213,6 +248,33 @@ async function commandRequest(
   const ownerR = ownerResolve(environment)
   if (!ownerR.success) return ownerR
   const ownerPath = encodeURIComponent(ownerR.data)
+
+  if (
+    command.kind === "user-default-domain-get" ||
+    command.kind === "user-default-domain-set" ||
+    command.kind === "user-default-domain-unset"
+  ) {
+    const path = `/api/v1/users/${ownerPath}/default-domain`
+    if (command.kind === "user-default-domain-get") return projectRegistryCliRequest(socketPath, path, {}, requestFetch)
+    const currentR = await projectRegistryCliRequest(socketPath, path, {}, requestFetch)
+    if (!currentR.success) return currentR
+    const revisionR = revisionParse(currentR.data)
+    if (!revisionR.success) return revisionR
+    if (command.kind === "user-default-domain-set") {
+      return projectRegistryCliRequest(
+        socketPath,
+        path,
+        { method: "PUT", body: { expectedRevision: revisionR.data, domain: command.domain } },
+        requestFetch,
+      )
+    }
+    return projectRegistryCliRequest(
+      socketPath,
+      path,
+      { method: "DELETE", body: { expectedRevision: revisionR.data } },
+      requestFetch,
+    )
+  }
 
   if (command.kind === "docs" || command.kind === "docs-local") {
     let name: string
@@ -257,12 +319,31 @@ async function commandRequest(
 
   let options: RequestOptions
   if (command.kind === "project-create") {
+    const defaults = projectCreateDefaults(command)
+    const projectsR = projectListResponseParse(currentR.data)
+    if (!projectsR.success) return projectsR
+    if (
+      projectCreateDefaultsCollision(
+        projectsR.data,
+        defaults.name,
+        resolve(defaults.caddy.path ?? process.cwd()),
+        command,
+      )
+    ) {
+      return {
+        ...createResultError(
+          "projectRegistryCliProjectCreate",
+          "Project create defaults collide with an existing project; provide explicit --name and --path.",
+        ),
+        hint: "Use explicit --name and --path values, then retry.",
+      }
+    }
     options = {
       method: "POST",
       body: {
         expectedRevision: revisionR.data,
-        name: command.name,
-        caddy: command.caddy,
+        name: defaults.name,
+        caddy: defaults.caddy,
         ...(command.labels === undefined ? {} : { labels: command.labels }),
       },
     }

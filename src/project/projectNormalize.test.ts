@@ -66,6 +66,19 @@ describe("projectNormalize", () => {
     expect(result.data.caddy?.port).toBe(3001)
   })
 
+  test("generates a project subdomain from the owner's configured default domain", () => {
+    const result = projectNormalize(
+      {
+        owner: "leo",
+        name: "api",
+        caddy: {},
+      },
+      { defaultUserDomains: { leo: "leonardomora.de" } },
+    )
+
+    expect(result).toMatchObject({ success: true, data: { caddy: { domains: ["api.leonardomora.de"] } } })
+  })
+
   test("normalizes and deduplicates domains while dropping empty values", () => {
     const result = projectNormalize({
       owner: "alice",

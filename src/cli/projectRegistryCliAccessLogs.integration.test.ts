@@ -82,9 +82,11 @@ function repositoryCreate(): ProjectRepository {
         ? createResultError("projectRepositoryGet", "project not found")
         : createResult({ project, revision })
     },
+    getUserDefaultDomain: async () => createResultError("projectRepositoryUserDefaultDomainGet", "not implemented"),
     create: async () => createResultError("projectRepositoryCreate", "not implemented"),
     edit: async () => createResultError("projectRepositoryEdit", "not implemented"),
     delete: async () => createResultError("projectRepositoryDelete", "not implemented"),
+    setUserDefaultDomain: async () => createResultError("projectRepositorySetUserDefaultDomain", "not implemented"),
     history: async () => createResult([]),
     ownerHistory: async () => createResult([]),
     readiness: async () => createResult({ ready: true, clean: true, revision }),

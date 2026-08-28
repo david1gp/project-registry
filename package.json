@@ -112,6 +112,10 @@
       "types": "./dist/project-store/*.d.ts",
       "import": "./dist/project-store/*.js"
     },
+    "./user-default-domain/*.js": {
+      "types": "./dist/user-default-domain/*.d.ts",
+      "import": "./dist/user-default-domain/*.js"
+    },
     "./access-log/*.js": {
       "types": "./dist/access-log/*.d.ts",
       "import": "./dist/access-log/*.js"

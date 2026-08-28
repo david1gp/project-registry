@@ -41,6 +41,7 @@ describe("projectRegistryCliRequest", () => {
 
   test.each([
     ["POST", "/projects", { name: "site" }],
+    ["PUT", "/api/v1/users/david/default-domain", { domain: "example.com" }],
     ["PATCH", "/projects/site", { expectedRevision: "revision", caddy: { docs: false } }],
     ["DELETE", "/projects/site", { expectedRevision: "revision" }],
   ] as const)("sends %s JSON requests", async (method, path, body) => {

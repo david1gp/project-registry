@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test"
+import { basename } from "node:path"
 import pkg from "../../package.json" with { type: "json" }
 import { projectRegistryCliRun } from "./projectRegistryCliRun.js"
 
@@ -13,6 +14,7 @@ const project = {
 }
 const history = [{ sha: "1234567890abcdef", date: "2026-08-20T12:00:00Z", author: "Registry", message: "created" }]
 const status = { desiredRevision: "new", appliedRevision: "old", pendingRevision: "new", pending: true }
+const defaultDomain = { owner: "david", domain: "example.com", source: "explicit", revision: "current" }
 const accessLogPage = {
   records: [
     {
@@ -45,6 +47,18 @@ function mutation(action: "create" | "edit" | "delete", changed = true) {
   return {
     action,
     key: { owner: "david", name: "site" },
+    changed,
+    revision: "next-revision",
+    localCommit: { status: changed ? "committed" : "unchanged", revision: "next-revision" },
+    push: { requested: false, status: "not-requested" },
+  }
+}
+
+function defaultDomainMutation(action: "set" | "unset", domain: string | null, changed = true) {
+  return {
+    action,
+    owner: "david",
+    domain,
     changed,
     revision: "next-revision",
     localCommit: { status: changed ? "committed" : "unchanged", revision: "next-revision" },
@@ -85,6 +99,95 @@ describe("projectRegistryCliRun", () => {
     expect(paths).toEqual([expectedPath])
     expect(stdout).toHaveLength(1)
     expect(stderr).toEqual([])
+  })
+
+  test("dispatches user default-domain commands through the owner route and selected socket", async () => {
+    const requests: Array<{ path: string; method: string; body?: unknown; unix: string | undefined }> = []
+    const requestFetch = async (input: string | URL | Request, init?: RequestInit & { unix?: string }) => {
+      requests.push({
+        path: new URL(String(input)).pathname,
+        method: init?.method ?? "GET",
+        body: init?.body === undefined ? undefined : JSON.parse(String(init.body)),
+        unix: init?.unix,
+      })
+      if (init?.method === "PUT")
+        return Response.json({ success: true, data: defaultDomainMutation("set", "example.com") })
+      if (init?.method === "DELETE") return Response.json({ success: true, data: defaultDomainMutation("unset", null) })
+      return Response.json({ success: true, data: defaultDomain })
+    }
+
+    const outputs: string[] = []
+    for (const args of [
+      ["user", "default-domain", "get"],
+      ["user", "default-domain", "set", "Example.COM."],
+      ["user", "default-domain", "unset"],
+    ]) {
+      expect(
+        await projectRegistryCliRun([...args, "--socket", "/run/project-registry/custom.sock"], {
+          environment: { USER: "david" },
+          requestFetch,
+          stdout: (text) => outputs.push(text),
+        }),
+      ).toBe(0)
+    }
+
+    expect(requests).toEqual([
+      {
+        path: "/api/v1/users/david/default-domain",
+        method: "GET",
+        body: undefined,
+        unix: "/run/project-registry/custom.sock",
+      },
+      {
+        path: "/api/v1/users/david/default-domain",
+        method: "GET",
+        body: undefined,
+        unix: "/run/project-registry/custom.sock",
+      },
+      {
+        path: "/api/v1/users/david/default-domain",
+        method: "PUT",
+        body: { expectedRevision: "current", domain: "example.com" },
+        unix: "/run/project-registry/custom.sock",
+      },
+      {
+        path: "/api/v1/users/david/default-domain",
+        method: "GET",
+        body: undefined,
+        unix: "/run/project-registry/custom.sock",
+      },
+      {
+        path: "/api/v1/users/david/default-domain",
+        method: "DELETE",
+        body: { expectedRevision: "current" },
+        unix: "/run/project-registry/custom.sock",
+      },
+    ])
+    expect(outputs).toEqual([
+      "david\texample.com\texplicit\n",
+      "set david/default-domain\n",
+      "unset david/default-domain\n",
+    ])
+  })
+
+  test("emits complete JSON data for user default-domain commands", async () => {
+    const responses = [defaultDomain, defaultDomainMutation("set", "example.com"), defaultDomainMutation("unset", null)]
+    const outputs: string[] = []
+    const commands = [["get"], ["set", "example.com"], ["unset"]]
+
+    for (const args of commands) {
+      const exitCode = await projectRegistryCliRun(["user", "default-domain", ...args, "--json"], {
+        environment: { USER: "david" },
+        requestFetch: async (_input, init) => {
+          const data = init?.method === "PUT" ? responses[1] : init?.method === "DELETE" ? responses[2] : responses[0]
+          return Response.json({ success: true, data })
+        },
+        stdout: (text) => outputs.push(text),
+      })
+      expect(exitCode).toBe(0)
+    }
+
+    expect(outputs.map((output) => JSON.parse(output))).toEqual(responses.map((data) => ({ success: true, data })))
   })
 
   test("uses the selected socket for owner inference and keeps explicit owner authorization on the socket", async () => {
@@ -292,6 +395,7 @@ describe("projectRegistryCliRun", () => {
           caddy: {
             port: 4321,
             domains: ["one.example", "two.example"],
+            path: process.cwd(),
             docs: false,
             headerUp: { Host: "localhost" },
           },
@@ -548,7 +652,9 @@ describe("projectRegistryCliRun", () => {
 
     expect(exitCode).toBe(1)
     expect(requests).toEqual(["/api/v1/users/david/projects"])
-    expect(stderr.join("")).toBe(`error: no project matches cwd: ${process.cwd()}\n`)
+    expect(stderr.join("")).toBe(
+      `error: no project matches cwd: ${process.cwd()}\n` + "hint: Run: project-registry project create --docs\n",
+    )
   })
 
   test("regenerates through the versioned POST endpoint", async () => {
@@ -569,6 +675,39 @@ describe("projectRegistryCliRun", () => {
     expect(exitCode).toBe(0)
     expect(requests).toEqual([{ path: "/api/v1/caddy/regenerate", method: "POST" }])
     expect(stdout.join("")).toBe("regenerated\n")
+  })
+
+  test("derives project name and path for project create", async () => {
+    const requests: Array<{ path: string; method: string; body?: unknown }> = []
+    const stdout: string[] = []
+    const exitCode = await projectRegistryCliRun(["project", "create", "--docs"], {
+      environment: { USER: "david" },
+      requestFetch: async (input, init) => {
+        requests.push({
+          path: new URL(String(input)).pathname,
+          method: init?.method ?? "GET",
+          body: init?.body === undefined ? undefined : JSON.parse(String(init.body)),
+        })
+        if (init?.method === "POST") return Response.json({ success: true, data: mutation("create") }, { status: 201 })
+        return Response.json({ success: true, data: { projects: [], revision: "current" } })
+      },
+      stdout: (text) => stdout.push(text),
+    })
+
+    expect(exitCode).toBe(0)
+    expect(requests).toEqual([
+      { path: "/api/v1/users/david/projects", method: "GET" },
+      {
+        path: "/api/v1/users/david/projects",
+        method: "POST",
+        body: {
+          expectedRevision: "current",
+          name: basename(process.cwd()),
+          caddy: { docs: true, path: process.cwd() },
+        },
+      },
+    ])
+    expect(stdout.join("")).toBe("created david/site\n")
   })
 
   test.each([

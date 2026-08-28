@@ -145,6 +145,7 @@ export const projectRegistryDaemonConfigSchema = a.strictObject({
     ),
     [],
   ),
+  defaultUserDomains: a.optional(a.record(usernameSchema, a.pipe(a.string(), a.minLength(1))), {}),
   socketDirectory: a.optional(absolutePathSchema, "/run/project-registry"),
   webListener: a.optional(a.strictObject({ hostname: loopbackHostnameSchema, port: portSchema }), {
     hostname: "127.0.0.1",

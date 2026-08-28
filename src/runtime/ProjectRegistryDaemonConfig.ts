@@ -5,6 +5,7 @@ export type ProjectRegistryDaemonConfig = {
   repositoryPath: string
   repositoryBranch: string
   mappedUsers: readonly string[]
+  defaultUserDomains: Readonly<Record<string, string>>
   socketDirectory: string
   webListener: {
     hostname: "127.0.0.1" | "::1"
