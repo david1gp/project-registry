@@ -677,10 +677,10 @@ describe("projectRegistryCliRun", () => {
     expect(stdout.join("")).toBe("regenerated\n")
   })
 
-  test("derives project name and path for project create", async () => {
+  test("derives project name and path and enables docs by default for project create", async () => {
     const requests: Array<{ path: string; method: string; body?: unknown }> = []
     const stdout: string[] = []
-    const exitCode = await projectRegistryCliRun(["project", "create", "--docs"], {
+    const exitCode = await projectRegistryCliRun(["project", "create"], {
       environment: { USER: "david" },
       requestFetch: async (input, init) => {
         requests.push({

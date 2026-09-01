@@ -150,7 +150,7 @@ function projectCreateDefaults(command: Extract<ProjectRegistryCliInvocation["co
   const path = command.caddy.path ?? resolve(process.cwd())
   return {
     name: command.name ?? basename(path),
-    caddy: { ...command.caddy, ...(command.caddy.path === undefined ? { path } : {}) },
+    caddy: { docs: true, ...command.caddy, ...(command.caddy.path === undefined ? { path } : {}) },
   }
 }
 
