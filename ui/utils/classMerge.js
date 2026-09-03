@@ -1,6 +1,5 @@
-import { clsx } from "clsx";
-import { twMerge } from "tailwind-merge";
+import { cn } from "cn";
 export function classMerge(...inputs) {
-    return twMerge(clsx(inputs));
+    return cn(...inputs);
 }
 //# sourceMappingURL=classMerge.js.map

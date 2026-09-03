@@ -30,9 +30,8 @@
     "@adaptive-ds/git-store": "^0.1.0",
     "@adaptive-ds/mdi": "^0.1.2",
     "@solidjs/router": "^0.15.4",
-    "clsx": "^2.1.1",
+    "cn": "^0.2.4",
     "solid-js": "^1.9.12",
-    "tailwind-merge": "^3.6.0",
     "valibot": "^1.2.0"
   },
   "devDependencies": {

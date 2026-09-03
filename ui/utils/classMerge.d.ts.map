@@ -1,1 +1,1 @@
-{"version":3,"file":"classMerge.d.ts","sourceRoot":"","sources":["classMerge.ts"],"names":[],"mappings":"AAAA,OAAO,KAAK,EAAE,UAAU,EAAE,MAAM,MAAM,CAAA;AAItC,wBAAgB,UAAU,CAAC,GAAG,MAAM,EAAE,UAAU,EAAE,UAEjD"}
+{"version":3,"file":"classMerge.d.ts","sourceRoot":"","sources":["classMerge.ts"],"names":[],"mappings":"AACA,OAAO,KAAK,EAAE,UAAU,EAAE,MAAM,IAAI,CAAA;AAEpC,wBAAgB,UAAU,CAAC,GAAG,MAAM,EAAE,UAAU,EAAE,UAEjD"}
