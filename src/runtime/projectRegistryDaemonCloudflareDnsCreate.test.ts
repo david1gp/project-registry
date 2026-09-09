@@ -5,31 +5,26 @@ import { projectRegistryDaemonConfigFromEnv } from "./projectRegistryDaemonConfi
 
 function project(domains: string[]): Project {
   return {
-    schemaVersion: 2,
+    schemaVersion: 1,
     owner: "leo",
     name: "dns-app",
     type: "customer",
     order: Number.MAX_SAFE_INTEGER,
-    services: [
-      {
-        id: "default",
-        units: [],
-        caddy: {
-          port: 4300,
-          domains,
-          path: "",
-          access: "external",
-          kind: "proxy",
-          docs: true,
-          browse: false,
-          headerUp: {},
-          disabled: false,
-          denyDotfiles: false,
-          spa: false,
-        },
-      },
-    ],
+    services: [],
     labels: {},
+    caddy: {
+      port: 4300,
+      domains,
+      path: "",
+      access: "external",
+      kind: "proxy",
+      docs: true,
+      browse: false,
+      headerUp: {},
+      disabled: false,
+      denyDotfiles: false,
+      spa: false,
+    },
   }
 }
 

@@ -543,9 +543,7 @@ describe("projectRegistryApiHandlerCreate", () => {
     expect(failed.response.status).toBe(409)
     expect(notifications).toHaveLength(2)
     expect(notifications[0]).toMatchObject({ noDns: false, project: { name: "dns-app" } })
-    expect(notifications[0]?.project.services).toContainEqual(
-      expect.objectContaining({ caddy: expect.objectContaining({ domains: ["alias.example"] }) }),
-    )
+    expect(notifications[0]?.project.caddy?.domains).toEqual(["alias.example"])
     expect(notifications[1]).toMatchObject({ noDns: true, project: { name: "no-dns-app" } })
   })
 

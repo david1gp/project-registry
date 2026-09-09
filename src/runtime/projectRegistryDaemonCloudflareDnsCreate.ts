@@ -2,7 +2,6 @@ import { createResult, createResultError, type PromiseResult, type Result } from
 import type { CloudflareDnsFetch } from "../cloudflare/CloudflareDnsFetch.js"
 import { cloudflareDnsReconcile } from "../cloudflare/cloudflareDnsReconcile.js"
 import type { Project } from "../project/Project.js"
-import { projectCaddyEntries } from "../project/projectCaddyEntries.js"
 import { projectDomainNormalize } from "../project/projectDomainNormalize.js"
 
 const reconcileIntervalMs = 1_000
@@ -49,11 +48,9 @@ export function projectRegistryDaemonCloudflareDnsCreate(options: {
 
   function hostnames(project: Project): string[] {
     const values = new Set<string>()
-    for (const entry of projectCaddyEntries(project)) {
-      for (const domain of entry.caddy.domains) {
-        const normalized = projectDomainNormalize(domain)
-        if (normalized !== "") values.add(normalized)
-      }
+    for (const domain of project.caddy?.domains ?? []) {
+      const normalized = projectDomainNormalize(domain)
+      if (normalized !== "") values.add(normalized)
     }
     return [...values]
   }

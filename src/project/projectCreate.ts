@@ -1,5 +1,6 @@
 import { createResult, createResultErrorCode, type PromiseResult } from "#result"
 import type { ProjectRepositoryMutation } from "../project-store/ProjectRepositoryMutation.js"
+import type { Project } from "./Project.js"
 import type { ProjectMutationOptions } from "./ProjectMutationOptions.js"
 import type { ProjectUseCaseOptions } from "./ProjectUseCaseOptions.js"
 import { projectMutationExpectedRevision } from "./projectMutationExpectedRevision.js"
@@ -36,6 +37,7 @@ export async function projectCreate(
   options: ProjectUseCaseOptions,
   input: unknown,
   mutationOptions: ProjectMutationOptions,
+  afterPersistence?: (project: Project) => void,
 ): PromiseResult<ProjectRepositoryMutation> {
   const op = "projectCreate"
   const actorR = await options.access.actorResolve()
@@ -65,5 +67,12 @@ export async function projectCreate(
   if (!projectR.success) return projectR
 
   const repositoryOptions = { actor: actorR.data.username, expectedRevision: expectedRevisionR.data }
-  return options.repository.create(projectR.data, repositoryOptions)
+  const mutationR = await options.repository.create(projectR.data, repositoryOptions)
+  if (!mutationR.success) return mutationR
+  try {
+    afterPersistence?.(projectR.data)
+  } catch {
+    // Background integrations must not turn a successful persistence into a failed creation.
+  }
+  return mutationR
 }
