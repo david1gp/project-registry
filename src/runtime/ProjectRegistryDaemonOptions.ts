@@ -3,6 +3,7 @@ import type { CaddyApplication } from "../caddy/CaddyApplication.js"
 import type { CaddyFetch } from "../caddy/CaddyFetch.js"
 import type { CaddyProcessRunner } from "../caddy/CaddyProcessRunner.js"
 import type { CaddyTimer } from "../caddy/CaddyTimer.js"
+import type { CloudflareDnsFetch } from "../cloudflare/CloudflareDnsFetch.js"
 import type { ProjectRepository } from "../project-store/ProjectRepository.js"
 import type { SessionStore } from "../session/SessionStore.js"
 import type { TokenReferenceStore } from "../session/TokenReferenceStore.js"
@@ -41,5 +42,6 @@ export type ProjectRegistryDaemonOptions = {
   serverIpFetch?: CaddyFetch
   serverIpLogger?: ProjectRegistryDaemonServerIpLogger
   serverIpClock?: () => number
+  cloudflareDnsFetch?: CloudflareDnsFetch
   requireRoot?: boolean
 }

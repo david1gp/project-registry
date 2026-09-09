@@ -82,6 +82,7 @@ export function projectRegistryDaemonConfigValidate(input: unknown): Result<Proj
       session: { ...parsed.output.session },
       portRange: { ...parsed.output.portRange },
       webListener: { ...parsed.output.webListener },
+      cloudflareDns: { ...parsed.output.cloudflareDns },
     })
   } catch (error) {
     return createResultError(op, error instanceof Error ? error.message : "invalid daemon configuration")

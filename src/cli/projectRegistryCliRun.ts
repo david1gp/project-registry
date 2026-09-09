@@ -344,6 +344,7 @@ async function commandRequest(
         expectedRevision: revisionR.data,
         name: defaults.name,
         caddy: defaults.caddy,
+        ...(command.noDns === true ? { noDns: true } : {}),
         ...(command.labels === undefined ? {} : { labels: command.labels }),
       },
     }

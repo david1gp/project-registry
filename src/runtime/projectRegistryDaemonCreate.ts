@@ -5,6 +5,7 @@ import type { ProjectAccess } from "../access/ProjectAccess.js"
 import { projectAccessCreate } from "../access/projectAccessCreate.js"
 import { projectAccessLogSourceFileCreate } from "../access-log/projectAccessLogSourceFileCreate.js"
 import { projectRegistryApiHandlerCreate } from "../api/projectRegistryApiHandlerCreate.js"
+import { projectRegistryDaemonCloudflareDnsCreate } from "./projectRegistryDaemonCloudflareDnsCreate.js"
 import type { ProjectRepository } from "../project-store/ProjectRepository.js"
 import { sessionActorResolve } from "../session/sessionActorResolve.js"
 import { sessionRequestResolve } from "../session/sessionRequestResolve.js"
@@ -210,6 +211,7 @@ export function projectRegistryDaemonCreate(options: ProjectRegistryDaemonOption
   let serverIpFetchOption: ProjectRegistryDaemonOptions["serverIpFetch"]
   let serverIpLoggerOption: ProjectRegistryDaemonOptions["serverIpLogger"]
   let serverIpClockOption: ProjectRegistryDaemonOptions["serverIpClock"]
+  let cloudflareDnsFetchOption: ProjectRegistryDaemonOptions["cloudflareDnsFetch"]
   let requireRootOption: ProjectRegistryDaemonOptions["requireRoot"]
   try {
     configInput = options.config
@@ -229,6 +231,7 @@ export function projectRegistryDaemonCreate(options: ProjectRegistryDaemonOption
     serverIpFetchOption = options.serverIpFetch
     serverIpLoggerOption = options.serverIpLogger
     serverIpClockOption = options.serverIpClock
+    cloudflareDnsFetchOption = options.cloudflareDnsFetch
     requireRootOption = options.requireRoot
   } catch (error) {
     return createResultError(op, error instanceof Error ? error.message : "invalid daemon options")
@@ -263,6 +266,16 @@ export function projectRegistryDaemonCreate(options: ProjectRegistryDaemonOption
   })
   if (!serverIpR.success) return serverIpR
   const serverIp: ProjectRegistryDaemonServerIp = serverIpR.data
+  const cloudflareDnsR = projectRegistryDaemonCloudflareDnsCreate({
+    enabled: config.cloudflareDns.enabled,
+    token: config.cloudflareDns.token,
+    timeoutMs: config.loadTimeoutMs,
+    serverIpCurrent: serverIp.current,
+    timer,
+    ...(cloudflareDnsFetchOption === undefined ? {} : { fetch: cloudflareDnsFetchOption }),
+  })
+  if (!cloudflareDnsR.success) return cloudflareDnsR
+  const cloudflareDns = cloudflareDnsR.data
   const mappedUsersResolve = mappedUsersResolveOption
   const socketRecords = new Map<string, SocketRecord>()
   const cleanupRecords = new Map<string, SocketRecord>()
@@ -962,6 +975,9 @@ export function projectRegistryDaemonCreate(options: ProjectRegistryDaemonOption
 
   async function stopResourcesInternal(): Promise<string[]> {
     const failures: string[] = []
+    const cloudflareDnsShutdownR = await cloudflareDns.shutdown()
+    if (!cloudflareDnsShutdownR.success)
+      failures.push(`Cloudflare DNS shutdown: ${cloudflareDnsShutdownR.errorMessage}`)
     serverIp.shutdown()
     if (userRefreshHandle !== undefined) {
       try {
@@ -1105,6 +1121,9 @@ export function projectRegistryDaemonCreate(options: ProjectRegistryDaemonOption
       },
       portRange: config.portRange,
       defaultUserDomains: config.defaultUserDomains,
+      ...(config.cloudflareDns.enabled && config.cloudflareDns.token !== undefined
+        ? { projectCreateAfterPersistence: cloudflareDns.projectCreateAfterPersistence }
+        : {}),
     })
 
   function caddyStop(): Promise<string[]> {
@@ -1235,6 +1254,8 @@ export function projectRegistryDaemonCreate(options: ProjectRegistryDaemonOption
   async function startInternal(): PromiseResult<void> {
     if (state !== "starting") return createResultError(op, "daemon has stopped")
     serverIp.start()
+    const cloudflareDnsStartR = cloudflareDns.start()
+    if (!cloudflareDnsStartR.success) return startupFailure(cloudflareDnsStartR.errorMessage)
     const signalsR = signalsInstall()
     if (!signalsR.success) return startupFailure(signalsR.errorMessage)
 
@@ -1288,6 +1309,10 @@ export function projectRegistryDaemonCreate(options: ProjectRegistryDaemonOption
 
   async function shutdownWork(): Promise<string[]> {
     const operations: Array<Promise<string[]>> = [
+      cloudflareDns.shutdown().then(
+        (result) => (result.success ? [] : [`Cloudflare DNS shutdown: ${result.errorMessage}`]),
+        () => ["Cloudflare DNS shutdown did not complete"],
+      ),
       gitTail.then(
         () => [],
         () => ["Git queue did not complete"],

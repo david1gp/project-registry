@@ -163,6 +163,27 @@ reload, or systemd daemon reload. It installs the normalized OIDC file as root-o
 mode `0600`, the non-secret environment as `0640`, and the unit as `0644`. The
 unit separately references the required root-owned `0600` `/etc/project-registry/zitadel.env`;
 provision that file from a secret store or pass it with `PROJECT_REGISTRY_ZITADEL_SOURCE`.
+Cloudflare DNS credentials are optional and are kept in a separate root-owned `0600` environment
+file. Provision it outside Git and pass it with `PROJECT_REGISTRY_CLOUDFLARE_SOURCE`; it may define
+`CLOUDFLARE_API_TOKEN` (preferred) or `CF_API_TOKEN`. The unit loads the file when present, so a
+missing token makes DNS a no-op rather than a daemon startup failure. The installer never prints
+the file contents. Set `PROJECT_REGISTRY_CLOUDFLARE_DNS_ENABLED=false` in the non-secret daemon
+environment to disable DNS even when a token is present. For example:
+
+```bash
+sudo env \
+  PROJECT_REGISTRY_CLOUDFLARE_SOURCE=/run/secrets/project-registry-cloudflare.env \
+  PROJECT_REGISTRY_ZITADEL_SOURCE=/run/secrets/project-registry-zitadel.env \
+  BUN_BIN=/home/david/.bun/bin/bun \
+  PROJECT_REGISTRY_SOURCE=/home/david/adaptive/project-registry \
+  bash ops/migration/install-project-registryd.bash --apply
+```
+
+After a successful project create, the daemon reconciles each normalized saved domain in the
+background using the current discovered server IP. A create remains successful if Cloudflare is
+not configured, `--no-dns` is supplied, IP discovery is still pending, or a remote DNS request
+fails. Pending work is retried when discovery supplies an IP and is cancelled during shutdown.
+DNS records are not deleted and later project edits are not synchronized automatically.
 The OIDC file supplies the session cookie credential, while session limits remain in the
 non-secret environment. Do not
 activate the unit during task 5; service activation belongs to the later cutover
@@ -189,7 +210,7 @@ leave the previous value in place. The root-owned daemon creates the parent dire
 
 Use `PROJECT_REGISTRY_SERVER_IP_CACHE_PATH` to select another absolute cache path when deployment state is stored
 elsewhere, and `PROJECT_REGISTRY_SERVER_IP_DISCOVERY_TIMEOUT_MS` to adjust the bounded request timeout. The current
-in-memory value is available to later DNS integration; this task does not change Cloudflare or DNS configuration.
+in-memory value is used by the optional background Cloudflare DNS integration described above.
 
 ### Optional Caddy access-log storage
 

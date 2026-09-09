@@ -1,4 +1,4 @@
-import { createResult, createResultError, type Result, type ResultErr } from "#result"
+import { createResult, createResultError, createResultErrorCode, type Result, type ResultErr } from "#result"
 import type { ProjectAccess } from "../access/ProjectAccess.js"
 import type { ProjectAccessLogSource } from "../access-log/ProjectAccessLogSource.js"
 import { projectAccessLogListUseCase } from "../access-log/projectAccessLogListUseCase.js"
@@ -33,6 +33,7 @@ type ApiHandlerOptions = {
   defaultUserDomains?: Readonly<Record<string, string>>
   projectAccessLogSource?: ProjectAccessLogSource
   socketAccessResolve?: ProjectRegistryDaemonSocketAccessResolve
+  projectCreateAfterPersistence?: (project: Project, options: { noDns: boolean }) => void
 }
 
 type ApiRoute =
@@ -430,6 +431,13 @@ function expectedRevision(input: unknown): ProjectMutationOptions {
   return { expectedRevision: recordValue(input)?.expectedRevision as string }
 }
 
+function projectCreateNoDnsParse(input: Record<string, unknown> | undefined): Result<boolean> {
+  const op = "projectRegistryApiProjectCreateNoDnsParse"
+  if (input === undefined || !Object.hasOwn(input, "noDns")) return createResult(false)
+  if (typeof input.noDns !== "boolean") return createResultErrorCode(op, "noDns must be a boolean", "request.invalid")
+  return createResult(input.noDns)
+}
+
 const legacyCaddyKeys = [
   "port",
   "domains",
@@ -793,8 +801,22 @@ export function projectRegistryApiHandlerCreate(options: ApiHandlerOptions): Pro
           false,
         )
       }
-      const input = bodyRecord === undefined ? body : { ...bodyRecord, owner }
-      const mutationR = await projectCreate(useCaseOptions, input, expectedRevision(body))
+      const noDnsR = projectCreateNoDnsParse(bodyRecord)
+      if (!noDnsR.success) return resultErrorResponse(noDnsR, route.legacy, "projects")
+      let input: unknown = body
+      if (bodyRecord !== undefined) {
+        const inputRecord = { ...bodyRecord }
+        delete inputRecord.noDns
+        input = { ...inputRecord, owner }
+      }
+      const mutationR = await projectCreate(
+        useCaseOptions,
+        input,
+        expectedRevision(body),
+        options.projectCreateAfterPersistence === undefined
+          ? undefined
+          : (project) => options.projectCreateAfterPersistence?.(project, { noDns: noDnsR.data }),
+      )
       if (!mutationR.success) return resultErrorResponse(mutationR, false, "projects")
       const applicationR = await caddyProjectChange(options.caddyApplication, mutationR.data)
       if (applicationR !== undefined && "success" in applicationR && !applicationR.success) {

@@ -406,6 +406,33 @@ describe("projectRegistryCliRun", () => {
     expect(stdout.join("")).toBe("created david/site\n")
   })
 
+  test("propagates --no-dns only on project create", async () => {
+    const requests: Array<{ method: string; body?: unknown }> = []
+    const exitCode = await projectRegistryCliRun(["project", "create", "--name", "site", "--no-dns"], {
+      environment: { USER: "david" },
+      requestFetch: async (_input, init) => {
+        requests.push({
+          method: init?.method ?? "GET",
+          body: init?.body === undefined ? undefined : JSON.parse(String(init.body)),
+        })
+        if (init?.method === "POST") return Response.json({ success: true, data: mutation("create") }, { status: 201 })
+        return Response.json({ success: true, data: { projects: [], revision: "current-revision" } })
+      },
+      stdout: () => {},
+    })
+
+    expect(exitCode).toBe(0)
+    expect(requests[1]).toEqual({
+      method: "POST",
+      body: {
+        expectedRevision: "current-revision",
+        name: "site",
+        caddy: { docs: true, path: process.cwd() },
+        noDns: true,
+      },
+    })
+  })
+
   test("edits with a minimal PATCH and preserves an API no-op", async () => {
     const requests: Array<{ method: string; body?: unknown }> = []
     const stdout: string[] = []

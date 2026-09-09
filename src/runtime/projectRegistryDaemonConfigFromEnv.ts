@@ -61,6 +61,9 @@ export function projectRegistryDaemonConfigFromEnv(
       "SERVER_IP",
       "PROJECT_REGISTRY_SERVER_IP_CACHE_PATH",
       "PROJECT_REGISTRY_SERVER_IP_DISCOVERY_TIMEOUT_MS",
+      "CLOUDFLARE_API_TOKEN",
+      "CF_API_TOKEN",
+      "PROJECT_REGISTRY_CLOUDFLARE_DNS_ENABLED",
     ]
     for (const name of names) {
       const value = values[name]
@@ -90,6 +93,8 @@ export function projectRegistryDaemonConfigFromEnv(
       values,
       "PROJECT_REGISTRY_CADDY_INITIALIZE_FROM_GENERATED_CONFIG",
     )
+    const cloudflareDnsEnabled = environmentBoolean(values, "PROJECT_REGISTRY_CLOUDFLARE_DNS_ENABLED")
+    const cloudflareToken = values.CLOUDFLARE_API_TOKEN?.trim() || values.CF_API_TOKEN?.trim() || undefined
     let defaultUserDomains: unknown
     const defaultUserDomainsValue = values.PROJECT_REGISTRY_DEFAULT_USER_DOMAINS?.trim()
     if (defaultUserDomainsValue !== undefined && defaultUserDomainsValue !== "") {
@@ -131,7 +136,8 @@ export function projectRegistryDaemonConfigFromEnv(
       numericValues.some((value) => Number.isNaN(value)) ||
       (values.PROJECT_REGISTRY_GIT_PUSH !== undefined && gitPush === undefined) ||
       (values.PROJECT_REGISTRY_CADDY_INITIALIZE_FROM_GENERATED_CONFIG !== undefined &&
-        initializeFromGeneratedConfig === undefined)
+        initializeFromGeneratedConfig === undefined) ||
+      (values.PROJECT_REGISTRY_CLOUDFLARE_DNS_ENABLED !== undefined && cloudflareDnsEnabled === undefined)
     ) {
       return createResultError(op, "daemon environment contains an invalid number or boolean")
     }
@@ -180,6 +186,10 @@ export function projectRegistryDaemonConfigFromEnv(
       serverIp: values.SERVER_IP?.trim() || undefined,
       serverIpCachePath: values.PROJECT_REGISTRY_SERVER_IP_CACHE_PATH?.trim() || undefined,
       serverIpDiscoveryTimeoutMs,
+      cloudflareDns: {
+        enabled: cloudflareDnsEnabled !== false && cloudflareToken !== undefined,
+        ...(cloudflareToken === undefined ? {} : { token: cloudflareToken }),
+      },
     })
   } catch (error) {
     return createResultError(op, error instanceof Error ? error.message : "invalid daemon environment")

@@ -59,6 +59,7 @@ export function projectRegistryCliArgumentsParse(args: readonly string[]): Resul
   let socket: string | undefined
   let limit: number | undefined
   let flagName: string | undefined
+  let noDns = false
   let port: number | undefined
   let path: string | undefined
   let owner: string | undefined
@@ -95,11 +96,13 @@ export function projectRegistryCliArgumentsParse(args: readonly string[]): Resul
       "--no-spa",
       "--http",
       "--clear-labels",
+      "--no-dns",
     ]
     if (booleanNames.includes(argument)) {
       if (booleans.has(argument)) return createResultError(op, `Option ${argument} may only be provided once.`)
       booleans.add(argument)
       if (argument === "--clear-labels") clearLabels = true
+      if (argument === "--no-dns") noDns = true
       continue
     }
 
@@ -280,7 +283,8 @@ export function projectRegistryCliArgumentsParse(args: readonly string[]): Resul
   const hasCaddyOptions = Object.keys(caddy).length > 0
   const hasOnlyPortOption = port !== undefined && Object.keys(caddy).length === 1
   const hasLabelOptions = hasLabels || removeLabels.length > 0 || clearLabels
-  const hasMutationOptions = hasCaddyOptions || flagName !== undefined || hasLabelOptions
+  const hasMutationOptions =
+    hasCaddyOptions || flagName !== undefined || noDns || hasLabelOptions
   const hasAccessLogOptions = owner !== undefined || before !== undefined
   const hasHttp = booleans.has("--http")
 
@@ -353,6 +357,7 @@ export function projectRegistryCliArgumentsParse(args: readonly string[]): Resul
     extra.length === 0 &&
     !hasCaddyOptions &&
     flagName === undefined &&
+    !noDns &&
     !hasHttp
   ) {
     if (!projectNamePattern.test(value)) return projectNameError(op)
@@ -373,7 +378,13 @@ export function projectRegistryCliArgumentsParse(args: readonly string[]): Resul
       return createResultError(op, "Options --remove-label and --clear-labels are only valid for project edit.")
     }
     return createResult({
-      command: { kind: "project-create", name: flagName, caddy, ...(hasLabels ? { labels } : {}) },
+      command: {
+        kind: "project-create",
+        name: flagName,
+        ...(noDns ? { noDns: true } : {}),
+        caddy,
+        ...(hasLabels ? { labels } : {}),
+      },
       json,
       socket,
     })
@@ -385,6 +396,7 @@ export function projectRegistryCliArgumentsParse(args: readonly string[]): Resul
     extra.length === 0 &&
     limit === undefined &&
     !hasAccessLogOptions &&
+    !noDns &&
     !hasHttp
   ) {
     if (!projectNamePattern.test(value)) return projectNameError(op)

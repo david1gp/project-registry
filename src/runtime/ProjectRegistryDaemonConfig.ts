@@ -39,4 +39,8 @@ export type ProjectRegistryDaemonConfig = {
   serverIp?: string
   serverIpCachePath: string
   serverIpDiscoveryTimeoutMs: number
+  cloudflareDns: {
+    enabled: boolean
+    token?: string
+  }
 }

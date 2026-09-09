@@ -24,6 +24,7 @@ Project create/edit options:
   --domain <hostname>        Domain; repeat to provide multiple domains; defaults to the configured user domain
   --path <path>              Static/docs filesystem path (defaults to the current directory)
   --name <name>              Project name (defaults to the path folder name)
+  --no-dns                    Skip automatic Cloudflare DNS reconciliation for this create
   --kind <proxy|static>      Caddy route kind
   --access <internal|external>
   --docs | --no-docs

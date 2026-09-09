@@ -510,6 +510,45 @@ describe("projectRegistryApiHandlerCreate", () => {
     expect(application.projectChanges).toBe(3)
   })
 
+  test("notifies post-persistence creation work with normalized saved domains and respects noDns", async () => {
+    const repository = repositoryCreate()
+    const notifications: Array<{ project: Project; noDns: boolean }> = []
+    const handler = projectRegistryApiHandlerCreate({
+      repository,
+      caddyApplication: caddyApplicationCreate(),
+      projectCreateAfterPersistence: (project, options) => notifications.push({ project, noDns: options.noDns }),
+    })
+    const leo = { transport: "unix", username: "leo" } as const
+
+    const created = await requestJson(handler, "/api/v1/users/leo/projects", leo, "POST", {
+      expectedRevision: revision,
+      name: "dns-app",
+      caddy: { domains: [" Alias.Example. "] },
+    })
+    expect(created.response.status).toBe(201)
+
+    const skipped = await requestJson(handler, "/api/v1/users/leo/projects", leo, "POST", {
+      expectedRevision: nextRevision,
+      name: "no-dns-app",
+      noDns: true,
+      caddy: { domains: ["skip.example"] },
+    })
+    expect(skipped.response.status).toBe(201)
+
+    const failed = await requestJson(handler, "/api/v1/users/leo/projects", leo, "POST", {
+      expectedRevision: revision,
+      name: "failed-dns-app",
+      caddy: { domains: ["failed.example"] },
+    })
+    expect(failed.response.status).toBe(409)
+    expect(notifications).toHaveLength(2)
+    expect(notifications[0]).toMatchObject({ noDns: false, project: { name: "dns-app" } })
+    expect(notifications[0]?.project.services).toContainEqual(
+      expect.objectContaining({ caddy: expect.objectContaining({ domains: ["alias.example"] }) }),
+    )
+    expect(notifications[1]).toMatchObject({ noDns: true, project: { name: "no-dns-app" } })
+  })
+
   test("generates a default project subdomain when the request omits domains", async () => {
     const repository = repositoryCreate()
     const handler = projectRegistryApiHandlerCreate({

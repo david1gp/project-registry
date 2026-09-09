@@ -9,6 +9,10 @@ describe("projectRegistryCliArgumentsParse", () => {
       ["project", "create", "--name", "site", "--domain", "site.example"],
       { kind: "project-create", name: "site", caddy: { domains: ["site.example"] } },
     ],
+    [
+      ["project", "create", "--name", "site", "--no-dns"],
+      { kind: "project-create", name: "site", noDns: true, caddy: {} },
+    ],
     [["project", "create", "--name", "site"], { kind: "project-create", name: "site", caddy: {} }],
     [["project", "create"], { kind: "project-create", name: undefined, caddy: {} }],
     [["project", "edit", "site"], { kind: "project-edit", name: "site", caddy: {} }],
@@ -224,6 +228,9 @@ describe("projectRegistryCliArgumentsParse", () => {
     [["status", "--socket"], "Option --socket requires a path."],
     [["status", "--json", "--json"], "Option --json may only be provided once."],
     [["--help", "--version"], "Options --help and --version cannot be combined."],
+    [["project", "create", "--no-dns", "--no-dns"], "Option --no-dns may only be provided once."],
+    [["project", "access-logs", "site", "--no-dns"], "Unknown command or invalid syntax: project access-logs site."],
+    [["project", "edit", "site", "--no-dns"], "Unknown command or invalid syntax: project edit site."],
   ] as const)("rejects invalid arguments %p", (args, message) => {
     const result = projectRegistryCliArgumentsParse(args)
 

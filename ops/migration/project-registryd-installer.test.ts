@@ -112,6 +112,7 @@ describe("project-registryd production staging", () => {
       "PROJECT_REGISTRY_PORT_FROM=3000",
       "PROJECT_REGISTRY_PORT_TO=3999",
       "# PROJECT_REGISTRY_CADDY_ACCESS_LOG_ROOT=/var/lib/project-registry/caddy-access-logs",
+      "# PROJECT_REGISTRY_CLOUDFLARE_DNS_ENABLED=false",
     ]) {
       expect(environment).toContain(setting)
     }
@@ -129,6 +130,7 @@ describe("project-registryd production staging", () => {
 
     expect(service).toContain("EnvironmentFile=/etc/project-registry/leonardomora.oidc.env")
     expect(service).toContain("EnvironmentFile=/etc/project-registry/zitadel.env")
+    expect(service).toContain("EnvironmentFile=-/etc/project-registry/cloudflare.env")
     expect(service).toContain("UMask=0077")
     expect(service).toContain(
       "ExecStart=/usr/local/bin/project-registry-bun /home/caddy/project-registry/dist/daemon.js",
@@ -246,6 +248,7 @@ describe("project-registryd production staging", () => {
     try {
       const source = join(directory, "source")
       const oidc = join(directory, "oidc.env")
+      const cloudflare = join(directory, "cloudflare.env")
       const bun = join(directory, "bun")
       const tools = join(directory, "tools")
       const installLog = join(directory, "install.log")
@@ -262,6 +265,7 @@ describe("project-registryd production staging", () => {
         oidc,
         "PROJECT_REGISTRY_OIDC_CLIENT_ID=id\nPROJECT_REGISTRY_OIDC_CLIENT_SECRET=secret\nPROJECT_REGISTRY_OIDC_COOKIE_SECRET=cookie\n",
       )
+      await Bun.write(cloudflare, "CLOUDFLARE_API_TOKEN=fixture-token\n")
       await Bun.write(
         bun,
         '#!/bin/sh\nset -eu\nif [ "$1" = "--version" ]; then exit 0; fi\nif [ "$1" = "run" ] && [ "$2" = "build:lib" ]; then mkdir -p dist node_modules; printf \'daemon\\n\' > dist/daemon.js; exit 0; fi\nexit 1\n',
@@ -293,6 +297,8 @@ describe("project-registryd production staging", () => {
         SERVER_IP: "2001:db8::42",
         PROJECT_REGISTRY_SERVER_IP_CACHE_PATH: join(directory, "state", "server-ip"),
         PROJECT_REGISTRY_SERVER_IP_DISCOVERY_TIMEOUT_MS: "1750",
+        PROJECT_REGISTRY_CLOUDFLARE_SOURCE: cloudflare,
+        PROJECT_REGISTRY_CLOUDFLARE_DNS_ENABLED: "false",
         PROJECT_REGISTRY_CADDY_ACCESS_LOG_ROOT: "",
         CADDY_SERVICE_IDENTITY_FILE: join(identityFixtureDirectory, "matching.properties"),
       }
@@ -302,6 +308,7 @@ describe("project-registryd production staging", () => {
 
       expect(result.exitCode, `${result.stdout}\n${result.stderr}`).toBe(0)
       expect(result.stderr).toBe("")
+      expect(result.stdout).not.toContain("fixture-token")
       const environmentFile = join(configRoot, "project-registryd.env")
       expect(await Bun.file(environmentFile).exists()).toBe(true)
       const stagedEnvironment = await readFile(environmentFile, "utf8")
@@ -310,6 +317,15 @@ describe("project-registryd production staging", () => {
         `PROJECT_REGISTRY_SERVER_IP_CACHE_PATH=${environment.PROJECT_REGISTRY_SERVER_IP_CACHE_PATH}\n`,
       )
       expect(stagedEnvironment).toContain("PROJECT_REGISTRY_SERVER_IP_DISCOVERY_TIMEOUT_MS=1750\n")
+      expect(stagedEnvironment).toContain("PROJECT_REGISTRY_CLOUDFLARE_DNS_ENABLED=false\n")
+      expect(stagedEnvironment).not.toContain("fixture-token")
+      expect(await readFile(join(configRoot, "cloudflare.env"), "utf8")).toBe("CLOUDFLARE_API_TOKEN=fixture-token\n")
+
+      const withoutCloudflare = { ...environment }
+      delete withoutCloudflare.PROJECT_REGISTRY_CLOUDFLARE_SOURCE
+      const rerun = await command("bash", [installer, "--apply"], withoutCloudflare)
+      expect(rerun.exitCode, `${rerun.stdout}\n${rerun.stderr}`).toBe(0)
+      expect(await Bun.file(join(configRoot, "cloudflare.env")).exists()).toBe(false)
       expect(await Bun.file(unitPath).exists()).toBe(true)
       expect(await readFile(installLog, "utf8")).not.toContain("umask")
     } finally {

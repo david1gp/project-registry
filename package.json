@@ -119,6 +119,10 @@
       "types": "./dist/access-log/*.d.ts",
       "import": "./dist/access-log/*.js"
     },
+    "./cloudflare/*.js": {
+      "types": "./dist/cloudflare/*.d.ts",
+      "import": "./dist/cloudflare/*.js"
+    },
     "./identity/*.js": {
       "types": "./dist/identity/*.d.ts",
       "import": "./dist/identity/*.js"

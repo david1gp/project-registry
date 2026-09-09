@@ -15,6 +15,8 @@ OIDC_SOURCE="${PROJECT_REGISTRY_OIDC_SOURCE:-/home/david/leo/leo-server/caddy/oi
 OIDC_TARGET="${PROJECT_REGISTRY_OIDC_TARGET:-$CONFIG_ROOT/leonardomora.oidc.env}"
 ZITADEL_SOURCE="${PROJECT_REGISTRY_ZITADEL_SOURCE:-}"
 ZITADEL_TARGET="${PROJECT_REGISTRY_ZITADEL_TARGET:-$CONFIG_ROOT/zitadel.env}"
+CLOUDFLARE_SOURCE="${PROJECT_REGISTRY_CLOUDFLARE_SOURCE:-}"
+CLOUDFLARE_TARGET="${PROJECT_REGISTRY_CLOUDFLARE_TARGET:-$CONFIG_ROOT/cloudflare.env}"
 REPOSITORY_PATH="${PROJECT_REGISTRY_REPOSITORY_PATH:-/home/caddy/project-registry-history}"
 CADDY_BINARY_PATH="${PROJECT_REGISTRY_CADDY_BINARY:-/home/caddy/.local/bin/caddy}"
 BUN_BIN="${BUN_BIN:-}"
@@ -26,6 +28,7 @@ CADDY_GROUP="${CADDY_GROUP:-}"
 SERVER_IP="${SERVER_IP:-}"
 PROJECT_REGISTRY_SERVER_IP_CACHE_PATH="${PROJECT_REGISTRY_SERVER_IP_CACHE_PATH:-}"
 PROJECT_REGISTRY_SERVER_IP_DISCOVERY_TIMEOUT_MS="${PROJECT_REGISTRY_SERVER_IP_DISCOVERY_TIMEOUT_MS:-}"
+PROJECT_REGISTRY_CLOUDFLARE_DNS_ENABLED="${PROJECT_REGISTRY_CLOUDFLARE_DNS_ENABLED:-}"
 DRY_RUN=1
 
 # Read-only identity discovery; the source file/output variables are test/offline injection points.
@@ -52,6 +55,8 @@ Environment:
   PROJECT_REGISTRY_OIDC_TARGET   copied OIDC env destination (default: config root)
   PROJECT_REGISTRY_ZITADEL_SOURCE  optional separately provisioned Zitadel env to copy
   PROJECT_REGISTRY_ZITADEL_TARGET  required Zitadel env destination (default: config root/zitadel.env)
+  PROJECT_REGISTRY_CLOUDFLARE_SOURCE  optional separately provisioned Cloudflare token env to copy
+  PROJECT_REGISTRY_CLOUDFLARE_TARGET  Cloudflare token destination (default: config root/cloudflare.env)
   PROJECT_REGISTRY_CADDY_ACCESS_LOG_ROOT  opt-in Caddy access-log root (unset disables logging)
   CADDY_USER/CADDY_GROUP  optional expected identity; it must exactly match caddy.service
   CADDY_SERVICE_IDENTITY_FILE  read-only identity fixture for tests/offline preparation
@@ -97,6 +102,12 @@ if [[ -n "$ZITADEL_SOURCE" ]]; then
     exit 1
   }
 fi
+if [[ -n "$CLOUDFLARE_SOURCE" ]]; then
+  [[ -f "$CLOUDFLARE_SOURCE" && ! -L "$CLOUDFLARE_SOURCE" && -r "$CLOUDFLARE_SOURCE" ]] || {
+    printf 'missing or unreadable Cloudflare environment: %s\n' "$CLOUDFLARE_SOURCE" >&2
+    exit 1
+  }
+fi
 
 [[ -n "$INSTALL_ROOT" && "$INSTALL_ROOT" != / ]] || { printf 'invalid runtime destination\n' >&2; exit 1; }
 [[ -n "$CONFIG_ROOT" && "$CONFIG_ROOT" != / ]] || { printf 'invalid config destination\n' >&2; exit 1; }
@@ -105,6 +116,7 @@ fi
 [[ -n "$CADDY_BINARY_PATH" && "$CADDY_BINARY_PATH" != *$'\n'* ]] || { printf 'invalid Caddy binary path\n' >&2; exit 1; }
 [[ -n "$OIDC_TARGET" && "$OIDC_TARGET" != *$'\n'* ]] || { printf 'invalid OIDC destination\n' >&2; exit 1; }
 [[ -n "$ZITADEL_TARGET" && "$ZITADEL_TARGET" != *$'\n'* ]] || { printf 'invalid Zitadel destination\n' >&2; exit 1; }
+[[ -n "$CLOUDFLARE_TARGET" && "$CLOUDFLARE_TARGET" != *$'\n'* ]] || { printf 'invalid Cloudflare destination\n' >&2; exit 1; }
 [[ -n "$PROJECT_REGISTRY_BUN_RUNTIME_PATH" && "$PROJECT_REGISTRY_BUN_RUNTIME_PATH" == /* && "$PROJECT_REGISTRY_BUN_RUNTIME_PATH" != *$'\n'* ]] || {
   printf 'invalid Bun runtime path\n' >&2
   exit 1
@@ -170,6 +182,11 @@ if [[ "$DRY_RUN" -eq 1 ]]; then
   else
     printf 'dry-run: would retain separately provisioned Zitadel environment at %s (required before activation)\n' "$ZITADEL_TARGET"
   fi
+  if [[ -n "$CLOUDFLARE_SOURCE" ]]; then
+    printf 'dry-run: would map separately provisioned Cloudflare environment to %s (root-owned mode 0600)\n' "$CLOUDFLARE_TARGET"
+  else
+    printf 'dry-run: Cloudflare DNS credentials remain optional at %s\n' "$CLOUDFLARE_TARGET"
+  fi
   if [[ -n "$PROJECT_REGISTRY_CADDY_ACCESS_LOG_ROOT" ]]; then
      printf 'dry-run: would provision Caddy access-log root %s (%s:%s, directories 0700)\n' \
        "$PROJECT_REGISTRY_CADDY_ACCESS_LOG_ROOT" "$CADDY_USER" "$CADDY_GROUP"
@@ -201,7 +218,7 @@ fi
   exit 1
 }
 
-"$INSTALL_BIN" -d -o root -g root -m 0755 "$INSTALL_ROOT" "$CONFIG_ROOT" "$(dirname "$UNIT_PATH")" "$(dirname "$OIDC_TARGET")" "$(dirname "$ZITADEL_TARGET")"
+"$INSTALL_BIN" -d -o root -g root -m 0755 "$INSTALL_ROOT" "$CONFIG_ROOT" "$(dirname "$UNIT_PATH")" "$(dirname "$OIDC_TARGET")" "$(dirname "$ZITADEL_TARGET")" "$(dirname "$CLOUDFLARE_TARGET")"
 if [[ -n "$PROJECT_REGISTRY_CADDY_ACCESS_LOG_ROOT" ]]; then
   caddy_access_log_root_prepare "$PROJECT_REGISTRY_CADDY_ACCESS_LOG_ROOT" "$CADDY_USER" "$CADDY_GROUP" || exit 1
 fi
@@ -303,6 +320,10 @@ if [[ -n "$PROJECT_REGISTRY_SERVER_IP_DISCOVERY_TIMEOUT_MS" ]]; then
   printf 'PROJECT_REGISTRY_SERVER_IP_DISCOVERY_TIMEOUT_MS=%s\n' \
     "$PROJECT_REGISTRY_SERVER_IP_DISCOVERY_TIMEOUT_MS" >> "$environment_stage"
 fi
+if [[ -n "$PROJECT_REGISTRY_CLOUDFLARE_DNS_ENABLED" ]]; then
+  printf 'PROJECT_REGISTRY_CLOUDFLARE_DNS_ENABLED=%s\n' \
+    "$PROJECT_REGISTRY_CLOUDFLARE_DNS_ENABLED" >> "$environment_stage"
+fi
 if [[ -n "$PROJECT_REGISTRY_CADDY_ACCESS_LOG_ROOT" ]]; then
   printf 'PROJECT_REGISTRY_CADDY_ACCESS_LOG_ROOT=%s\n' "$PROJECT_REGISTRY_CADDY_ACCESS_LOG_ROOT" >> "$environment_stage"
   printf 'CADDY_USER=%s\n' "$CADDY_USER" >> "$environment_stage"
@@ -314,10 +335,16 @@ normalize_oidc_environment "$oidc_stage"
 if [[ -n "$ZITADEL_SOURCE" ]]; then
   "$INSTALL_BIN" -o root -g root -m 0600 "$ZITADEL_SOURCE" "$ZITADEL_TARGET"
 fi
+if [[ -n "$CLOUDFLARE_SOURCE" ]]; then
+  "$INSTALL_BIN" -o root -g root -m 0600 "$CLOUDFLARE_SOURCE" "$CLOUDFLARE_TARGET"
+else
+  rm -f -- "$CLOUDFLARE_TARGET"
+fi
 sed \
   -e "s|/etc/project-registry/project-registryd.env|$CONFIG_ROOT/project-registryd.env|g" \
   -e "s|/etc/project-registry/leonardomora.oidc.env|$OIDC_TARGET|g" \
   -e "s|/etc/project-registry/zitadel.env|$ZITADEL_TARGET|g" \
+  -e "s|/etc/project-registry/cloudflare.env|$CLOUDFLARE_TARGET|g" \
   -e "s|/home/caddy/project-registry|$INSTALL_ROOT|g" \
   -e "s|/home/caddy/.local/bin/caddy|$CADDY_BINARY_PATH|g" \
   -e "s|/usr/local/bin/project-registry-bun|$PROJECT_REGISTRY_BUN_RUNTIME_PATH|g" \

@@ -110,6 +110,8 @@ const serviceTokenSchema = a.pipe(
   ),
 )
 
+const cloudflareTokenSchema = serviceTokenSchema
+
 const sessionMaxAgeSchema = a.pipe(
   a.number(),
   a.integer("session lifetime must be an integer"),
@@ -141,6 +143,11 @@ const serverIpSchema = a.pipe(
   a.minLength(1),
   a.check((value) => isIP(value) !== 0, "SERVER_IP must be a valid IPv4 or IPv6 address"),
 )
+
+const cloudflareDnsSchema = a.strictObject({
+  enabled: a.optional(a.boolean(), true),
+  token: a.optional(cloudflareTokenSchema),
+})
 
 export const projectRegistryDaemonConfigSchema = a.strictObject({
   repositoryPath: absolutePathSchema,
@@ -178,4 +185,5 @@ export const projectRegistryDaemonConfigSchema = a.strictObject({
   serverIp: a.optional(serverIpSchema),
   serverIpCachePath: a.optional(absolutePathSchema, "/var/lib/project-registry/server-ip"),
   serverIpDiscoveryTimeoutMs: a.optional(durationSchema, 3_000),
+  cloudflareDns: a.optional(cloudflareDnsSchema, { enabled: true }),
 })
