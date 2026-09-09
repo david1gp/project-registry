@@ -1,7 +1,7 @@
 # Automatic Cloudflare DNS
 
 ## Goal
-Automatically create or update Cloudflare DNS records when an entry is created, using the daemon's resolved server IP. Deploy and verify with disposable domains, then remove test resources.
+Automatically create or update Cloudflare DNS records from project lifecycle changes, using the daemon's resolved server IP, and remove only tracked records. Deploy and verify with disposable domains, then remove test resources.
 
 ## Decisions
 - Server-side integration covers API and CLI creation.
@@ -10,10 +10,17 @@ Automatically create or update Cloudflare DNS records when an entry is created, 
 - DNS runs after successful persistence, without blocking entry creation. Queue work while initial IP discovery is pending.
 - Create missing records, update matching records, skip identical records, and report incompatible record conflicts.
 - Use existing dependencies and native fetch. Never log credentials.
-- No automatic DNS deletion or general edit synchronization in this change; explicitly clean up test records.
+- Persist managed record identities daemon-locally; edits remove tracked removed domains and deletes remove tracked records.
 
 ## Approach
 Implement a tested Cloudflare client, then integrate a daemon-owned background reconciler with creation requests and configuration. Bound network requests and cancel background work on shutdown. Preserve unrelated worktree changes. Deploy only committed intended changes.
+
+Managed record tracking is daemon-local and stored atomically at
+`<PROJECT_REGISTRY_SERVER_IP_CACHE_PATH>.cloudflare-dns.json`, beside (not inside)
+the configured server-IP cache and repository. Deletion verifies the tracked record's
+current contents before deleting by its stored Cloudflare ID; changed or unknown records
+are left untouched. Network, tracking, and reconciliation failures remain background
+failures and do not change successful project mutation responses.
 
 ## Tasks
 1. Complete: implement and test Cloudflare record reconciliation module (`cloudflareDnsReconcile`).

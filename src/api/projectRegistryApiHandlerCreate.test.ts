@@ -513,10 +513,15 @@ describe("projectRegistryApiHandlerCreate", () => {
   test("notifies post-persistence creation work with normalized saved domains and respects noDns", async () => {
     const repository = repositoryCreate()
     const notifications: Array<{ project: Project; noDns: boolean }> = []
+    const lifecycle: string[] = []
     const handler = projectRegistryApiHandlerCreate({
       repository,
       caddyApplication: caddyApplicationCreate(),
       projectCreateAfterPersistence: (project, options) => notifications.push({ project, noDns: options.noDns }),
+      projectEditAfterPersistence: (_previous, project) =>
+        lifecycle.push(`edit:${repository.projects.some((entry) => entry === project)}`),
+      projectDeleteAfterPersistence: (project) =>
+        lifecycle.push(`delete:${repository.projects.some((entry) => entry === project)}`),
     })
     const leo = { transport: "unix", username: "leo" } as const
 
@@ -535,6 +540,17 @@ describe("projectRegistryApiHandlerCreate", () => {
     })
     expect(skipped.response.status).toBe(201)
 
+    const updated = await requestJson(handler, "/api/v1/users/leo/projects/dns-app", leo, "PATCH", {
+      expectedRevision: nextRevision,
+      description: "updated",
+    })
+    expect(updated.response.status).toBe(200)
+
+    const deleted = await requestJson(handler, "/api/v1/users/leo/projects/dns-app", leo, "DELETE", {
+      expectedRevision: nextRevision,
+    })
+    expect(deleted.response.status).toBe(200)
+
     const failed = await requestJson(handler, "/api/v1/users/leo/projects", leo, "POST", {
       expectedRevision: revision,
       name: "failed-dns-app",
@@ -542,6 +558,7 @@ describe("projectRegistryApiHandlerCreate", () => {
     })
     expect(failed.response.status).toBe(409)
     expect(notifications).toHaveLength(2)
+    expect(lifecycle).toEqual(["edit:true", "delete:false"])
     expect(notifications[0]).toMatchObject({ noDns: false, project: { name: "dns-app" } })
     expect(notifications[0]?.project.caddy?.domains).toEqual(["alias.example"])
     expect(notifications[1]).toMatchObject({ noDns: true, project: { name: "no-dns-app" } })

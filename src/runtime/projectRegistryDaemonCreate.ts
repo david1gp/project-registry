@@ -6,6 +6,8 @@ import { projectAccessCreate } from "../access/projectAccessCreate.js"
 import { projectAccessLogSourceFileCreate } from "../access-log/projectAccessLogSourceFileCreate.js"
 import { projectRegistryApiHandlerCreate } from "../api/projectRegistryApiHandlerCreate.js"
 import { projectRegistryDaemonCloudflareDnsCreate } from "./projectRegistryDaemonCloudflareDnsCreate.js"
+import { projectRegistryDaemonCloudflareDnsTrackingCreate } from "./projectRegistryDaemonCloudflareDnsTrackingCreate.js"
+import { projectRegistryDaemonCloudflareDnsTrackingFilesystemDefault } from "./projectRegistryDaemonCloudflareDnsTrackingFilesystemDefault.js"
 import type { ProjectRepository } from "../project-store/ProjectRepository.js"
 import { sessionActorResolve } from "../session/sessionActorResolve.js"
 import { sessionRequestResolve } from "../session/sessionRequestResolve.js"
@@ -212,6 +214,7 @@ export function projectRegistryDaemonCreate(options: ProjectRegistryDaemonOption
   let serverIpLoggerOption: ProjectRegistryDaemonOptions["serverIpLogger"]
   let serverIpClockOption: ProjectRegistryDaemonOptions["serverIpClock"]
   let cloudflareDnsFetchOption: ProjectRegistryDaemonOptions["cloudflareDnsFetch"]
+  let cloudflareDnsTrackingFilesystemOption: ProjectRegistryDaemonOptions["cloudflareDnsTrackingFilesystem"]
   let requireRootOption: ProjectRegistryDaemonOptions["requireRoot"]
   try {
     configInput = options.config
@@ -232,6 +235,7 @@ export function projectRegistryDaemonCreate(options: ProjectRegistryDaemonOption
     serverIpLoggerOption = options.serverIpLogger
     serverIpClockOption = options.serverIpClock
     cloudflareDnsFetchOption = options.cloudflareDnsFetch
+    cloudflareDnsTrackingFilesystemOption = options.cloudflareDnsTrackingFilesystem
     requireRootOption = options.requireRoot
   } catch (error) {
     return createResultError(op, error instanceof Error ? error.message : "invalid daemon options")
@@ -266,6 +270,11 @@ export function projectRegistryDaemonCreate(options: ProjectRegistryDaemonOption
   })
   if (!serverIpR.success) return serverIpR
   const serverIp: ProjectRegistryDaemonServerIp = serverIpR.data
+  const cloudflareDnsTrackingR = projectRegistryDaemonCloudflareDnsTrackingCreate({
+    path: `${config.serverIpCachePath}.cloudflare-dns.json`,
+    filesystem: cloudflareDnsTrackingFilesystemOption ?? projectRegistryDaemonCloudflareDnsTrackingFilesystemDefault(),
+  })
+  if (!cloudflareDnsTrackingR.success) return cloudflareDnsTrackingR
   const cloudflareDnsR = projectRegistryDaemonCloudflareDnsCreate({
     enabled: config.cloudflareDns.enabled,
     token: config.cloudflareDns.token,
@@ -273,6 +282,11 @@ export function projectRegistryDaemonCreate(options: ProjectRegistryDaemonOption
     serverIpCurrent: serverIp.current,
     timer,
     logger: serverIpLoggerOption,
+    tracking: cloudflareDnsTrackingR.data,
+    repositoryProjectsCurrent: async () => {
+      const snapshotR = await repository.read()
+      return snapshotR.success ? createResult(snapshotR.data.projects) : snapshotR
+    },
     ...(cloudflareDnsFetchOption === undefined ? {} : { fetch: cloudflareDnsFetchOption }),
   })
   if (!cloudflareDnsR.success) return cloudflareDnsR
@@ -1125,6 +1139,8 @@ export function projectRegistryDaemonCreate(options: ProjectRegistryDaemonOption
       ...(config.cloudflareDns.enabled && config.cloudflareDns.token !== undefined
         ? { projectCreateAfterPersistence: cloudflareDns.projectCreateAfterPersistence }
         : {}),
+      projectEditAfterPersistence: cloudflareDns.projectEditAfterPersistence,
+      projectDeleteAfterPersistence: cloudflareDns.projectDeleteAfterPersistence,
     })
 
   function caddyStop(): Promise<string[]> {

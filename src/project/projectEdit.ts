@@ -65,6 +65,7 @@ export async function projectEdit(
   key: ProjectKey,
   input: unknown,
   mutationOptions: ProjectMutationOptions,
+  afterPersistence?: (previous: Project, project: Project) => void,
 ): PromiseResult<ProjectRepositoryMutation> {
   const op = "projectEdit"
   const actorR = await options.access.actorResolve()
@@ -96,5 +97,14 @@ export async function projectEdit(
   if (!expectedRevisionR.success) return expectedRevisionR
 
   const repositoryOptions = { actor: actorR.data.username, expectedRevision: expectedRevisionR.data }
-  return options.repository.edit(key, projectR.data, repositoryOptions)
+  const mutationR = await options.repository.edit(key, projectR.data, repositoryOptions)
+  if (!mutationR.success) return mutationR
+  if (mutationR.data.changed) {
+    try {
+      afterPersistence?.(existing, projectR.data)
+    } catch {
+      // Background integrations must not turn a successful persistence into a failed edit.
+    }
+  }
+  return mutationR
 }

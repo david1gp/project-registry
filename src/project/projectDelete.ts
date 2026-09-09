@@ -1,5 +1,6 @@
 import { createResultErrorCode, type PromiseResult } from "#result"
 import type { ProjectRepositoryMutation } from "../project-store/ProjectRepositoryMutation.js"
+import type { Project } from "./Project.js"
 import type { ProjectMutationOptions } from "./ProjectMutationOptions.js"
 import type { ProjectUseCaseOptions } from "./ProjectUseCaseOptions.js"
 import type { ProjectKey } from "./projectKey.js"
@@ -11,6 +12,7 @@ export async function projectDelete(
   options: ProjectUseCaseOptions,
   key: ProjectKey,
   mutationOptions: ProjectMutationOptions,
+  afterPersistence?: (project: Project) => void,
 ): PromiseResult<ProjectRepositoryMutation> {
   const actorR = await options.access.actorResolve()
   if (!actorR.success) return actorR
@@ -20,7 +22,8 @@ export async function projectDelete(
 
   const snapshotR = await options.repository.read()
   if (!snapshotR.success) return snapshotR
-  if (!snapshotR.data.projects.some((project) => projectKeyEqual(project, key))) {
+  const project = snapshotR.data.projects.find((entry) => projectKeyEqual(entry, key))
+  if (project === undefined) {
     return createResultErrorCode("projectDelete", "project not found", "projects.not-found")
   }
 
@@ -28,5 +31,14 @@ export async function projectDelete(
   if (!expectedRevisionR.success) return expectedRevisionR
 
   const repositoryOptions = { actor: actorR.data.username, expectedRevision: expectedRevisionR.data }
-  return options.repository.delete(key, repositoryOptions)
+  const mutationR = await options.repository.delete(key, repositoryOptions)
+  if (!mutationR.success) return mutationR
+  if (mutationR.data.changed) {
+    try {
+      afterPersistence?.(project)
+    } catch {
+      // Background integrations must not turn a successful persistence into a failed deletion.
+    }
+  }
+  return mutationR
 }

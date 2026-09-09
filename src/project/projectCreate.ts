@@ -69,10 +69,12 @@ export async function projectCreate(
   const repositoryOptions = { actor: actorR.data.username, expectedRevision: expectedRevisionR.data }
   const mutationR = await options.repository.create(projectR.data, repositoryOptions)
   if (!mutationR.success) return mutationR
-  try {
-    afterPersistence?.(projectR.data)
-  } catch {
-    // Background integrations must not turn a successful persistence into a failed creation.
+  if (mutationR.data.changed) {
+    try {
+      afterPersistence?.(projectR.data)
+    } catch {
+      // Background integrations must not turn a successful persistence into a failed creation.
+    }
   }
   return mutationR
 }

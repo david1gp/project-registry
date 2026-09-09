@@ -34,6 +34,8 @@ type ApiHandlerOptions = {
   projectAccessLogSource?: ProjectAccessLogSource
   socketAccessResolve?: ProjectRegistryDaemonSocketAccessResolve
   projectCreateAfterPersistence?: (project: Project, options: { noDns: boolean }) => void
+  projectEditAfterPersistence?: (previous: Project, project: Project) => void
+  projectDeleteAfterPersistence?: (project: Project) => void
 }
 
 type ApiRoute =
@@ -840,7 +842,7 @@ export function projectRegistryApiHandlerCreate(options: ApiHandlerOptions): Pro
           if (body instanceof Response) return body
           mutationOptions = expectedRevision(body)
         }
-        mutationR = await projectDelete(useCaseOptions, key, mutationOptions)
+        mutationR = await projectDelete(useCaseOptions, key, mutationOptions, options.projectDeleteAfterPersistence)
       } else {
         const body = await requestBodyJson(request, route.legacy)
         if (body instanceof Response) return body
@@ -881,7 +883,7 @@ export function projectRegistryApiHandlerCreate(options: ApiHandlerOptions): Pro
           }
           mutationOptions = expectedRevision(body)
         }
-        mutationR = await projectEdit(useCaseOptions, key, input, mutationOptions)
+        mutationR = await projectEdit(useCaseOptions, key, input, mutationOptions, options.projectEditAfterPersistence)
       }
 
       if (!mutationR.success) return resultErrorResponse(mutationR, route.legacy, "projects")
@@ -917,6 +919,7 @@ export function projectRegistryApiHandlerCreate(options: ApiHandlerOptions): Pro
         useCaseOptions,
         { owner, name: project.name },
         { expectedRevision: projectsR.data.revision },
+        options.projectDeleteAfterPersistence,
       )
       if (!mutationR.success) return resultErrorResponse(mutationR, true, "projects")
       const applicationR = await caddyProjectChange(options.caddyApplication, mutationR.data)
