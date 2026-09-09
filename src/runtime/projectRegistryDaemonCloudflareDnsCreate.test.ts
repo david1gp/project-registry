@@ -178,12 +178,14 @@ describe("projectRegistryDaemonCloudflareDnsCreate", () => {
   test("does not fail creation work when the remote API fails", async () => {
     const timer = timerCreate()
     let fetches = 0
+    const logs: string[] = []
     const queueR = projectRegistryDaemonCloudflareDnsCreate({
       enabled: true,
-      token: "token",
+      token: "secret-token",
       timeoutMs: 1000,
       serverIpCurrent: () => "203.0.113.10",
       timer: timer.timer,
+      logger: (message) => logs.push(message),
       fetch: async () => {
         fetches += 1
         return new Response("unavailable", { status: 503 })
@@ -194,7 +196,12 @@ describe("projectRegistryDaemonCloudflareDnsCreate", () => {
     expect(queueR.data.start().success).toBe(true)
     queueR.data.projectCreateAfterPersistence(project(["app.example.com"]), { noDns: false })
     await settle()
+    await settle()
     expect(fetches).toBeGreaterThan(0)
+    expect(logs).toContain(
+      "cloudflare DNS reconciliation outcome=failure hostname=app.example.com reason=Cloudflare DNS request failed",
+    )
+    expect(logs.some((message) => message.includes("secret-token"))).toBe(false)
     await expect(queueR.data.shutdown()).resolves.toMatchObject({ success: true })
   })
 

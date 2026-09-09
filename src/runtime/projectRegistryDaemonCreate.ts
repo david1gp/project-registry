@@ -272,6 +272,7 @@ export function projectRegistryDaemonCreate(options: ProjectRegistryDaemonOption
     timeoutMs: config.loadTimeoutMs,
     serverIpCurrent: serverIp.current,
     timer,
+    logger: serverIpLoggerOption,
     ...(cloudflareDnsFetchOption === undefined ? {} : { fetch: cloudflareDnsFetchOption }),
   })
   if (!cloudflareDnsR.success) return cloudflareDnsR

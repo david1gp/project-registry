@@ -317,7 +317,7 @@ export async function cloudflareDnsReconcile(
       return createResult({ action: "updated", zone, record: updatedRecord })
     }
 
-    const createUrl = `${apiBase.pathname}/zones/${encodeURIComponent(zone.id)}/dns_records`
+    const createUrl = `/zones/${encodeURIComponent(zone.id)}/dns_records`
     const createResponseR = await request(createUrl, {
       method: "POST",
       headers,

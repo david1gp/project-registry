@@ -20,6 +20,7 @@ export function projectRegistryDaemonCloudflareDnsCreate(options: {
     clearInterval(handle: unknown): void
   }
   fetch?: CloudflareDnsFetch
+  logger?: (message: string) => void
 }): Result<{
   start(): Result<void>
   shutdown(): PromiseResult<void>
@@ -36,6 +37,9 @@ export function projectRegistryDaemonCloudflareDnsCreate(options: {
     return createResultError(op, "Cloudflare DNS timeout is invalid")
   }
   if (typeof options.serverIpCurrent !== "function") return createResultError(op, "server IP accessor is required")
+  if (options.logger !== undefined && typeof options.logger !== "function") {
+    return createResultError(op, "Cloudflare DNS logger is invalid")
+  }
 
   const active = options.enabled && options.token !== undefined && options.token.length > 0
   const pending = new Set<string>()
@@ -45,6 +49,15 @@ export function projectRegistryDaemonCloudflareDnsCreate(options: {
   let intervalHandle: unknown
   let drainPromise: Promise<void> | undefined
   let shutdownPromise: PromiseResult<void> | undefined
+  const logger = options.logger ?? ((message: string) => console.info(message))
+
+  function log(message: string): void {
+    try {
+      logger(message)
+    } catch {
+      // Logging must not affect project creation or queue shutdown.
+    }
+  }
 
   function hostnames(project: Project): string[] {
     const values = new Set<string>()
@@ -64,7 +77,7 @@ export function projectRegistryDaemonCloudflareDnsCreate(options: {
       if (stopped) return
       pending.delete(hostname)
       try {
-        await cloudflareDnsReconcile({
+        const reconcileR = await cloudflareDnsReconcile({
           token: options.token!,
           hostname,
           address,
@@ -72,8 +85,12 @@ export function projectRegistryDaemonCloudflareDnsCreate(options: {
           signal: controller.signal,
           ...(options.fetch === undefined ? {} : { fetch: options.fetch }),
         })
+        if (!reconcileR.success) {
+          log(`cloudflare DNS reconciliation outcome=failure hostname=${hostname} reason=${reconcileR.errorMessage}`)
+        }
       } catch {
         // Remote DNS failures are deliberately nonfatal to project creation.
+        log(`cloudflare DNS reconciliation outcome=failure hostname=${hostname} reason=unexpected-error`)
       }
     }
   }

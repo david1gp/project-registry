@@ -75,6 +75,7 @@ describe("cloudflareDnsReconcile", () => {
     ])
     const createCall = mock.calls[4]
     expect(createCall?.init.method).toBe("POST")
+    expect(createCall?.url.toString()).toBe("https://api.cloudflare.com/client/v4/zones/uk-zone/dns_records")
     expect(createCall?.init.headers).toMatchObject({ authorization: "Bearer secret-token" })
     expect(JSON.parse(String(createCall?.init.body))).toEqual({
       type: "A",
@@ -115,7 +116,7 @@ describe("cloudflareDnsReconcile", () => {
     })
     expect(updated).toMatchObject({ success: true, data: { action: "updated" } })
     const updateCall = mock.calls.find((call) => call.init.method === "PUT")
-    expect(updateCall?.url.pathname).toBe("/client/v4/zones/zone-id/dns_records/record-id")
+    expect(updateCall?.url.toString()).toBe("https://api.cloudflare.com/client/v4/zones/zone-id/dns_records/record-id")
 
     const skipped = await cloudflareDnsReconcile({
       token: "token",
