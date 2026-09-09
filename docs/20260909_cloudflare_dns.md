@@ -18,5 +18,5 @@ Implement a tested Cloudflare client, then integrate a daemon-owned background r
 ## Tasks
 1. Complete: implement and test Cloudflare record reconciliation module (`cloudflareDnsReconcile`).
 2. Complete: integrate daemon lifecycle, creation API, CLI opt-out, environment configuration, installer and documentation; test pending-IP and nonfatal failure behavior.
-3. In progress: independent review and focused verification, then commit/push using commits skill.
-4. Pending: deploy to this machine, verify automatic DNS and opt-out with disposable entries/domains, and remove all test resources.
+3. Complete: independent review and focused verification, then commit/push using commits skill.
+4. Complete: deploy to this machine, verify automatic DNS and opt-out with disposable entries/domains, and remove all test resources.
