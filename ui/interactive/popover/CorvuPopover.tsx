@@ -1,8 +1,7 @@
 import Popover from "@corvu/popover"
-import type { JSX } from "solid-js"
+import type { Accessor, ComponentProps, JSX } from "solid-js"
 import { classesDisabledDirectly } from "#ui/classes/classesDisabledDirectly.js"
-import type { ButtonIcon1Props } from "#ui/interactive/button/ButtonIcon1.jsx"
-import { buttonCva2 } from "#ui/interactive/button/buttonCva.js"
+import { type ButtonCvaProps, buttonCva2 } from "#ui/interactive/button/buttonCva.js"
 import { buttonIconCva } from "#ui/interactive/button/buttonIconCva.js"
 import { classesButtonClickAnimation } from "#ui/interactive/button/classesButtonClickAnimation.js"
 import { classesPopoverContentMerge } from "#ui/interactive/popover/classesPopoverContent.js"
@@ -11,8 +10,16 @@ import type { MayHaveChildren } from "#ui/utils/MayHaveChildren.js"
 import type { MayHaveClass } from "#ui/utils/MayHaveClass.js"
 import type { MayHaveInnerClass } from "#ui/utils/MayHaveInnerClass.js"
 
-export interface CorvuPopoverProps extends MayHaveClass, MayHaveInnerClass, MayHaveChildren, ButtonIcon1Props {
-  // buttonProps: ButtonIcon1Props
+export interface CorvuPopoverProps
+  extends ComponentProps<"button">,
+    ButtonCvaProps,
+    MayHaveClass,
+    MayHaveInnerClass,
+    MayHaveChildren {
+  icon?: string
+  iconRight?: string
+  iconClass?: string
+  isDisabled?: Accessor<boolean>
   buttonChildren?: JSX.Element
 
   open?: boolean

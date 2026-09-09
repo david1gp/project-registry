@@ -1,9 +1,8 @@
 import Dialog from "@corvu/dialog"
 import { mdiClose } from "@adaptive-ds/mdi/mdiClose.js"
-import type { JSX } from "solid-js"
+import type { Accessor, ComponentProps, JSX } from "solid-js"
 import { classesDisabledDirectly } from "#ui/classes/classesDisabledDirectly.js"
-import type { ButtonIcon1Props } from "#ui/interactive/button/ButtonIcon1.jsx"
-import { buttonCva2, buttonCvaIconOnly, buttonVariant } from "#ui/interactive/button/buttonCva.js"
+import { type ButtonCvaProps, buttonCva2, buttonCvaIconOnly, buttonVariant } from "#ui/interactive/button/buttonCva.js"
 import { buttonIconCva } from "#ui/interactive/button/buttonIconCva.js"
 import { classesButtonClickAnimation } from "#ui/interactive/button/classesButtonClickAnimation.js"
 import type { CorcuDialogTexts } from "#ui/interactive/dialog/CorcuDialogTexts.js"
@@ -15,7 +14,16 @@ import type { MayHaveChildren } from "#ui/utils/MayHaveChildren.js"
 import type { MayHaveClass } from "#ui/utils/MayHaveClass.js"
 import type { MayHaveInnerClass } from "#ui/utils/MayHaveInnerClass.js"
 
-export interface CorvuDialogProps extends MayHaveClass, MayHaveInnerClass, MayHaveChildren, ButtonIcon1Props {
+export interface CorvuDialogProps
+  extends ComponentProps<"button">,
+    ButtonCvaProps,
+    MayHaveClass,
+    MayHaveInnerClass,
+    MayHaveChildren {
+  icon?: string
+  iconRight?: string
+  iconClass?: string
+  isDisabled?: Accessor<boolean>
   buttonChildren?: JSX.Element
   title: string
   description?: string
