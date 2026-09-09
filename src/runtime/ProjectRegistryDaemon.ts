@@ -16,4 +16,5 @@ export type ProjectRegistryDaemon = {
   healthLive(): ProjectRegistryDaemonHealth
   readiness(): PromiseResult<ProjectRegistryDaemonReadiness>
   refreshSockets(): PromiseResult<ProjectRegistryDaemonSocketRefresh>
+  serverIpCurrent(): string | undefined
 }

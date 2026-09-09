@@ -58,6 +58,9 @@ export function projectRegistryDaemonConfigFromEnv(
       "PROJECT_REGISTRY_SESSION_MAX_ENTRIES",
       "PROJECT_REGISTRY_GIT_PUSH",
       "PROJECT_REGISTRY_CADDY_INITIALIZE_FROM_GENERATED_CONFIG",
+      "SERVER_IP",
+      "PROJECT_REGISTRY_SERVER_IP_CACHE_PATH",
+      "PROJECT_REGISTRY_SERVER_IP_DISCOVERY_TIMEOUT_MS",
     ]
     for (const name of names) {
       const value = values[name]
@@ -79,6 +82,7 @@ export function projectRegistryDaemonConfigFromEnv(
     const validationTimeoutMs = environmentInteger(values, "PROJECT_REGISTRY_VALIDATION_TIMEOUT_MS")
     const loadTimeoutMs = environmentInteger(values, "PROJECT_REGISTRY_LOAD_TIMEOUT_MS")
     const shutdownTimeoutMs = environmentInteger(values, "PROJECT_REGISTRY_SHUTDOWN_TIMEOUT_MS")
+    const serverIpDiscoveryTimeoutMs = environmentInteger(values, "PROJECT_REGISTRY_SERVER_IP_DISCOVERY_TIMEOUT_MS")
     const sessionMaxAgeSeconds = environmentInteger(values, "PROJECT_REGISTRY_SESSION_MAX_AGE_SECONDS")
     const sessionMaxEntries = environmentInteger(values, "PROJECT_REGISTRY_SESSION_MAX_ENTRIES")
     const gitPush = environmentBoolean(values, "PROJECT_REGISTRY_GIT_PUSH")
@@ -121,6 +125,7 @@ export function projectRegistryDaemonConfigFromEnv(
       shutdownTimeoutMs,
       sessionMaxAgeSeconds,
       sessionMaxEntries,
+      serverIpDiscoveryTimeoutMs,
     ]
     if (
       numericValues.some((value) => Number.isNaN(value)) ||
@@ -172,6 +177,9 @@ export function projectRegistryDaemonConfigFromEnv(
       loadTimeoutMs,
       shutdownTimeoutMs,
       initializeFromGeneratedConfig,
+      serverIp: values.SERVER_IP?.trim() || undefined,
+      serverIpCachePath: values.PROJECT_REGISTRY_SERVER_IP_CACHE_PATH?.trim() || undefined,
+      serverIpDiscoveryTimeoutMs,
     })
   } catch (error) {
     return createResultError(op, error instanceof Error ? error.message : "invalid daemon environment")

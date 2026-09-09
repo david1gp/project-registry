@@ -13,6 +13,8 @@ import type { ProjectRegistryDaemonMappedUsersResolve } from "./ProjectRegistryD
 import type { ProjectRegistryDaemonPosix } from "./ProjectRegistryDaemonPosix.js"
 import type { ProjectRegistryDaemonRequestHandler } from "./ProjectRegistryDaemonRequestHandler.js"
 import type { ProjectRegistryDaemonServerFactory } from "./ProjectRegistryDaemonServerFactory.js"
+import type { ProjectRegistryDaemonServerIpFilesystem } from "./ProjectRegistryDaemonServerIpFilesystem.js"
+import type { ProjectRegistryDaemonServerIpLogger } from "./ProjectRegistryDaemonServerIpLogger.js"
 import type { ProjectRegistryDaemonSignals } from "./ProjectRegistryDaemonSignals.js"
 import type { ProjectRegistryDaemonSocketAccessResolve } from "./ProjectRegistryDaemonSocketAccessResolve.js"
 
@@ -35,5 +37,9 @@ export type ProjectRegistryDaemonOptions = {
   timer?: CaddyTimer
   caddyProcessRunner?: CaddyProcessRunner
   caddyFetch?: CaddyFetch
+  serverIpFilesystem?: ProjectRegistryDaemonServerIpFilesystem
+  serverIpFetch?: CaddyFetch
+  serverIpLogger?: ProjectRegistryDaemonServerIpLogger
+  serverIpClock?: () => number
   requireRoot?: boolean
 }

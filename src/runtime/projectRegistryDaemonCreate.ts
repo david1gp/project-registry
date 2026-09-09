@@ -19,6 +19,7 @@ import type { ProjectRegistryDaemonReadiness } from "./ProjectRegistryDaemonRead
 import type { ProjectRegistryDaemonRequestContext } from "./ProjectRegistryDaemonRequestContext.js"
 import type { ProjectRegistryDaemonServer } from "./ProjectRegistryDaemonServer.js"
 import type { ProjectRegistryDaemonServerFactory } from "./ProjectRegistryDaemonServerFactory.js"
+import type { ProjectRegistryDaemonServerIp } from "./ProjectRegistryDaemonServerIp.js"
 import type { ProjectRegistryDaemonSignals } from "./ProjectRegistryDaemonSignals.js"
 import type { ProjectRegistryDaemonSocketRefresh } from "./ProjectRegistryDaemonSocketRefresh.js"
 import type { ProjectRegistryDaemonState } from "./ProjectRegistryDaemonState.js"
@@ -26,6 +27,8 @@ import { projectRegistryDaemonConfigValidate } from "./projectRegistryDaemonConf
 import { projectRegistryDaemonFilesystemDefault } from "./projectRegistryDaemonFilesystemDefault.js"
 import { projectRegistryDaemonPosixDefault } from "./projectRegistryDaemonPosixDefault.js"
 import { projectRegistryDaemonServerDefault } from "./projectRegistryDaemonServerDefault.js"
+import { projectRegistryDaemonServerIpCreate } from "./projectRegistryDaemonServerIpCreate.js"
+import { projectRegistryDaemonServerIpFilesystemDefault } from "./projectRegistryDaemonServerIpFilesystemDefault.js"
 import { projectRegistryDaemonSignalsDefault } from "./projectRegistryDaemonSignalsDefault.js"
 
 const socketMode = 0o600
@@ -203,6 +206,10 @@ export function projectRegistryDaemonCreate(options: ProjectRegistryDaemonOption
   let serverFactoryOption: ProjectRegistryDaemonOptions["serverFactory"]
   let signalsOption: ProjectRegistryDaemonOptions["signals"]
   let timerOption: ProjectRegistryDaemonOptions["timer"]
+  let serverIpFilesystemOption: ProjectRegistryDaemonOptions["serverIpFilesystem"]
+  let serverIpFetchOption: ProjectRegistryDaemonOptions["serverIpFetch"]
+  let serverIpLoggerOption: ProjectRegistryDaemonOptions["serverIpLogger"]
+  let serverIpClockOption: ProjectRegistryDaemonOptions["serverIpClock"]
   let requireRootOption: ProjectRegistryDaemonOptions["requireRoot"]
   try {
     configInput = options.config
@@ -218,6 +225,10 @@ export function projectRegistryDaemonCreate(options: ProjectRegistryDaemonOption
     serverFactoryOption = options.serverFactory
     signalsOption = options.signals
     timerOption = options.timer
+    serverIpFilesystemOption = options.serverIpFilesystem
+    serverIpFetchOption = options.serverIpFetch
+    serverIpLoggerOption = options.serverIpLogger
+    serverIpClockOption = options.serverIpClock
     requireRootOption = options.requireRoot
   } catch (error) {
     return createResultError(op, error instanceof Error ? error.message : "invalid daemon options")
@@ -239,6 +250,19 @@ export function projectRegistryDaemonCreate(options: ProjectRegistryDaemonOption
   const serverFactory = serverFactoryOption ?? projectRegistryDaemonServerDefault()
   const signals: ProjectRegistryDaemonSignals = signalsOption ?? projectRegistryDaemonSignalsDefault()
   const timer: RuntimeTimer = timerOption ?? defaultTimer()
+  const serverIpFilesystem = serverIpFilesystemOption ?? projectRegistryDaemonServerIpFilesystemDefault()
+  const serverIpFetch = serverIpFetchOption ?? ((input: string, init: RequestInit) => globalThis.fetch(input, init))
+  const serverIpR = projectRegistryDaemonServerIpCreate({
+    override: config.serverIp,
+    cachePath: config.serverIpCachePath,
+    timeoutMs: config.serverIpDiscoveryTimeoutMs,
+    filesystem: serverIpFilesystem,
+    fetch: serverIpFetch,
+    logger: serverIpLoggerOption,
+    clock: serverIpClockOption,
+  })
+  if (!serverIpR.success) return serverIpR
+  const serverIp: ProjectRegistryDaemonServerIp = serverIpR.data
   const mappedUsersResolve = mappedUsersResolveOption
   const socketRecords = new Map<string, SocketRecord>()
   const cleanupRecords = new Map<string, SocketRecord>()
@@ -938,6 +962,7 @@ export function projectRegistryDaemonCreate(options: ProjectRegistryDaemonOption
 
   async function stopResourcesInternal(): Promise<string[]> {
     const failures: string[] = []
+    serverIp.shutdown()
     if (userRefreshHandle !== undefined) {
       try {
         timer.clearInterval(userRefreshHandle)
@@ -1209,6 +1234,7 @@ export function projectRegistryDaemonCreate(options: ProjectRegistryDaemonOption
 
   async function startInternal(): PromiseResult<void> {
     if (state !== "starting") return createResultError(op, "daemon has stopped")
+    serverIp.start()
     const signalsR = signalsInstall()
     if (!signalsR.success) return startupFailure(signalsR.errorMessage)
 
@@ -1283,6 +1309,7 @@ export function projectRegistryDaemonCreate(options: ProjectRegistryDaemonOption
 
   async function shutdownInternal(): PromiseResult<void> {
     state = "stopping"
+    serverIp.shutdown()
     const deadline = Date.now() + config.shutdownTimeoutMs
     const failures: string[] = []
     const work = shutdownWork()
@@ -1344,6 +1371,7 @@ export function projectRegistryDaemonCreate(options: ProjectRegistryDaemonOption
     healthLive,
     readiness,
     refreshSockets,
+    serverIpCurrent: serverIp.current,
   }
   return createResult(daemon)
 }

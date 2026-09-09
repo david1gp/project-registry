@@ -177,6 +177,20 @@ CADDY_GROUP="$(systemctl show caddy.service --property=Group --value --no-pager)
 runuser -u "$CADDY_USER" -g "$CADDY_GROUP" -- id -u
 ```
 
+### Server IP state
+
+At daemon startup, `SERVER_IP` can provide a validated IPv4 or IPv6 override. An override skips both local state and
+remote discovery. Without it, the daemon loads the last value from
+`/var/lib/project-registry/server-ip` and refreshes it once in the background through `https://api.ipify.org`. The
+refresh has a short timeout and never delays daemon startup. Successful values replace the cache atomically; failures
+leave the previous value in place. The root-owned daemon creates the parent directory and writes the cache with mode
+`0600` under the unit's `StateDirectory=project-registry` (`/var/lib/project-registry`, mode `0700`) and
+`UMask=0077`.
+
+Use `PROJECT_REGISTRY_SERVER_IP_CACHE_PATH` to select another absolute cache path when deployment state is stored
+elsewhere, and `PROJECT_REGISTRY_SERVER_IP_DISCOVERY_TIMEOUT_MS` to adjust the bounded request timeout. The current
+in-memory value is available to later DNS integration; this task does not change Cloudflare or DNS configuration.
+
 ### Optional Caddy access-log storage
 
 Access logging is disabled when `PROJECT_REGISTRY_CADDY_ACCESS_LOG_ROOT` is unset. Enable it only in a reviewed

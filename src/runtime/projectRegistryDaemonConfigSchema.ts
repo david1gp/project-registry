@@ -1,3 +1,4 @@
+import { isIP } from "node:net"
 import * as a from "valibot"
 import { projectAccessLogRootSchema } from "../access-log/projectAccessLogRootSchema.js"
 import { caddyConfigOptionsSchema } from "../caddy/caddyConfigOptionsSchema.js"
@@ -135,6 +136,12 @@ const sessionSchema = a.strictObject({
   maxEntries: a.optional(sessionMaxEntriesSchema),
 })
 
+const serverIpSchema = a.pipe(
+  a.string(),
+  a.minLength(1),
+  a.check((value) => isIP(value) !== 0, "SERVER_IP must be a valid IPv4 or IPv6 address"),
+)
+
 export const projectRegistryDaemonConfigSchema = a.strictObject({
   repositoryPath: absolutePathSchema,
   repositoryBranch: a.optional(branchSchema, "main"),
@@ -168,4 +175,7 @@ export const projectRegistryDaemonConfigSchema = a.strictObject({
   loadTimeoutMs: a.optional(durationSchema, 30_000),
   shutdownTimeoutMs: a.optional(durationSchema, 10_000),
   initializeFromGeneratedConfig: a.optional(a.boolean(), false),
+  serverIp: a.optional(serverIpSchema),
+  serverIpCachePath: a.optional(absolutePathSchema, "/var/lib/project-registry/server-ip"),
+  serverIpDiscoveryTimeoutMs: a.optional(durationSchema, 3_000),
 })

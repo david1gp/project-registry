@@ -24,6 +24,8 @@ UMask=0077
 RuntimeDirectory=project-registry
 # Mapped owners can traverse the directory; each owner socket is still mode 0600.
 RuntimeDirectoryMode=0755
+StateDirectory=project-registry
+StateDirectoryMode=0700
 LimitNOFILE=1048576
 
 [Install]

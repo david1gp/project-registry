@@ -177,6 +177,8 @@ describe("project-registryd production staging", () => {
     expect(service).toContain("Group=root")
     expect(service).toContain("RuntimeDirectory=project-registry")
     expect(service).toContain("RuntimeDirectoryMode=0755")
+    expect(service).toContain("StateDirectory=project-registry")
+    expect(service).toContain("StateDirectoryMode=0700")
     expect(service).not.toContain("RuntimeDirectoryMode=0700")
   })
 
@@ -288,6 +290,9 @@ describe("project-registryd production staging", () => {
         PROJECT_REGISTRY_CONFIG_ROOT: configRoot,
         PROJECT_REGISTRY_UNIT_PATH: unitPath,
         PROJECT_REGISTRY_BUN_RUNTIME_PATH: runtimePath,
+        SERVER_IP: "2001:db8::42",
+        PROJECT_REGISTRY_SERVER_IP_CACHE_PATH: join(directory, "state", "server-ip"),
+        PROJECT_REGISTRY_SERVER_IP_DISCOVERY_TIMEOUT_MS: "1750",
         PROJECT_REGISTRY_CADDY_ACCESS_LOG_ROOT: "",
         CADDY_SERVICE_IDENTITY_FILE: join(identityFixtureDirectory, "matching.properties"),
       }
@@ -297,7 +302,14 @@ describe("project-registryd production staging", () => {
 
       expect(result.exitCode, `${result.stdout}\n${result.stderr}`).toBe(0)
       expect(result.stderr).toBe("")
-      expect(await Bun.file(join(configRoot, "project-registryd.env")).exists()).toBe(true)
+      const environmentFile = join(configRoot, "project-registryd.env")
+      expect(await Bun.file(environmentFile).exists()).toBe(true)
+      const stagedEnvironment = await readFile(environmentFile, "utf8")
+      expect(stagedEnvironment).toContain("SERVER_IP=2001:db8::42\n")
+      expect(stagedEnvironment).toContain(
+        `PROJECT_REGISTRY_SERVER_IP_CACHE_PATH=${environment.PROJECT_REGISTRY_SERVER_IP_CACHE_PATH}\n`,
+      )
+      expect(stagedEnvironment).toContain("PROJECT_REGISTRY_SERVER_IP_DISCOVERY_TIMEOUT_MS=1750\n")
       expect(await Bun.file(unitPath).exists()).toBe(true)
       expect(await readFile(installLog, "utf8")).not.toContain("umask")
     } finally {

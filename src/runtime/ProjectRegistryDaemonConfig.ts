@@ -36,4 +36,7 @@ export type ProjectRegistryDaemonConfig = {
   loadTimeoutMs: number
   shutdownTimeoutMs: number
   initializeFromGeneratedConfig: boolean
+  serverIp?: string
+  serverIpCachePath: string
+  serverIpDiscoveryTimeoutMs: number
 }

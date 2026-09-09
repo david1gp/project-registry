@@ -18,6 +18,7 @@ import type { ProjectRegistryDaemonFilesystem } from "./ProjectRegistryDaemonFil
 import type { ProjectRegistryDaemonMappedUser } from "./ProjectRegistryDaemonMappedUser.js"
 import type { ProjectRegistryDaemonServer } from "./ProjectRegistryDaemonServer.js"
 import type { ProjectRegistryDaemonServerFactory } from "./ProjectRegistryDaemonServerFactory.js"
+import type { ProjectRegistryDaemonServerIpFilesystem } from "./ProjectRegistryDaemonServerIpFilesystem.js"
 import type { ProjectRegistryDaemonSignals } from "./ProjectRegistryDaemonSignals.js"
 import { projectRegistryDaemonConfigFromEnv } from "./projectRegistryDaemonConfigFromEnv.js"
 import { projectRegistryDaemonConfigValidate } from "./projectRegistryDaemonConfigValidate.js"
@@ -26,7 +27,11 @@ import { projectRegistryDaemonFilesystemDefault } from "./projectRegistryDaemonF
 import { projectRegistryDaemonOpen } from "./projectRegistryDaemonOpen.js"
 
 function config(overrides: Partial<ProjectRegistryDaemonConfig> = {}): ProjectRegistryDaemonConfig {
-  const result = projectRegistryDaemonConfigValidate({ repositoryPath: "/tmp/project-registry-test", ...overrides })
+  const result = projectRegistryDaemonConfigValidate({
+    repositoryPath: "/tmp/project-registry-test",
+    serverIp: "127.0.0.1",
+    ...overrides,
+  })
   if (!result.success) throw new Error(result.errorMessage)
   return result.data
 }
@@ -471,6 +476,65 @@ describe("projectRegistryDaemonConfigValidate", () => {
 })
 
 describe("projectRegistryDaemonCreate", () => {
+  test("loads cached server IP without delaying startup and refreshes it in the background", async () => {
+    const fakeFilesystem = filesystemCreate()
+    const fakeServers = serverFactoryCreate(fakeFilesystem.entries)
+    const cachePath = "/tmp/project-registry-server-ip"
+    const cacheFiles = new Map([[cachePath, "198.51.100.10\n"]])
+    const serverIpFilesystem: ProjectRegistryDaemonServerIpFilesystem = {
+      async readFile(path) {
+        const value = cacheFiles.get(path)
+        if (value === undefined) throw Object.assign(new Error("missing cache"), { code: "ENOENT" })
+        return value
+      },
+      async mkdir() {},
+      async writeFile(path, value) {
+        cacheFiles.set(path, value)
+      },
+      async rename(source, destination) {
+        const value = cacheFiles.get(source)
+        if (value === undefined) throw new Error("missing temporary cache")
+        cacheFiles.delete(source)
+        cacheFiles.set(destination, value)
+      },
+      async unlink(path) {
+        cacheFiles.delete(path)
+      },
+    }
+    const fetchStarted = deferred<void>()
+    const discovery = deferred<Response>()
+    const daemonR = projectRegistryDaemonCreate({
+      config: config({
+        serverIp: undefined,
+        serverIpCachePath: cachePath,
+        serverIpDiscoveryTimeoutMs: 1000,
+      }),
+      repository: repository(),
+      caddyApplication: caddyApplication(),
+      filesystem: fakeFilesystem.filesystem,
+      serverFactory: fakeServers.factory,
+      serverIpFilesystem,
+      serverIpFetch: async () => {
+        fetchStarted.resolve()
+        return discovery.promise
+      },
+      requireRoot: false,
+    })
+    expect(daemonR.success).toBe(true)
+    if (!daemonR.success) return
+
+    const startR = await daemonR.data.start()
+    expect(startR.success).toBe(true)
+    await fetchStarted.promise
+    expect(daemonR.data.serverIpCurrent()).toBe("198.51.100.10")
+
+    discovery.resolve(new Response("203.0.113.10\n"))
+    await new Promise<void>((resolve) => globalThis.setTimeout(resolve, 0))
+    expect(daemonR.data.serverIpCurrent()).toBe("203.0.113.10")
+    expect(cacheFiles.get(cachePath)).toBe("203.0.113.10\n")
+    await daemonR.data.shutdown()
+  })
+
   test("starts live but not ready after failed generated-config validation and retries", async () => {
     const fakeFilesystem = filesystemCreate()
     const fakeServers = serverFactoryCreate(fakeFilesystem.entries)
