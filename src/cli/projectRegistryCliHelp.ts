@@ -15,6 +15,7 @@ Commands:
   config [selector]
   regenerate
   status
+  version             Show deployed backend and local CLI/library versions
   user default-domain get
   user default-domain set <domain>
   user default-domain unset
@@ -44,5 +45,5 @@ Options:
   --socket <path>  Unix socket (then PROJECT_REGISTRY_SOCKET, then /run/project-registry/$USER.sock)
   --json           Emit a stable JSON envelope
   -h, --help       Show help
-  -V, --version    Show version
+  -V, --version    Show local CLI version without contacting the daemon
 `

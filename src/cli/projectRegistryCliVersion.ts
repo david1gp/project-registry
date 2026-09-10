@@ -1,3 +1,3 @@
-import pkg from "../../package.json" with { type: "json" }
+import { projectRegistryVersion } from "../projectRegistryVersion.js"
 
-export const projectRegistryCliVersion = pkg.version
+export const projectRegistryCliVersion = projectRegistryVersion

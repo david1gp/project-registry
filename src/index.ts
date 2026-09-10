@@ -182,6 +182,7 @@ export { projectRegistryDaemonServerDefault } from "./runtime/projectRegistryDae
 export { projectRegistryDaemonServerIpCreate } from "./runtime/projectRegistryDaemonServerIpCreate.js"
 export { projectRegistryDaemonServerIpFilesystemDefault } from "./runtime/projectRegistryDaemonServerIpFilesystemDefault.js"
 export { projectRegistryDaemonSignalsDefault } from "./runtime/projectRegistryDaemonSignalsDefault.js"
+export { projectRegistryVersion } from "./projectRegistryVersion.js"
 export type { Clock } from "./session/Clock.js"
 export type { CsrfTokenStore } from "./session/CsrfTokenStore.js"
 export type { CsrfTokenStoreOptions } from "./session/CsrfTokenStoreOptions.js"

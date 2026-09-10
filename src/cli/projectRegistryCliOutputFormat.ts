@@ -1,6 +1,7 @@
 import * as a from "valibot"
 import { createResult, createResultError, type Result } from "#result"
 import { projectLabelsSchema } from "../project/projectLabelsSchema.js"
+import { projectRegistryVersion } from "../projectRegistryVersion.js"
 import type { ProjectRegistryCliInvocation } from "./ProjectRegistryCliInvocation.js"
 
 const projectSchema = a.looseObject({
@@ -72,6 +73,7 @@ const accessLogPageSchema = a.object({
   partial: a.boolean(),
   malformedLines: a.pipe(a.number(), a.integer(), a.minValue(0)),
 })
+const backendVersionSchema = a.object({ version: a.string() })
 
 function dataParse<TSchema extends a.BaseSchema<unknown, unknown, a.BaseIssue<unknown>>>(
   schema: TSchema,
@@ -163,6 +165,15 @@ export function projectRegistryCliOutputFormat(
     if (!parsedR.success) return parsedR
     parsedData = parsedR.data
   }
+  if (command.kind === "backend-version") {
+    const parsedR = dataParse(backendVersionSchema, data, "version")
+    if (!parsedR.success) return parsedR
+    parsedData = {
+      backend: parsedR.data.version,
+      cli: projectRegistryVersion,
+      library: projectRegistryVersion,
+    }
+  }
 
   if (invocation.json) return jsonSerialize({ success: true, data: parsedData })
   if (command.kind === "project-list") {
@@ -241,6 +252,10 @@ export function projectRegistryCliOutputFormat(
     if (page.partial) lines.push("Partial: yes")
     if (page.malformedLines > 0) lines.push(`Malformed lines: ${page.malformedLines}`)
     return createResult(`${lines.join("\n")}\n`)
+  }
+  if (command.kind === "backend-version") {
+    const versions = parsedData as { backend: string; cli: string; library: string }
+    return createResult(`Backend: ${versions.backend}\nCLI: ${versions.cli}\nLibrary: ${versions.library}\n`)
   }
   return createResultError("projectRegistryCliOutputFormat", "The command does not produce daemon output.")
 }

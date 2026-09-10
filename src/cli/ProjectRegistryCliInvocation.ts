@@ -4,6 +4,7 @@ export type ProjectRegistryCliInvocation = {
   command:
     | { kind: "help" }
     | { kind: "version" }
+    | { kind: "backend-version" }
     | { kind: "user-default-domain-get" }
     | { kind: "user-default-domain-set"; domain: string }
     | { kind: "user-default-domain-unset" }

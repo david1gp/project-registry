@@ -24,6 +24,7 @@ import type { ProjectRepositoryMutation } from "../project-store/ProjectReposito
 import type { ProjectRegistryDaemonRequestContext } from "../runtime/ProjectRegistryDaemonRequestContext.js"
 import type { ProjectRegistryDaemonRequestHandler } from "../runtime/ProjectRegistryDaemonRequestHandler.js"
 import type { ProjectRegistryDaemonSocketAccessResolve } from "../runtime/ProjectRegistryDaemonSocketAccessResolve.js"
+import { projectRegistryVersion } from "../projectRegistryVersion.js"
 
 type ApiHandlerOptions = {
   repository: ProjectRepository
@@ -48,6 +49,7 @@ type ApiRoute =
   | { kind: "history"; legacy: boolean; owner?: string; name?: string }
   | { kind: "config"; legacy: boolean }
   | { kind: "status"; legacy: false }
+  | { kind: "version"; legacy: false }
   | { kind: "regenerate"; legacy: boolean }
   | { kind: "default-domain"; legacy: false; owner: string }
 
@@ -150,6 +152,7 @@ function routeParse(path: string): ApiRoute | undefined {
   if (path === "/history") return { kind: "history", legacy: true }
   if (path === "/api/v1/caddy/config") return { kind: "config", legacy: false }
   if (path === "/api/v1/caddy/status") return { kind: "status", legacy: false }
+  if (path === "/api/v1/version") return { kind: "version", legacy: false }
   if (path === "/api/v1/caddy/regenerate") return { kind: "regenerate", legacy: false }
   if (path === "/regenerate") return { kind: "regenerate", legacy: true }
 
@@ -735,6 +738,8 @@ export function projectRegistryApiHandlerCreate(options: ApiHandlerOptions): Pro
       if (!regeneratedR.success) return resultErrorResponse(regeneratedR, route.legacy, "caddy")
       return successResponse(regeneratedR.data)
     }
+
+    if (route.kind === "version") return successResponse({ version: projectRegistryVersion })
 
     if (route.kind === "docs") {
       const projectsR = await projectListUseCase(useCaseOptions, { owner })

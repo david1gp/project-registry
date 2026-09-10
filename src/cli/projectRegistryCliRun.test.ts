@@ -14,6 +14,7 @@ const project = {
 }
 const history = [{ sha: "1234567890abcdef", date: "2026-08-20T12:00:00Z", author: "Registry", message: "created" }]
 const status = { desiredRevision: "new", appliedRevision: "old", pendingRevision: "new", pending: true }
+const version = { version: pkg.version }
 const defaultDomain = { owner: "david", domain: "example.com", source: "explicit", revision: "current" }
 const accessLogPage = {
   records: [
@@ -88,6 +89,7 @@ describe("projectRegistryCliRun", () => {
     [["config"], { apps: {} }, "/config"],
     [["config", "apps.http servers"], [], "/config?select=apps.http+servers"],
     [["status"], status, "/api/v1/caddy/status"],
+    [["version"], version, "/api/v1/version"],
   ] as const)("uses the read API path for %p", async (args, data, expectedPath) => {
     const paths: string[] = []
     const stdout: string[] = []
@@ -285,6 +287,11 @@ describe("projectRegistryCliRun", () => {
       { args: ["project", "get", "site"], data: project, output: "site\tdavid\tproxy\t4321\tsite.example\n" },
       { args: ["history"], data: history, output: "12345678\t2026-08-20T12:00:00Z\tRegistry\tcreated\n" },
       { args: ["status"], data: status, output: "Caddy: pending\nDesired: new\nApplied: old\nPending: new\n" },
+      {
+        args: ["version"],
+        data: version,
+        output: `Backend: ${pkg.version}\nCLI: ${pkg.version}\nLibrary: ${pkg.version}\n`,
+      },
       { args: ["project", "list"], data: [], output: "No projects.\n" },
       { args: ["history"], data: [], output: "No history.\n" },
     ]
@@ -304,6 +311,17 @@ describe("projectRegistryCliRun", () => {
     expect(exitCode).toBe(0)
     expect(JSON.parse(stdout.join(""))).toEqual({ success: true, data: [project] })
     expect(stdout.join("")).toBe(`${JSON.stringify({ success: true, data: [project] })}\n`)
+  })
+
+  test("emits backend, CLI, and library versions in JSON", async () => {
+    const stdout: string[] = []
+    const exitCode = await projectRegistryCliRun(["version", "--json"], runOptions(version, [], stdout, []))
+
+    expect(exitCode).toBe(0)
+    expect(JSON.parse(stdout.join(""))).toEqual({
+      success: true,
+      data: { backend: pkg.version, cli: pkg.version, library: pkg.version },
+    })
   })
 
   test("includes labels in versioned JSON list and get reads", async () => {

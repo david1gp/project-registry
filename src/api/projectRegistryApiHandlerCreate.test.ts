@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test"
 import { mkdtempSync, rmSync } from "node:fs"
 import { join } from "node:path"
+import pkg from "../../package.json" with { type: "json" }
 import type { GitStoreCommitInfo } from "#git-store"
 import { createResult, createResultError, createResultErrorCode, type Result } from "#result"
 import { caddyAccessLogFixture } from "../../test/fixtures/caddyAccessLogFixture.js"
@@ -342,6 +343,10 @@ describe("projectRegistryApiHandlerCreate", () => {
       success: true,
       data: { desiredRevision: revision, appliedRevision: revision, pending: false, lastSuccess: 42 },
     })
+
+    const version = await requestJson(handler, "/api/v1/version", leo)
+    expect(version.response.status).toBe(200)
+    expect(version.body).toEqual({ success: true, data: { version: pkg.version } })
   })
 
   test("keeps legacy read aliases usable while scoping all data to the socket owner", async () => {

@@ -43,6 +43,7 @@ function requestPath(invocation: ProjectRegistryCliInvocation): string {
     if (command.selector === undefined) return "/config"
     return `/config?${new URLSearchParams({ select: command.selector })}`
   }
+  if (command.kind === "backend-version") return "/api/v1/version"
   return "/api/v1/caddy/status"
 }
 

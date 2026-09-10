@@ -38,6 +38,7 @@ describe("projectRegistryCliArgumentsParse", () => {
     [["config", "apps.http.servers"], { kind: "config", selector: "apps.http.servers" }],
     [["status"], { kind: "status" }],
     [["regenerate"], { kind: "regenerate" }],
+    [["version"], { kind: "backend-version" }],
     [["user", "default-domain", "get"], { kind: "user-default-domain-get" }],
     [["user", "default-domain", "set", "Example.COM."], { kind: "user-default-domain-set", domain: "example.com" }],
     [["user", "default-domain", "unset"], { kind: "user-default-domain-unset" }],

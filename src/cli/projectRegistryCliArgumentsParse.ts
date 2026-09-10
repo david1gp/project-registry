@@ -289,6 +289,18 @@ export function projectRegistryCliArgumentsParse(args: readonly string[]): Resul
   const hasHttp = booleans.has("--http")
 
   if (
+    subject === "version" &&
+    action === undefined &&
+    value === undefined &&
+    extra.length === 0 &&
+    limit === undefined &&
+    !hasMutationOptions &&
+    !hasAccessLogOptions &&
+    !hasHttp
+  ) {
+    return createResult({ command: { kind: "backend-version" }, json, socket })
+  }
+  if (
     subject === "project" &&
     action === "list" &&
     value === undefined &&
