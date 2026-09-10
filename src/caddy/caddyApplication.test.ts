@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { lstat, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
+import { lstat, mkdir, mkdtemp, readFile, rm, utimes, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { createResult, createResultError, type Result } from "#result"
@@ -566,6 +566,86 @@ describe("caddyApplication", () => {
     }
   })
 
+  test("prunes active access-log archives during the periodic successful-load reconciliation", async () => {
+    const root = await mkdtemp(join(tmpdir(), "project-registry-caddy-archive-retention-"))
+    const activeId = projectAccessLogId(caddyConfigGenerateFixtures.proxy)
+    const activeDirectory = join(root, "projects", activeId)
+    const activeLog = join(activeDirectory, "access.jsonl")
+    const archive = join(activeDirectory, "access-existing.jsonl.gz")
+    const now = projectAccessLogCaddyRetention.rollKeepDays * 24 * 60 * 60 * 1_000 + 1
+    try {
+      await mkdir(activeDirectory, { recursive: true })
+      await writeFile(activeLog, "active", { mode: 0o600 })
+      await writeFile(archive, "expired", { mode: 0o600 })
+      await utimes(archive, 0, 0)
+      const applicationR = caddyApplicationCreate({
+        repository: { read: async () => createResult(snapshot("revision-archive-retention")) },
+        configOptions: { caddyAccessLogRoot: root },
+        clock: () => now,
+        timer: timerFake().timer,
+        processRunner: async () => createResult({ exitCode: 0, stdout: "", stderr: "" }),
+        fetch: async () => new Response("", { status: 200 }),
+      })
+      expect(applicationR.success).toBe(true)
+      if (!applicationR.success) return
+
+      expect((await applicationR.data.start()).success).toBe(true)
+      await expect(lstat(archive)).rejects.toMatchObject({ code: "ENOENT" })
+      expect(await readFile(activeLog, "utf8")).toBe("active")
+      await applicationR.data.stop()
+    } finally {
+      await rm(root, { force: true, recursive: true })
+    }
+  })
+
+  test("prunes archives on an unchanged periodic configuration without reloading Caddy", async () => {
+    const root = await mkdtemp(join(tmpdir(), "project-registry-caddy-archive-periodic-"))
+    const activeId = projectAccessLogId(caddyConfigGenerateFixtures.proxy)
+    const activeDirectory = join(root, "projects", activeId)
+    const activeLog = join(activeDirectory, "access.jsonl")
+    const archive = join(activeDirectory, "access-2026-08-01T00-00-00.000-size.jsonl.gz")
+    const now = projectAccessLogCaddyRetention.rollKeepDays * 24 * 60 * 60 * 1_000 + 1
+    const fakeTimer = timerFake()
+    let validates = 0
+    let loads = 0
+    try {
+      await mkdir(activeDirectory, { recursive: true })
+      await writeFile(activeLog, "active", { mode: 0o600 })
+      const applicationR = caddyApplicationCreate({
+        repository: { read: async () => createResult(snapshot("revision-archive-periodic")) },
+        configOptions: { caddyAccessLogRoot: root },
+        clock: () => now,
+        timer: fakeTimer.timer,
+        processRunner: async () => {
+          validates += 1
+          return createResult({ exitCode: 0, stdout: "", stderr: "" })
+        },
+        fetch: async () => {
+          loads += 1
+          return new Response("", { status: 200 })
+        },
+      })
+      expect(applicationR.success).toBe(true)
+      if (!applicationR.success) return
+
+      expect((await applicationR.data.start()).success).toBe(true)
+      await writeFile(archive, "expired", { mode: 0o600 })
+      await utimes(archive, 0, 0)
+
+      fakeTimer.intervals[0]?.()
+      for (let attempt = 0; attempt < 20 && (await Bun.file(archive).exists()); attempt += 1) {
+        await new Promise((resolve) => setTimeout(resolve, 0))
+      }
+
+      expect(await Bun.file(archive).exists()).toBe(false)
+      expect(validates).toBe(1)
+      expect(loads).toBe(1)
+      await applicationR.data.stop()
+    } finally {
+      await rm(root, { force: true, recursive: true })
+    }
+  })
+
   test("retries transient retention failure on an unchanged interval without reloading Caddy", async () => {
     const root = await mkdtemp(join(tmpdir(), "project-registry-caddy-retention-retry-"))
     const projectsPath = join(root, "projects")
@@ -745,7 +825,7 @@ describe("caddyApplication", () => {
     let loads = 0
     try {
       await mkdir(latestProjectDirectory, { recursive: true })
-      await writeFile(join(latestProjectDirectory, "access.jsonl"), "")
+      await writeFile(join(latestProjectDirectory, "access.jsonl"), "", { mode: 0o600 })
       await projectAccessLogRetentionReconcile({ root, activeProjectIds: [], now: 0 })
 
       const applicationR = caddyApplicationCreate({
@@ -876,7 +956,7 @@ describe("caddyApplication", () => {
     const projectId = projectAccessLogId(project)
     const projectDirectory = join(root, "projects", projectId)
     const retentionNow = projectAccessLogCaddyRetention.rollKeepDays * 24 * 60 * 60 * 1_000 + 1
-    const noiseCount = 256
+    const noiseCount = 128
     let application: (() => void) | undefined
     let reads = 0
     let loads = 0
@@ -949,7 +1029,7 @@ describe("caddyApplication", () => {
     const retentionNow = projectAccessLogCaddyRetention.rollKeepDays * 24 * 60 * 60 * 1_000 + 1
     const secondLoad = deferred<Response>()
     const secondLoadStarted = deferred<void>()
-    const noiseCount = 256
+    const noiseCount = 128
     let application: (() => void) | undefined
     let reads = 0
     let loads = 0

@@ -9,7 +9,7 @@ Let an authenticated consumer view bounded, complete raw Caddy access logs for e
 - Caddy writes one JSON access-log stream per active `(owner, name)` project. A named logger is mapped to every domain on that project's server route.
 - A shared SHA-256 identifier derived from the encoded `(owner, name)` tuple is used for the logger and directory. Domain changes do not move logs, and owner/name values never become filesystem paths.
 - Production logs live outside the Git repository at `${PROJECT_REGISTRY_CADDY_ACCESS_LOG_ROOT}/projects/<project-id>/access.jsonl`. Logging is omitted when the root is unset, so local development remains opt-in.
-- Caddy owns file writing and rotation: 25 MiB files, daily roll, compression, seven-day retention, and at most eight archives. The daemon only reads and reconciles expired inactive directories.
+- Caddy owns file writing and rotation: 25 MiB files, daily roll, compression, 14-day retention, and at most one archive. The daemon periodically prunes recognized active-project archives to a 50 MiB aggregate per project, including the active file, and only reads and reconciles expired inactive directories otherwise.
 - Stored records preserve the complete Caddy JSON object, including request/response headers, query strings, credentials, and full client addresses. The parser and transport retain structural and resource bounds without privacy filtering or field redaction.
 - The first release provides finite, cursor-paginated reads and UI polling, not SSE, WebSockets, raw downloads, searching, exports, or cross-project aggregation.
 - The CLI has feature parity through `project-registry project access-logs <name> [--owner <owner>] [--limit <n>] [--before <cursor>]`. The owner defaults to the socket-bound username; an explicit owner supports authorized admin access. Continuous `--follow` is deferred with other live streaming.
@@ -32,7 +32,7 @@ Let an authenticated consumer view bounded, complete raw Caddy access logs for e
 - Provision the optional log root with Caddy-owned `0700` directories. Caddy's writer explicitly creates `0600` files and
   `0700` directories; root `project-registryd` reads the logs and owns its `0600` retention metadata. Do not audit or
   repair existing log entries during installation, and do not install a custom Caddy umask drop-in.
-- After a successful Caddy application, reconcile project log directories. Keep active projects, retain newly inactive directories for the retention window, then atomically quarantine expired directories without following links; quarantine cleanup is deferred.
+- After a successful Caddy application, reconcile project log directories. Keep active projects and prune their recognized archives by age and aggregate size without touching `access.jsonl`; retain newly inactive directories for the 14-day retention window, then atomically quarantine expired directories without following links; quarantine cleanup is deferred.
 - Roll out behind the log-root environment setting: native Caddy validation and raw-record fixtures first, then a one-project staging canary, then production enablement.
 
 ## Tasks

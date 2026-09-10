@@ -78,7 +78,6 @@ describe("projectAccessLogSourceFileCreate", () => {
       const transitionalContent = `${rawRecord(2)}\n${rawRecord(3)}\n`
       await writeFile(transitional, transitionalContent)
       await writeFile(`${transitional}.gz`, gzipSync(transitionalContent))
-      await writeFile(join(fixture.directory, "access-20260820.jsonl.gz"), gzipSync(`${rawRecord(1)}\n`))
 
       const sourceR = projectAccessLogSourceFileCreate({ root: fixture.root })
       expect(sourceR.success).toBe(true)
@@ -92,7 +91,7 @@ describe("projectAccessLogSourceFileCreate", () => {
       const secondR = await sourceR.data.read(project, { limit: 2, before: firstR.data.next })
       expect(secondR.success).toBe(true)
       if (secondR.success) {
-        expect(secondR.data.records.map((record) => record.ts)).toEqual([2, 1])
+        expect(secondR.data.records.map((record) => record.ts)).toEqual([2])
         expect(secondR.data.next).toBeUndefined()
       }
     } finally {
@@ -100,15 +99,13 @@ describe("projectAccessLogSourceFileCreate", () => {
     }
   })
 
-  test("orders roll filenames by stable bytes and prefers plain transitional archives", async () => {
+  test("recognizes the Caddy roll filename and prefers its plain transitional archive", async () => {
     const fixture = await fixtureCreate()
     try {
       await writeFile(fixture.active, `${rawRecord(4)}\n`)
-      await writeFile(join(fixture.directory, "access-20260821_120000.jsonl"), `${rawRecord(2)}\n`)
       const transitional = join(fixture.directory, "access-20260821.jsonl")
       await writeFile(transitional, `${rawRecord(1)}\n`)
       await writeFile(`${transitional}.gz`, gzipSync(`${rawRecord(99)}\n`))
-      await writeFile(join(fixture.directory, "access-20260821-120000.jsonl"), `${rawRecord(3)}\n`)
 
       const sourceR = projectAccessLogSourceFileCreate(fixture.root)
       expect(sourceR.success).toBe(true)
@@ -117,7 +114,7 @@ describe("projectAccessLogSourceFileCreate", () => {
       const pageR = await sourceR.data.read(project, { limit: 10 })
       expect(pageR).toMatchObject({ success: true })
       if (pageR.success) {
-        expect(pageR.data.records.map((record) => record.ts)).toEqual([4, 2, 1, 3])
+        expect(pageR.data.records.map((record) => record.ts)).toEqual([4, 1])
         expect(pageR.data.next).toBeUndefined()
       }
     } finally {
@@ -269,7 +266,7 @@ describe("projectAccessLogSourceFileCreate", () => {
   test("caps valid archives at the configured Caddy retention", async () => {
     const fixture = await fixtureCreate()
     try {
-      for (let index = 0; index < 9; index += 1) {
+      for (let index = 0; index < 2; index += 1) {
         await writeFile(join(fixture.directory, `access-202608${String(21 - index).padStart(2, "0")}.jsonl`), "")
       }
       const sourceR = projectAccessLogSourceFileCreate(fixture.root)
@@ -285,15 +282,14 @@ describe("projectAccessLogSourceFileCreate", () => {
     }
   })
 
-  test("returns a decompressed resource limit when a prior archive exhausts the budget", async () => {
+  test("returns a decompressed resource limit when an archive exhausts the budget", async () => {
     const fixture = await fixtureCreate()
     try {
       const content = Buffer.from(`${rawRecord(2)}\n`)
       await writeFile(join(fixture.directory, "access-20260821.jsonl.gz"), gzipSync(content))
-      await writeFile(join(fixture.directory, "access-20260820.jsonl.gz"), gzipSync(Buffer.alloc(0)))
       const sourceR = projectAccessLogSourceFileCreate({
         root: fixture.root,
-        limits: { maxRecords: 2, maxDecompressedBytes: content.length },
+        limits: { maxRecords: 2, maxDecompressedBytes: content.length - 1 },
       })
       expect(sourceR.success).toBe(true)
       if (sourceR.success) {

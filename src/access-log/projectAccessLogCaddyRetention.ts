@@ -1,4 +1,6 @@
 export const projectAccessLogCaddyRetention = {
-  rollKeep: 8,
-  rollKeepDays: 7,
+  rollSizeMb: 25,
+  rollKeep: 1,
+  rollKeepDays: 14,
+  maximumProjectBytes: 50 * 1024 * 1024,
 } as const

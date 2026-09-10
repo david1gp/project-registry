@@ -10,8 +10,8 @@ shopt -s nullglob
 
 readonly script_name="caddy-project-access-logs-check.bash"
 readonly caddy_roll_bytes=$((25 * 1024 * 1024))
-readonly caddy_max_archives=8
-readonly maximum_project_bytes=$((caddy_roll_bytes * (caddy_max_archives + 1) + 1024 * 1024))
+readonly caddy_max_archives=1
+readonly maximum_project_bytes=$((50 * 1024 * 1024 + 1024 * 1024))
 readonly maximum_page_bytes=$((8 * 1024 * 1024))
 readonly maximum_access_log_records=1000000
 readonly maximum_access_log_line_bytes=$((128 * 1024))

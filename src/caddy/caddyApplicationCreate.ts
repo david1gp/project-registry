@@ -25,6 +25,7 @@ type QueuedSnapshot = {
   snapshot: ProjectRepositorySnapshot
   force: boolean
   initialize: boolean
+  periodic: boolean
   sequence: number
 }
 
@@ -32,6 +33,7 @@ type TriggerOperation = {
   sequence: number
   force: boolean
   initialize: boolean
+  periodic: boolean
   promise: PromiseResult<CaddyApplicationResult>
   resolve: (result: Result<CaddyApplicationResult>) => void
   settled: boolean
@@ -455,6 +457,7 @@ export function caddyApplicationCreate(options: unknown): Result<CaddyApplicatio
     snapshot: ProjectRepositorySnapshot,
     force: boolean,
     initialize: boolean,
+    periodic: boolean,
     sequence: number,
     successfulCaddyLoad: SuccessfulCaddyLoadHandler,
   ): PromiseResult<CaddyApplicationResult> {
@@ -489,7 +492,7 @@ export function caddyApplicationCreate(options: unknown): Result<CaddyApplicatio
           error: undefined,
         }
       }
-      if (retentionReconciliationDirty) successfulCaddyLoad(snapshot, clock(), sequence)
+      if (periodic || retentionReconciliationDirty) successfulCaddyLoad(snapshot, clock(), sequence)
       return createResult({ revision: snapshot.revision, changed: false, applied: true, attempts: 0 })
     }
 
@@ -615,6 +618,7 @@ export function caddyApplicationCreate(options: unknown): Result<CaddyApplicatio
             queued.snapshot,
             queued.force,
             queued.initialize,
+            queued.periodic,
             queued.sequence,
             (snapshot, now, sequence) => {
               latestSuccessfulCaddyLoad = { snapshot, now, sequence }
@@ -675,6 +679,7 @@ export function caddyApplicationCreate(options: unknown): Result<CaddyApplicatio
     snapshot: ProjectRepositorySnapshot,
     force: boolean,
     initialize: boolean,
+    periodic: boolean,
     sequence: number,
   ): PromiseResult<CaddyApplicationResult> {
     if (stopped) return Promise.resolve(stoppedResult())
@@ -682,6 +687,7 @@ export function caddyApplicationCreate(options: unknown): Result<CaddyApplicatio
       snapshot,
       force: force || pending?.force === true,
       initialize,
+      periodic: periodic || pending?.periodic === true,
       sequence,
     }
     if (running !== undefined) return running
@@ -721,12 +727,18 @@ export function caddyApplicationCreate(options: unknown): Result<CaddyApplicatio
       return latestTrigger?.promise ?? createResultError("caddyApplication", "project registry read failed")
 
     statusDesired(snapshot, operation.sequence)
-    const queued = snapshotQueue(snapshot, operation.force, operation.initialize, operation.sequence)
+    const queued = snapshotQueue(
+      snapshot,
+      operation.force,
+      operation.initialize,
+      operation.periodic,
+      operation.sequence,
+    )
     const result = await queued
     return triggerResultLatest(operation, result)
   }
 
-  function trigger(force: boolean, initialize = false): PromiseResult<CaddyApplicationResult> {
+  function trigger(force: boolean, initialize = false, periodic = false): PromiseResult<CaddyApplicationResult> {
     if (stopped) return Promise.resolve(stoppedResult())
     const sequence = triggerSequence + 1
     triggerSequence = sequence
@@ -738,6 +750,7 @@ export function caddyApplicationCreate(options: unknown): Result<CaddyApplicatio
       sequence,
       force,
       initialize,
+      periodic,
       promise,
       resolve: resolveTrigger,
       settled: false,
@@ -766,7 +779,7 @@ export function caddyApplicationCreate(options: unknown): Result<CaddyApplicatio
     intervalStarted = true
     try {
       intervalHandle = timer.setInterval(() => {
-        if (!stopped) void trigger(false)
+        if (!stopped) void trigger(false, false, true)
       }, intervalMs)
     } catch (error) {
       intervalStarted = false

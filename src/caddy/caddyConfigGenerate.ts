@@ -320,7 +320,7 @@ function projectAccessLogConfig(
         filename: pathR.data,
         mode: "0600",
         dir_mode: "0700",
-        roll_size_mb: 25,
+        roll_size_mb: projectAccessLogCaddyRetention.rollSizeMb,
         roll_at: ["00:00"],
         roll_gzip: true,
         roll_keep_days: projectAccessLogCaddyRetention.rollKeepDays,

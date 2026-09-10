@@ -36,6 +36,7 @@ type FileHandle = Awaited<ReturnType<typeof open>>
 
 type RetentionSyncPurpose =
   | "metadata-namespace"
+  | "archive-namespace"
   | "quarantine-namespace"
   | "quarantine-rename-source"
   | "quarantine-rename-destination"
@@ -356,6 +357,178 @@ function metadataParse(value: unknown): RetentionMetadata | undefined {
 
 function quarantineLogFileKnown(name: string): boolean {
   return name === "access.jsonl" || archiveNamePattern.test(name)
+}
+
+function retentionStatStable(left: Stats, right: Stats): boolean {
+  return (
+    statSameObject(left, right) &&
+    left.size === right.size &&
+    left.mtimeMs === right.mtimeMs &&
+    left.ctimeMs === right.ctimeMs
+  )
+}
+
+function retentionLogStatSafe(stat: Stats, device: Stats["dev"], owner: Stats): boolean {
+  return (
+    stat.isFile() &&
+    !stat.isSymbolicLink() &&
+    stat.dev === device &&
+    stat.nlink === 1 &&
+    (stat.mode & 0o7777) === 0o600 &&
+    stat.uid === owner.uid &&
+    stat.gid === owner.gid &&
+    Number.isSafeInteger(stat.size) &&
+    stat.size >= 0 &&
+    Number.isFinite(stat.mtimeMs) &&
+    stat.mtimeMs >= 0
+  )
+}
+
+async function archiveFileVerified(
+  directory: FileHandle,
+  entry: DirectoryChild,
+  device: Stats["dev"],
+  owner: Stats,
+): Promise<boolean> {
+  if (!retentionLogStatSafe(entry.stat, device, owner)) return false
+  const path = descriptorChildPath(directory, entry.name)
+  let handle: FileHandle | undefined
+  try {
+    const openR = await projectAccessLogOpenat2({
+      directoryFd: directory.fd,
+      name: entry.name,
+      flags: descriptorFileFlags,
+      path,
+    })
+    if (!openR.success || openR.data === undefined) return false
+    handle = openR.data
+    const openedStat = await handle.stat()
+    return retentionLogStatSafe(openedStat, device, owner) && retentionStatStable(entry.stat, openedStat)
+  } catch {
+    return false
+  } finally {
+    await fileHandleClose(handle)
+  }
+}
+
+async function archiveProjectCurrent(
+  projectPath: string,
+  projectStat: Stats,
+  directory: FileHandle,
+  device: Stats["dev"],
+): Promise<boolean> {
+  try {
+    const currentProjectStat = await lstat(projectPath)
+    const openedDirectoryStat = await directory.stat()
+    return (
+      currentProjectStat.isDirectory() &&
+      !currentProjectStat.isSymbolicLink() &&
+      currentProjectStat.dev === device &&
+      statSameObject(projectStat, currentProjectStat) &&
+      openedDirectoryStat.isDirectory() &&
+      openedDirectoryStat.dev === device &&
+      statSameObject(projectStat, openedDirectoryStat)
+    )
+  } catch {
+    return false
+  }
+}
+
+function archiveCandidateCompare(left: DirectoryChild, right: DirectoryChild): number {
+  if (left.stat.mtimeMs !== right.stat.mtimeMs) return left.stat.mtimeMs - right.stat.mtimeMs
+  return left.name < right.name ? -1 : left.name > right.name ? 1 : 0
+}
+
+async function projectAccessLogArchiveCleanup(
+  directory: FileHandle,
+  projectPath: string,
+  projectStat: Stats,
+  now: number,
+  stillCurrent: () => boolean,
+  filesystem: RetentionFileSystem,
+  budget: WorkBudget,
+): Promise<Result<boolean>> {
+  let directoryStat: Stats
+  try {
+    directoryStat = await directory.stat()
+  } catch {
+    return createResult(false)
+  }
+  if (
+    !directoryStat.isDirectory() ||
+    directoryStat.dev !== projectStat.dev ||
+    !statSameObject(directoryStat, projectStat)
+  ) {
+    return createResult(false)
+  }
+  if (!(await archiveProjectCurrent(projectPath, projectStat, directory, projectStat.dev))) return createResult(false)
+
+  const entriesR = await directoryEntriesRead(directory, projectPath, budget)
+  if (!entriesR.success) return entriesR
+  const active = entriesR.data.find((entry) => entry.name === "access.jsonl")
+  if (active === undefined || !retentionLogStatSafe(active.stat, projectStat.dev, active.stat))
+    return createResult(false)
+
+  const archives = entriesR.data.filter((entry) => archiveNamePattern.test(entry.name))
+  for (const archive of archives) {
+    if (!(await archiveFileVerified(directory, archive, projectStat.dev, active.stat))) return createResult(false)
+  }
+
+  const ageLimit = now - retentionWindowMs
+  const remove = new Set<DirectoryChild>()
+  const retained = archives.filter((archive) => {
+    if (archive.stat.mtimeMs <= ageLimit) {
+      remove.add(archive)
+      return false
+    }
+    return true
+  })
+  let totalBytes = active.stat.size + retained.reduce((total, archive) => total + archive.stat.size, 0)
+  const byAge = [...retained].sort(archiveCandidateCompare)
+  while (totalBytes > projectAccessLogCaddyRetention.maximumProjectBytes) {
+    const oldest = byAge.shift()
+    if (oldest === undefined) break
+    remove.add(oldest)
+    totalBytes -= oldest.stat.size
+  }
+  if (remove.size === 0) return createResult(true)
+
+  const toRemove = [...remove].sort(archiveCandidateCompare)
+  for (const archive of toRemove) {
+    if (!stillCurrent()) return createResult(false)
+    if (!(await archiveProjectCurrent(projectPath, projectStat, directory, projectStat.dev))) return createResult(false)
+    let currentActive: Stats
+    try {
+      currentActive = await lstat(descriptorChildPath(directory, "access.jsonl"))
+    } catch {
+      return createResult(false)
+    }
+    if (
+      !retentionLogStatSafe(currentActive, projectStat.dev, active.stat) ||
+      !retentionStatStable(active.stat, currentActive)
+    ) {
+      return createResult(false)
+    }
+    if (!(await archiveFileVerified(directory, archive, projectStat.dev, active.stat))) return createResult(false)
+    try {
+      await unlink(descriptorChildPath(directory, archive.name))
+    } catch {
+      return createResult(false)
+    }
+    try {
+      await lstat(descriptorChildPath(directory, archive.name))
+      return createResult(false)
+    } catch (error) {
+      if (errorCode(error) !== "ENOENT") return createResult(false)
+    }
+  }
+
+  try {
+    await filesystem.syncDirectory(directory, "archive-namespace")
+  } catch {
+    return retentionError("access log archive removal could not be made durable", projectPath)
+  }
+  return createResult(true)
 }
 
 function quarantineGraceExpired(quarantinedAt: number, now: number): boolean {
@@ -1389,6 +1562,23 @@ async function projectAccessLogRetentionReconcileRun(options: ReconcileOptions):
             await fileHandleClose(activeDirectory)
           }
           if (!activeWritten) continue
+        }
+        if (!stillCurrent()) continue
+        const activeDirectory = await projectDirectoryOpen(projects, project, projectsStat.dev)
+        if (activeDirectory === undefined) continue
+        try {
+          const archiveCleanupR = await projectAccessLogArchiveCleanup(
+            activeDirectory,
+            descriptorChildPath(projects, project.id),
+            project.stat,
+            now,
+            stillCurrent,
+            filesystem,
+            budget,
+          )
+          if (!archiveCleanupR.success) return archiveCleanupR
+        } finally {
+          await fileHandleClose(activeDirectory)
         }
         continue
       }

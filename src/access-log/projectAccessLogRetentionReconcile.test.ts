@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import { constants } from "node:fs"
-import { chmod, lstat, mkdir, mkdtemp, open, readFile, rename, rm, symlink, writeFile } from "node:fs/promises"
+import { chmod, lstat, mkdir, mkdtemp, open, readFile, rename, rm, symlink, utimes, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { projectAccessLogCaddyRetention } from "./projectAccessLogCaddyRetention.js"
@@ -51,8 +51,15 @@ function activeProjectIds(count: number): string[] {
 async function projectDirectoryCreate(root: string, id: string): Promise<string> {
   const directory = join(root, "projects", id)
   await mkdir(directory)
-  await writeFile(join(directory, "access.jsonl"), "")
+  await writeFile(join(directory, "access.jsonl"), "", { mode: 0o600 })
   return directory
+}
+
+async function archiveCreate(directory: string, name: string, bytes: number, mtime: number): Promise<string> {
+  const path = join(directory, name)
+  await writeFile(path, Buffer.alloc(bytes, 0x61), { mode: 0o600 })
+  await utimes(path, mtime, mtime)
+  return path
 }
 
 async function bindMountTry(source: string, target: string): Promise<boolean> {
@@ -91,7 +98,137 @@ describe("projectAccessLogRetentionReconcile", () => {
     }
   })
 
-  test("retains a newly inactive directory for seven days", async () => {
+  test("removes recognized archives at the 14-day age boundary and preserves the active file", async () => {
+    const fixture = await fixtureCreate()
+    try {
+      const id = projectId("alice", "archive-age")
+      const directory = await projectDirectoryCreate(fixture.root, id)
+      await writeFile(join(directory, "access.jsonl"), "active-log")
+      const now = retentionMs
+      const expired = await archiveCreate(directory, "access-20260801.jsonl.gz", 4, 0)
+      const recent = await archiveCreate(directory, "access-20260802.jsonl", 4, now - 1)
+      const unrelated = join(directory, "access-not-an-archive.txt")
+      await writeFile(unrelated, "keep")
+
+      const result = await projectAccessLogRetentionReconcile({ root: fixture.root, activeProjectIds: [id], now })
+
+      expect(result).toEqual({ success: true, data: true })
+      await expect(lstat(expired)).rejects.toMatchObject({ code: "ENOENT" })
+      expect((await lstat(recent)).isFile()).toBe(true)
+      expect(await readFile(join(directory, "access.jsonl"), "utf8")).toBe("active-log")
+      expect(await readFile(unrelated, "utf8")).toBe("keep")
+    } finally {
+      await fixture.cleanup()
+    }
+  })
+
+  test("enforces the aggregate byte budget including the active file at its exact boundary", async () => {
+    const fixture = await fixtureCreate()
+    try {
+      const id = projectId("alice", "archive-budget")
+      const directory = await projectDirectoryCreate(fixture.root, id)
+      const activeBytes = projectAccessLogCaddyRetention.maximumProjectBytes - 1024 * 1024
+      await writeFile(join(directory, "access.jsonl"), Buffer.alloc(activeBytes, 0x61))
+      const now = retentionMs + 10
+      const exact = await archiveCreate(directory, "access-exact.jsonl", 1024 * 1024, now - 1)
+      const over = await archiveCreate(directory, "access-over.jsonl", 1, now - 2)
+
+      const result = await projectAccessLogRetentionReconcile({ root: fixture.root, activeProjectIds: [id], now })
+
+      expect(result).toEqual({ success: true, data: true })
+      await expect(lstat(over)).rejects.toMatchObject({ code: "ENOENT" })
+      expect((await lstat(exact)).isFile()).toBe(true)
+      expect((await lstat(join(directory, "access.jsonl"))).size).toBe(activeBytes)
+    } finally {
+      await fixture.cleanup()
+    }
+  })
+
+  test("preserves recognized archives when an archive is a symlink or special file", async () => {
+    const fixture = await fixtureCreate()
+    const outside = await mkdtemp(join(tmpdir(), "project-registry-retention-archive-outside-"))
+    try {
+      const symlinkId = projectId("alice", "archive-symlink")
+      const symlinkDirectory = await projectDirectoryCreate(fixture.root, symlinkId)
+      const outsideArchive = join(outside, "outside.jsonl")
+      await writeFile(outsideArchive, "outside")
+      await symlink(outsideArchive, join(symlinkDirectory, "access-unsafe.jsonl"))
+      const safeArchive = await archiveCreate(symlinkDirectory, "access-safe.jsonl", 4, 0)
+
+      const fifoId = projectId("alice", "archive-fifo")
+      const fifoDirectory = await projectDirectoryCreate(fixture.root, fifoId)
+      const fifo = join(fifoDirectory, "access-unsafe.jsonl.gz")
+      expect(Bun.spawnSync(["mkfifo", fifo]).exitCode).toBe(0)
+      const fifoSafeArchive = await archiveCreate(fifoDirectory, "access-safe.jsonl", 4, 0)
+
+      const result = await projectAccessLogRetentionReconcile({
+        root: fixture.root,
+        activeProjectIds: [symlinkId, fifoId],
+        now: retentionMs + 1,
+      })
+
+      expect(result).toEqual({ success: true, data: true })
+      expect((await lstat(join(symlinkDirectory, "access-unsafe.jsonl"))).isSymbolicLink()).toBe(true)
+      expect((await lstat(safeArchive)).isFile()).toBe(true)
+      expect(await readFile(outsideArchive, "utf8")).toBe("outside")
+      expect((await lstat(fifo)).isFIFO()).toBe(true)
+      expect((await lstat(fifoSafeArchive)).isFile()).toBe(true)
+    } finally {
+      await fixture.cleanup()
+      await rm(outside, { force: true, recursive: true })
+    }
+  })
+
+  test("preserves archives when the active or archive file permissions are unsafe", async () => {
+    const fixture = await fixtureCreate()
+    try {
+      const activeUnsafeId = projectId("alice", "active-unsafe-permissions")
+      const activeUnsafeDirectory = await projectDirectoryCreate(fixture.root, activeUnsafeId)
+      const activeUnsafeArchive = await archiveCreate(activeUnsafeDirectory, "access-active-unsafe.jsonl", 4, 0)
+      await chmod(join(activeUnsafeDirectory, "access.jsonl"), 0o644)
+
+      const archiveUnsafeId = projectId("alice", "archive-unsafe-permissions")
+      const archiveUnsafeDirectory = await projectDirectoryCreate(fixture.root, archiveUnsafeId)
+      const archiveUnsafe = await archiveCreate(archiveUnsafeDirectory, "access-archive-unsafe.jsonl", 4, 0)
+      await chmod(archiveUnsafe, 0o644)
+
+      const result = await projectAccessLogRetentionReconcile({
+        root: fixture.root,
+        activeProjectIds: [activeUnsafeId, archiveUnsafeId],
+        now: retentionMs + 1,
+      })
+
+      expect(result).toEqual({ success: true, data: true })
+      expect((await lstat(activeUnsafeArchive)).isFile()).toBe(true)
+      expect((await lstat(archiveUnsafe)).isFile()).toBe(true)
+    } finally {
+      await fixture.cleanup()
+    }
+  })
+
+  test("does not prune archives after the reconciliation becomes stale", async () => {
+    const fixture = await fixtureCreate()
+    try {
+      const id = projectId("alice", "archive-stale")
+      const directory = await projectDirectoryCreate(fixture.root, id)
+      await projectAccessLogRetentionReconcile({ root: fixture.root, activeProjectIds: [id], now: 0 })
+      const archive = await archiveCreate(directory, "access-stale.jsonl", 4, 0)
+
+      const result = await projectAccessLogRetentionReconcile({
+        root: fixture.root,
+        activeProjectIds: [id],
+        now: retentionMs + 1,
+        stillCurrent: () => false,
+      })
+
+      expect(result).toEqual({ success: true, data: true })
+      expect((await lstat(archive)).isFile()).toBe(true)
+    } finally {
+      await fixture.cleanup()
+    }
+  })
+
+  test("retains a newly inactive directory for 14 days", async () => {
     const fixture = await fixtureCreate()
     try {
       const id = projectId("alice", "recent")
