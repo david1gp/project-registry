@@ -13,6 +13,7 @@ export type ProjectRegistryCliInvocation = {
     | {
         kind: "project-create"
         name?: string
+        service?: string
         noDns?: boolean
         caddy: ProjectRegistryCliCaddyOptions
         labels?: Record<string, string>
@@ -20,6 +21,7 @@ export type ProjectRegistryCliInvocation = {
     | {
         kind: "project-edit"
         name: string
+        service?: string
         caddy: ProjectRegistryCliCaddyOptions
         labels?: Record<string, string>
         removeLabels?: string[]

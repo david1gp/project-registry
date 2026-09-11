@@ -86,6 +86,7 @@ function repositoryCreate(): ProjectRepository {
     create: async () => createResultError("projectRepositoryCreate", "not implemented"),
     edit: async () => createResultError("projectRepositoryEdit", "not implemented"),
     delete: async () => createResultError("projectRepositoryDelete", "not implemented"),
+    migrate: async () => createResultError("projectRepositoryMigration", "not implemented"),
     setUserDefaultDomain: async () => createResultError("projectRepositorySetUserDefaultDomain", "not implemented"),
     history: async () => createResult([]),
     ownerHistory: async () => createResult([]),

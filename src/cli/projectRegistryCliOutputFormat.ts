@@ -7,6 +7,7 @@ import type { ProjectRegistryCliInvocation } from "./ProjectRegistryCliInvocatio
 const projectSchema = a.looseObject({
   name: a.string(),
   user: a.string(),
+  service: a.optional(a.string()),
   port: a.optional(a.number()),
   domains: a.array(a.string()),
   kind: a.picklist(["proxy", "static"]),
@@ -86,6 +87,14 @@ function dataParse<TSchema extends a.BaseSchema<unknown, unknown, a.BaseIssue<un
   return createResult(parsed.output)
 }
 
+function projectServiceCell(project: a.InferOutput<typeof projectSchema>): string {
+  return project.service === undefined ? "" : `\t${project.service}`
+}
+
+function projectLineFormat(project: a.InferOutput<typeof projectSchema>): string {
+  return `${project.name}${projectServiceCell(project)}\t${project.kind}\t${project.port ?? "-"}\t${project.domains.join(",")}`
+}
+
 function jsonSerialize(data: unknown, indentation = 0): Result<string> {
   const op = "projectRegistryCliOutputFormat"
   try {
@@ -109,7 +118,7 @@ export function projectRegistryCliOutputFormat(
     parsedData = parsedR.data
   }
   if (command.kind === "project-get") {
-    const parsedR = dataParse(projectSchema, data, "project")
+    const parsedR = dataParse(a.union([projectSchema, a.array(projectSchema)]), data, "project")
     if (!parsedR.success) return parsedR
     parsedData = parsedR.data
   }
@@ -179,16 +188,13 @@ export function projectRegistryCliOutputFormat(
   if (command.kind === "project-list") {
     const projects = parsedData as a.InferOutput<typeof projectSchema>[]
     if (projects.length === 0) return createResult("No projects.\n")
-    return createResult(
-      `${projects
-        .map((project) => `${project.name}\t${project.kind}\t${project.port ?? "-"}\t${project.domains.join(",")}`)
-        .join("\n")}\n`,
-    )
+    return createResult(`${projects.map(projectLineFormat).join("\n")}\n`)
   }
   if (command.kind === "project-get") {
-    const project = parsedData as a.InferOutput<typeof projectSchema>
+    const projects = parsedData as a.InferOutput<typeof projectSchema> | a.InferOutput<typeof projectSchema>[]
+    const rows = Array.isArray(projects) ? projects : [projects]
     return createResult(
-      `${project.name}\t${project.user}\t${project.kind}\t${project.port ?? "-"}\t${project.domains.join(",")}\n`,
+      `${rows.map((project) => `${project.name}\t${project.user}${projectServiceCell(project)}\t${project.kind}\t${project.port ?? "-"}\t${project.domains.join(",")}`).join("\n")}\n`,
     )
   }
   if (command.kind === "project-history" || command.kind === "history") {

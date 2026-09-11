@@ -8,6 +8,7 @@ const projectNameRequirement =
   "Project names must start with a lowercase letter or digit and contain only lowercase letters, digits, and hyphens."
 const projectNameHint = "Use a name such as 'my-project'."
 const ownerPattern = /^[A-Za-z_][A-Za-z0-9_.-]*\$?$/
+const serviceIdPattern = /^[a-z0-9][a-z0-9-]*$/
 const maximumAccessLogLimit = 1_000
 const maximumAccessLogCursorLength = 4_096
 
@@ -59,6 +60,7 @@ export function projectRegistryCliArgumentsParse(args: readonly string[]): Resul
   let socket: string | undefined
   let limit: number | undefined
   let flagName: string | undefined
+  let service: string | undefined
   let noDns = false
   let port: number | undefined
   let path: string | undefined
@@ -110,6 +112,7 @@ export function projectRegistryCliArgumentsParse(args: readonly string[]): Resul
       "--socket",
       "--limit",
       "--name",
+      "--service",
       "--port",
       "--domain",
       "--path",
@@ -148,6 +151,16 @@ export function projectRegistryCliArgumentsParse(args: readonly string[]): Resul
           return projectNameOptionError(op)
         }
         flagName = value
+        continue
+      }
+      if (option === "--service") {
+        if (value === undefined || !serviceIdPattern.test(value)) {
+          return createResultError(
+            op,
+            "Option --service requires a service ID starting with a lowercase letter or digit and containing only lowercase letters, digits, and hyphens.",
+          )
+        }
+        service = value
         continue
       }
       if (option === "--port") {
@@ -284,7 +297,7 @@ export function projectRegistryCliArgumentsParse(args: readonly string[]): Resul
   const hasOnlyPortOption = port !== undefined && Object.keys(caddy).length === 1
   const hasLabelOptions = hasLabels || removeLabels.length > 0 || clearLabels
   const hasMutationOptions =
-    hasCaddyOptions || flagName !== undefined || noDns || hasLabelOptions
+    hasCaddyOptions || flagName !== undefined || service !== undefined || noDns || hasLabelOptions
   const hasAccessLogOptions = owner !== undefined || before !== undefined
   const hasHttp = booleans.has("--http")
 
@@ -369,6 +382,7 @@ export function projectRegistryCliArgumentsParse(args: readonly string[]): Resul
     extra.length === 0 &&
     !hasCaddyOptions &&
     flagName === undefined &&
+    service === undefined &&
     !noDns &&
     !hasHttp
   ) {
@@ -393,6 +407,7 @@ export function projectRegistryCliArgumentsParse(args: readonly string[]): Resul
       command: {
         kind: "project-create",
         name: flagName,
+        ...(service === undefined ? {} : { service }),
         ...(noDns ? { noDns: true } : {}),
         caddy,
         ...(hasLabels ? { labels } : {}),
@@ -417,6 +432,7 @@ export function projectRegistryCliArgumentsParse(args: readonly string[]): Resul
       command: {
         kind: "project-edit",
         name: value,
+        ...(service === undefined ? {} : { service }),
         caddy,
         ...(hasLabels ? { labels } : {}),
         ...(removeLabels.length > 0 ? { removeLabels } : {}),

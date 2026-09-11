@@ -3,8 +3,8 @@ export const projectRegistryCliHelp = `Usage: project-registry [--socket <path>]
 Commands:
   project list
   project get <name>
-  project create [--name <name>] [--domain <hostname>] [options]
-  project edit <name> [options]
+  project create [--name <name>] [--service <id>] [--domain <hostname>] [options]
+  project edit <name> [--service <id>] [options]
   project delete <name>
   delete --port <port>
   project history <name> [--limit <n>]
@@ -25,6 +25,8 @@ Project create/edit options:
   --domain <hostname>        Domain; repeat to provide multiple domains; defaults to the configured user domain
   --path <path>              Static/docs filesystem path (defaults to the current directory)
   --name <name>              Project name (defaults to the path folder name)
+  --service <id>             Service of the project to create or edit (defaults to 'default');
+                             sibling services keep their domains, port, and Caddy settings
   --no-dns                    Skip automatic Cloudflare DNS reconciliation for this create
   --kind <proxy|static>      Caddy route kind
   --access <internal|external>

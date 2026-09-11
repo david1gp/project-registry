@@ -2,11 +2,15 @@ import { basename, resolve } from "node:path"
 import * as a from "valibot"
 import { createResult, createResultError, type Result, type ResultErr } from "#result"
 import type { Project } from "../project/Project.js"
+import { projectCaddyEntries } from "../project/projectCaddyEntries.js"
+import { type ProjectCanonical, projectCanonicalSchema } from "../project/projectCanonicalSchema.js"
 import { projectLabelsSchema } from "../project/projectLabelsSchema.js"
+import { projectMigrate } from "../project/projectMigrate.js"
 import { projectSchema } from "../project/projectSchema.js"
 import type { ProjectRegistryCliCaddyOptions } from "./ProjectRegistryCliCaddyOptions.js"
 import type { ProjectRegistryCliFetch } from "./ProjectRegistryCliFetch.js"
 import type { ProjectRegistryCliInvocation } from "./ProjectRegistryCliInvocation.js"
+import { projectCliServiceRows } from "./projectCliServiceRows.js"
 import { projectNameFromPath } from "./projectNameFromPath.js"
 import { projectRegistryCliArgumentsParse } from "./projectRegistryCliArgumentsParse.js"
 import { projectRegistryCliHelp } from "./projectRegistryCliHelp.js"
@@ -14,6 +18,7 @@ import { projectRegistryCliOutputFormat } from "./projectRegistryCliOutputFormat
 import { projectRegistryCliRequest } from "./projectRegistryCliRequest.js"
 import { projectRegistryCliSocketResolve } from "./projectRegistryCliSocketResolve.js"
 import { projectRegistryCliVersion } from "./projectRegistryCliVersion.js"
+import { projectServicesPatchApply } from "./projectServicesPatchApply.js"
 
 type CliRunOptions = {
   environment?: Readonly<Record<string, string | undefined>>
@@ -108,40 +113,21 @@ function projectLabelSet(labels: Record<string, string>, key: string, value: str
   })
 }
 
-const projectListResponseSchema = a.object({ projects: a.array(projectSchema) })
-const projectResponseSchema = a.object({ project: projectSchema, revision: a.string() })
+const projectAnySchema = a.union([projectCanonicalSchema, projectSchema])
+const projectListResponseSchema = a.object({ projects: a.array(projectAnySchema) })
+const projectResponseSchema = a.object({ project: projectAnySchema, revision: a.string() })
 
 function projectListResponseParse(data: unknown): Result<readonly Project[]> {
   const op = "projectRegistryCliProjectListResponseParse"
   const parsed = a.safeParse(projectListResponseSchema, data)
   if (!parsed.success) return createResultError(op, "project-registryd returned malformed project list data.")
-  return createResult(parsed.output.projects)
+  return createResult(parsed.output.projects as unknown as readonly Project[])
 }
 
-function projectCliReadMap(project: Project): Record<string, unknown> {
-  const caddy = project.caddy
-  return {
-    name: project.name,
-    user: project.owner,
-    port: caddy?.port,
-    domains: caddy?.domains ?? [],
-    path: caddy?.path ?? "",
-    access: caddy?.access ?? "external",
-    kind: caddy?.kind ?? "proxy",
-    docs: caddy?.docs ?? false,
-    browse: caddy?.browse ?? false,
-    headerUp: caddy?.headerUp ?? {},
-    disabled: caddy?.disabled ?? true,
-    routed: caddy?.routed,
-    oidcPaths: caddy?.oidcPaths,
-    docsPath: caddy?.docsPath,
-    browseTemplate: caddy?.browseTemplate,
-    staticAllow: caddy?.staticAllow,
-    denyDotfiles: caddy?.denyDotfiles,
-    spa: caddy?.spa,
-    flushInterval: caddy?.flushInterval,
-    labels: project.labels,
-  }
+function projectCanonicalParse(project: unknown, op: string): Result<ProjectCanonical> {
+  const migrated = projectMigrate(project)
+  if (!migrated.success) return createResultError(op, "project-registryd returned malformed project data.")
+  return migrated
 }
 
 function projectCreateDefaults(command: Extract<ProjectRegistryCliInvocation["command"], { kind: "project-create" }>): {
@@ -164,12 +150,9 @@ function projectCreateDefaultsCollision(
   if (command.name !== undefined && command.caddy.path !== undefined) return false
   return projects.some((project) => {
     if (command.name === undefined && project.name === name) return true
-    const projectPath = project.caddy?.path
-    return (
-      command.caddy.path === undefined &&
-      projectPath !== undefined &&
-      projectPath !== "" &&
-      resolve(projectPath) === path
+    if (command.caddy.path !== undefined) return false
+    return projectCaddyEntries(project).some(
+      (entry) => entry.caddy.path !== undefined && entry.caddy.path !== "" && resolve(entry.caddy.path) === path,
     )
   })
 }
@@ -192,25 +175,28 @@ async function jsonProjectReadRequest(
 
   if (command.kind === "project-list") {
     if (Array.isArray(responseR.data)) return responseR
+    const op = "projectRegistryCliProjectListResponseParse"
     const parsedR = a.safeParse(projectListResponseSchema, responseR.data)
-    if (!parsedR.success)
-      return createResultError(
-        "projectRegistryCliProjectListResponseParse",
-        "project-registryd returned malformed project list data.",
-      )
-    return createResult(parsedR.output.projects.map(projectCliReadMap))
+    if (!parsedR.success) return createResultError(op, "project-registryd returned malformed project list data.")
+    const rows: Record<string, unknown>[] = []
+    for (const project of parsedR.output.projects) {
+      const canonicalR = projectCanonicalParse(project, op)
+      if (!canonicalR.success) return canonicalR
+      rows.push(...projectCliServiceRows(canonicalR.data))
+    }
+    return createResult(rows)
   }
   const legacyProject = recordValue(responseR.data)
   if (legacyProject !== undefined && typeof legacyProject.name === "string" && typeof legacyProject.user === "string") {
     return responseR
   }
+  const op = "projectRegistryCliProjectResponseParse"
   const parsedR = a.safeParse(projectResponseSchema, responseR.data)
-  if (!parsedR.success)
-    return createResultError(
-      "projectRegistryCliProjectResponseParse",
-      "project-registryd returned malformed project data.",
-    )
-  return createResult(projectCliReadMap(parsedR.output.project))
+  if (!parsedR.success) return createResultError(op, "project-registryd returned malformed project data.")
+  const canonicalR = projectCanonicalParse(parsedR.output.project, op)
+  if (!canonicalR.success) return canonicalR
+  const rows = projectCliServiceRows(canonicalR.data)
+  return createResult(rows.length === 1 ? rows[0]! : rows)
 }
 
 async function commandRequest(
@@ -344,14 +330,28 @@ async function commandRequest(
       body: {
         expectedRevision: revisionR.data,
         name: defaults.name,
-        caddy: defaults.caddy,
+        ...(command.service === undefined
+          ? { caddy: defaults.caddy }
+          : { schemaVersion: 2, services: [{ id: command.service, units: [], caddy: defaults.caddy }] }),
         ...(command.noDns === true ? { noDns: true } : {}),
         ...(command.labels === undefined ? {} : { labels: command.labels }),
       },
     }
   } else if (command.kind === "project-edit") {
     const body: Record<string, unknown> = { expectedRevision: revisionR.data }
-    if (Object.keys(command.caddy).length > 0) body.caddy = command.caddy
+    if (command.service !== undefined) {
+      const projectResponse = recordValue(currentR.data)
+      const canonicalR = projectCanonicalParse(projectResponse?.project, "projectRegistryCliProjectResponseParse")
+      if (!canonicalR.success) return canonicalR
+      const servicesR = projectServicesPatchApply(canonicalR.data.services, command.service, command.caddy)
+      if (!servicesR.success) {
+        return { ...servicesR, hint: "Run 'project-registry project get <name> --json' to list existing services." }
+      }
+      body.schemaVersion = 2
+      body.services = servicesR.data
+    } else if (Object.keys(command.caddy).length > 0) {
+      body.caddy = command.caddy
+    }
     const hasLabelOptions =
       command.labels !== undefined || command.removeLabels !== undefined || command.clearLabels === true
     if (hasLabelOptions) {
