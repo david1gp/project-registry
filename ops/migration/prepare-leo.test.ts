@@ -355,7 +355,9 @@ exec /usr/bin/install "\${filtered[@]}"
       const liveOidcContents = await readFile(liveOidcDestination, "utf8")
       const liveOidcAliasContents = await readFile(liveOidcAliasDestination, "utf8")
       const oidcWriteLog = join(directory, "oidc-writes.log")
+      const cloudflareSource = join(directory, "cloudflare.env")
       const backupRoot = join(directory, "caddy-backups")
+      await Bun.write(cloudflareSource, "CLOUDFLARE_API_TOKEN=fixture-cloudflare-token\n")
       await mkdir(backupRoot, { recursive: true })
       await chmod(backupRoot, 0o755)
       await chmod(liveData, 0o755)
@@ -384,6 +386,11 @@ exec /usr/bin/install "\${filtered[@]}"
         PREFLIGHT_ARGS_LOG: join(directory, "dependency-preflight-args.log"),
         OIDC_CANDIDATE_LOG: join(directory, "oidc-candidate.log"),
         OIDC_PARITY_LOG: join(directory, "oidc-parity.log"),
+        PROJECT_REGISTRY_CLOUDFLARE_LEO_SOURCE: cloudflareSource,
+        PROJECT_REGISTRY_CLOUDFLARE_DAVID_SOURCE: cloudflareSource,
+        PROJECT_REGISTRY_CLOUDFLARE_FABIAN_SOURCE: cloudflareSource,
+        PROJECT_REGISTRY_LEGACY_CLOUDFLARE_PATH: join(directory, "legacy-cloudflare.env"),
+        PROJECT_REGISTRY_LEGACY_CLOUDFLARE_DROPIN_PATH: join(directory, "cloudflare.conf"),
         PATH: `${fakeBin}:${Bun.env.PATH ?? ""}`,
         CADDY_SERVICE_IDENTITY_FILE: caddyIdentityFixture,
       }
