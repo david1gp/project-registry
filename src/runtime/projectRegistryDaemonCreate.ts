@@ -5,9 +5,6 @@ import type { ProjectAccess } from "../access/ProjectAccess.js"
 import { projectAccessCreate } from "../access/projectAccessCreate.js"
 import { projectAccessLogSourceFileCreate } from "../access-log/projectAccessLogSourceFileCreate.js"
 import { projectRegistryApiHandlerCreate } from "../api/projectRegistryApiHandlerCreate.js"
-import { projectRegistryDaemonCloudflareDnsCreate } from "./projectRegistryDaemonCloudflareDnsCreate.js"
-import { projectRegistryDaemonCloudflareDnsTrackingCreate } from "./projectRegistryDaemonCloudflareDnsTrackingCreate.js"
-import { projectRegistryDaemonCloudflareDnsTrackingFilesystemDefault } from "./projectRegistryDaemonCloudflareDnsTrackingFilesystemDefault.js"
 import type { ProjectRepository } from "../project-store/ProjectRepository.js"
 import { sessionActorResolve } from "../session/sessionActorResolve.js"
 import { sessionRequestResolve } from "../session/sessionRequestResolve.js"
@@ -26,6 +23,9 @@ import type { ProjectRegistryDaemonServerIp } from "./ProjectRegistryDaemonServe
 import type { ProjectRegistryDaemonSignals } from "./ProjectRegistryDaemonSignals.js"
 import type { ProjectRegistryDaemonSocketRefresh } from "./ProjectRegistryDaemonSocketRefresh.js"
 import type { ProjectRegistryDaemonState } from "./ProjectRegistryDaemonState.js"
+import { projectRegistryDaemonCloudflareDnsCreate } from "./projectRegistryDaemonCloudflareDnsCreate.js"
+import { projectRegistryDaemonCloudflareDnsTrackingCreate } from "./projectRegistryDaemonCloudflareDnsTrackingCreate.js"
+import { projectRegistryDaemonCloudflareDnsTrackingFilesystemDefault } from "./projectRegistryDaemonCloudflareDnsTrackingFilesystemDefault.js"
 import { projectRegistryDaemonConfigValidate } from "./projectRegistryDaemonConfigValidate.js"
 import { projectRegistryDaemonFilesystemDefault } from "./projectRegistryDaemonFilesystemDefault.js"
 import { projectRegistryDaemonPosixDefault } from "./projectRegistryDaemonPosixDefault.js"
@@ -1102,6 +1102,8 @@ export function projectRegistryDaemonCreate(options: ProjectRegistryDaemonOption
       gitQueueRun("projectRegistryRepositoryEdit", () => repository.edit(key, project, mutationOptions)),
     delete: (key, mutationOptions) =>
       gitQueueRun("projectRegistryRepositoryDelete", () => repository.delete(key, mutationOptions)),
+    migrate: (migrationOptions) =>
+      gitQueueRun("projectRegistryRepositoryMigration", () => repository.migrate(migrationOptions)),
     setUserDefaultDomain: (owner, domain, mutationOptions) =>
       gitQueueRun("projectRegistryRepositoryUserDefaultDomainSet", () =>
         repository.setUserDefaultDomain(owner, domain, mutationOptions),

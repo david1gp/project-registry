@@ -1,8 +1,7 @@
-import * as a from "valibot"
 import { createResult, createResultError, type PromiseResult } from "#result"
 import type { Actor } from "../access/Actor.js"
 import type { Project } from "../project/Project.js"
-import { projectSchema } from "../project/projectSchema.js"
+import { projectMigrate } from "../project/projectMigrate.js"
 import type { CaddyInspectionOptions } from "./CaddyInspectionOptions.js"
 
 function actorIsValid(actor: unknown): actor is Actor {
@@ -24,8 +23,13 @@ function projectsFromSnapshot(value: unknown): Project[] | undefined {
       : undefined
   if (projects === undefined) return undefined
 
-  const parsed = a.safeParse(a.array(projectSchema), projects)
-  return parsed.success ? parsed.output : undefined
+  const parsed: Project[] = []
+  for (const project of projects) {
+    const canonicalR = projectMigrate(project)
+    if (!canonicalR.success) return undefined
+    parsed.push(canonicalR.data)
+  }
+  return parsed
 }
 
 export async function caddyVisibleProjects(options: CaddyInspectionOptions): PromiseResult<Project[]> {

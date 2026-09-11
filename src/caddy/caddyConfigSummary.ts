@@ -1,25 +1,33 @@
-import * as a from "valibot"
-import type { Project } from "../project/Project.js"
-import { projectSchema } from "../project/projectSchema.js"
+import { projectCaddyEntries } from "../project/projectCaddyEntries.js"
+import type { ProjectCaddy } from "../project/projectCaddySchema.js"
+import type { ProjectCanonical } from "../project/projectCanonicalSchema.js"
+import { projectMigrate } from "../project/projectMigrate.js"
 import type { CaddyConfigSummaryEntry } from "./CaddyConfigSummaryEntry.js"
 
-function activeProject(project: Project): project is Project & { caddy: NonNullable<Project["caddy"]> } {
-  return project.caddy !== undefined && project.caddy !== null && !project.caddy.disabled
+type CaddySummaryRoute = {
+  project: ProjectCanonical
+  serviceId?: string
+  caddy: ProjectCaddy
 }
 
-function stringCompare(left: string, right: string): number {
-  if (left === right) return 0
-  return left < right ? -1 : 1
+function projectRoutes(project: ProjectCanonical): CaddySummaryRoute[] {
+  return projectCaddyEntries(project).map((entry) => ({ project, serviceId: entry.serviceId, caddy: entry.caddy }))
 }
 
-function validProjects(value: unknown): Project[] | undefined {
+function validProjects(value: unknown): ProjectCanonical[] | undefined {
   if (!Array.isArray(value)) return undefined
-  const parsed = a.safeParse(a.array(projectSchema), value)
-  return parsed.success ? parsed.output : undefined
+
+  const projects: ProjectCanonical[] = []
+  for (const project of value) {
+    const migrated = projectMigrate(project)
+    if (!migrated.success) return undefined
+    projects.push(migrated.data)
+  }
+  return projects
 }
 
-export function caddyConfigSummary(projects: readonly Project[]): CaddyConfigSummaryEntry[] {
-  let parsed: Project[] | undefined
+export function caddyConfigSummary(projects: readonly ProjectCanonical[]): CaddyConfigSummaryEntry[] {
+  let parsed: ProjectCanonical[] | undefined
   try {
     parsed = validProjects(projects)
   } catch {
@@ -28,20 +36,23 @@ export function caddyConfigSummary(projects: readonly Project[]): CaddyConfigSum
   if (parsed === undefined) return []
 
   return parsed
-    .filter(activeProject)
+    .flatMap(projectRoutes)
+    .filter((route) => !route.caddy.disabled)
     .sort((left, right) => {
       const domainOrder = left.caddy.domains[0]!.localeCompare(right.caddy.domains[0]!)
       if (domainOrder !== 0) return domainOrder
-      const ownerOrder = stringCompare(left.owner, right.owner)
+      const ownerOrder = left.project.owner.localeCompare(right.project.owner)
       if (ownerOrder !== 0) return ownerOrder
-      return stringCompare(left.name, right.name)
+      const nameOrder = left.project.name.localeCompare(right.project.name)
+      if (nameOrder !== 0) return nameOrder
+      return (left.serviceId ?? "").localeCompare(right.serviceId ?? "")
     })
-    .map((project) => ({
-      owner: project.owner,
-      name: project.name,
-      port: project.caddy.port,
-      kind: project.caddy.kind,
-      access: project.caddy.access,
-      domains: [...project.caddy.domains],
+    .map((route) => ({
+      owner: route.project.owner,
+      name: route.project.name,
+      port: route.caddy.port,
+      kind: route.caddy.kind,
+      access: route.caddy.access,
+      domains: [...route.caddy.domains],
     }))
 }

@@ -3,19 +3,38 @@ import { createResult, createResultError, type Result } from "#result"
 import { projectAccessLogCaddyRetention } from "../access-log/projectAccessLogCaddyRetention.js"
 import { projectAccessLogId } from "../access-log/projectAccessLogId.js"
 import { projectAccessLogPath } from "../access-log/projectAccessLogPath.js"
-import type { Project } from "../project/Project.js"
-import { projectSchema } from "../project/projectSchema.js"
+import { projectCaddyEntries } from "../project/projectCaddyEntries.js"
+import type { ProjectCaddy } from "../project/projectCaddySchema.js"
+import type { ProjectCanonical } from "../project/projectCanonicalSchema.js"
+import { projectMigrate } from "../project/projectMigrate.js"
 import type { CaddyConfig } from "./CaddyConfig.js"
 import type { CaddyConfigOptions, OidcOptions } from "./caddyConfigOptionsSchema.js"
 import { caddyConfigOptionsSchema } from "./caddyConfigOptionsSchema.js"
 import { caddyDocsTemplate } from "./caddyDocsTemplate.js"
 
-function projectIsActive(project: Project): boolean {
-  return project.caddy !== undefined && project.caddy !== null && !project.caddy.disabled
+type CaddyProject = ProjectCanonical
+
+type CaddyProjectRoute = {
+  project: CaddyProject
+  serviceId?: string
+  caddy: ProjectCaddy
 }
 
-function projectDomain(project: Project): string {
-  return project.caddy?.domains[0] ?? project.name
+function projectsParse(projects: unknown): Result<CaddyProject[]> {
+  const op = "caddyConfigGenerate"
+  if (!Array.isArray(projects)) return createResultError(op, "invalid projects: expected an array")
+
+  const parsed: CaddyProject[] = []
+  for (const project of projects) {
+    const migrated = projectMigrate(project)
+    if (!migrated.success) return createResultError(op, `invalid projects: ${migrated.errorMessage}`)
+    parsed.push(migrated.data)
+  }
+  return createResult(parsed)
+}
+
+function projectRoutes(project: CaddyProject): CaddyProjectRoute[] {
+  return projectCaddyEntries(project).map((entry) => ({ project, serviceId: entry.serviceId, caddy: entry.caddy }))
 }
 
 function stringCompare(left: string, right: string): number {
@@ -23,15 +42,45 @@ function stringCompare(left: string, right: string): number {
   return left < right ? -1 : 1
 }
 
-function activeProjects(projects: readonly Project[]): Project[] {
-  return projects.filter(projectIsActive).sort((left, right) => {
-    const domainOrder = projectDomain(left).localeCompare(projectDomain(right))
-    if (domainOrder !== 0) return domainOrder
+function projectRouteIsActive(route: CaddyProjectRoute): boolean {
+  return !route.caddy.disabled
+}
 
-    const ownerOrder = stringCompare(left.owner, right.owner)
-    if (ownerOrder !== 0) return ownerOrder
-    return stringCompare(left.name, right.name)
-  })
+function projectRouteDomain(route: CaddyProjectRoute): string {
+  return route.caddy.domains[0] ?? route.project.name
+}
+
+function activeProjectRoutes(projects: readonly CaddyProject[]): CaddyProjectRoute[] {
+  return projects
+    .flatMap(projectRoutes)
+    .filter(projectRouteIsActive)
+    .sort((left, right) => {
+      const domainOrder = projectRouteDomain(left).localeCompare(projectRouteDomain(right))
+      if (domainOrder !== 0) return domainOrder
+
+      const ownerOrder = stringCompare(left.project.owner, right.project.owner)
+      if (ownerOrder !== 0) return ownerOrder
+      const nameOrder = stringCompare(left.project.name, right.project.name)
+      if (nameOrder !== 0) return nameOrder
+      return stringCompare(left.serviceId ?? "", right.serviceId ?? "")
+    })
+}
+
+function activeProjects(projects: readonly CaddyProject[]): CaddyProject[] {
+  return projects
+    .filter((project) => projectRoutes(project).some(projectRouteIsActive))
+    .sort((left, right) => {
+      const leftRoute = projectRoutes(left).find(projectRouteIsActive)
+      const rightRoute = projectRoutes(right).find(projectRouteIsActive)
+      const domainOrder = (leftRoute === undefined ? left.name : projectRouteDomain(leftRoute)).localeCompare(
+        rightRoute === undefined ? right.name : projectRouteDomain(rightRoute),
+      )
+      if (domainOrder !== 0) return domainOrder
+
+      const ownerOrder = stringCompare(left.owner, right.owner)
+      if (ownerOrder !== 0) return ownerOrder
+      return stringCompare(left.name, right.name)
+    })
 }
 
 function oidcNormalized(oidc: OidcOptions): Required<OidcOptions> {
@@ -122,10 +171,7 @@ function docsRoutes(docsRoot: string): Record<string, unknown>[] {
   ]
 }
 
-function proxyHandler(project: Project): Record<string, unknown> {
-  const caddy = project.caddy
-  if (caddy === undefined || caddy === null) return {}
-
+function proxyHandler(caddy: ProjectCaddy): Record<string, unknown> {
   const proxy: Record<string, unknown> = {
     handler: "reverse_proxy",
     upstreams: [{ dial: `localhost:${caddy.port}` }],
@@ -142,10 +188,7 @@ function proxyHandler(project: Project): Record<string, unknown> {
   return proxy
 }
 
-function staticHandles(project: Project): Record<string, unknown>[] {
-  const caddy = project.caddy
-  if (caddy === undefined || caddy === null) return []
-
+function staticHandles(caddy: ProjectCaddy): Record<string, unknown>[] {
   const handles: Record<string, unknown>[] = [{ handler: "vars", root: caddy.path }]
   if (caddy.spa === true) {
     handles.push({
@@ -162,11 +205,8 @@ function staticHandles(project: Project): Record<string, unknown>[] {
   return handles
 }
 
-function staticRoute(project: Project): Record<string, unknown> {
-  const caddy = project.caddy
-  if (caddy === undefined || caddy === null) return {}
-
-  const handles = staticHandles(project)
+function staticRoute(caddy: ProjectCaddy): Record<string, unknown> {
+  const handles = staticHandles(caddy)
   if (caddy.spa === true) {
     return {
       match: [
@@ -184,10 +224,8 @@ function staticRoute(project: Project): Record<string, unknown> {
   return { handle: handles }
 }
 
-function projectRoute(project: Project, options: CaddyConfigOptions): Record<string, unknown> {
-  const caddy = project.caddy
-  if (caddy === undefined || caddy === null) return {}
-
+function projectRoute(route: CaddyProjectRoute, options: CaddyConfigOptions): Record<string, unknown> {
+  const caddy = route.caddy
   const inner: Record<string, unknown>[] = []
   const routedValue = caddy.routed ?? (caddy.kind === "static" ? "static" : String(caddy.port))
   inner.push({
@@ -248,13 +286,13 @@ function projectRoute(project: Project, options: CaddyConfigOptions): Record<str
         handle: [
           {
             handler: "subroute",
-            routes: [{ handle: [oidcHandler(options.oidc.providerName), proxyHandler(project)] }],
+            routes: [{ handle: [oidcHandler(options.oidc.providerName), proxyHandler(caddy)] }],
           },
         ],
       })
-      inner.push({ handle: [proxyHandler(project)] })
+      inner.push({ handle: [proxyHandler(caddy)] })
     } else {
-      const staticProjectRoute = staticRoute(project)
+      const staticProjectRoute = staticRoute(caddy)
       inner.push({
         match: [{ path: [...oidcPaths] }],
         handle: [
@@ -275,9 +313,9 @@ function projectRoute(project: Project, options: CaddyConfigOptions): Record<str
       inner.push(staticProjectRoute)
     }
   } else if (caddy.kind === "static") {
-    inner.push(staticRoute(project))
+    inner.push(staticRoute(caddy))
   } else {
-    inner.push({ handle: [proxyHandler(project)] })
+    inner.push({ handle: [proxyHandler(caddy)] })
   }
 
   return {
@@ -297,7 +335,7 @@ function projectAccessLogEncoder(): Record<string, unknown> {
 }
 
 function projectAccessLogConfig(
-  projects: readonly Project[],
+  projects: readonly CaddyProject[],
   root: string,
 ): Result<{
   logging: { logs: Record<string, unknown> }
@@ -309,6 +347,9 @@ function projectAccessLogConfig(
   const exclusions: string[] = []
 
   for (const project of projects) {
+    const routes = projectRoutes(project).filter(projectRouteIsActive)
+    if (routes.length === 0) continue
+
     const id = projectAccessLogId(project)
     const pathR = projectAccessLogPath(root, project)
     if (!pathR.success) return createResultError(op, pathR.errorMessage)
@@ -330,7 +371,9 @@ function projectAccessLogConfig(
       include: [accessLogger],
     }
     exclusions.push(accessLogger)
-    for (const domain of project.caddy?.domains ?? []) loggerNames[domain] = [id]
+    for (const route of routes) {
+      for (const domain of route.caddy.domains) loggerNames[domain] = [id]
+    }
   }
 
   return createResult({
@@ -339,16 +382,14 @@ function projectAccessLogConfig(
   })
 }
 
-function projectDomainsValidate(projects: readonly Project[]): Result<void> {
+function projectDomainsValidate(routes: readonly CaddyProjectRoute[]): Result<void> {
   const op = "caddyConfigGenerate"
   const domains = new Set<string>()
 
-  for (const project of projects) {
-    const caddy = project.caddy
-    if (caddy === undefined || caddy === null) continue
-
+  for (const route of routes) {
+    const caddy = route.caddy
     if (caddy.kind === "static" && caddy.path === "") {
-      return createResultError(op, `static project requires path: ${project.name}`)
+      return createResultError(op, `static project requires path: ${route.project.name}`)
     }
 
     for (const domain of caddy.domains) {
@@ -363,13 +404,13 @@ function projectDomainsValidate(projects: readonly Project[]): Result<void> {
 export function caddyConfigGenerate(projects: unknown, options: unknown = {}): Result<CaddyConfig> {
   const op = "caddyConfigGenerate"
   try {
-    const projectsParsed = a.safeParse(a.array(projectSchema), projects)
-    if (!projectsParsed.success) return createResultError(op, `invalid projects: ${a.summarize(projectsParsed.issues)}`)
+    const projectsParsed = projectsParse(projects)
+    if (!projectsParsed.success) return projectsParsed
 
     const optionsParsed = a.safeParse(caddyConfigOptionsSchema, options)
     if (!optionsParsed.success) return createResultError(op, `invalid options: ${a.summarize(optionsParsed.issues)}`)
 
-    const active = activeProjects(projectsParsed.output)
+    const active = activeProjectRoutes(projectsParsed.data)
     const domainsResult = projectDomainsValidate(active)
     if (!domainsResult.success) return domainsResult
 
@@ -379,7 +420,7 @@ export function caddyConfigGenerate(projects: unknown, options: unknown = {}): R
           servers: {
             srv0: {
               listen: [optionsParsed.output.httpsListener],
-              routes: active.map((project) => projectRoute(project, optionsParsed.output)),
+              routes: active.map((route) => projectRoute(route, optionsParsed.output)),
             },
           },
         },
@@ -387,7 +428,10 @@ export function caddyConfigGenerate(projects: unknown, options: unknown = {}): R
     }
 
     if (optionsParsed.output.caddyAccessLogRoot !== undefined && active.length > 0) {
-      const accessLogR = projectAccessLogConfig(active, optionsParsed.output.caddyAccessLogRoot)
+      const accessLogR = projectAccessLogConfig(
+        activeProjects(projectsParsed.data),
+        optionsParsed.output.caddyAccessLogRoot,
+      )
       if (!accessLogR.success) return accessLogR
       config.apps.http.servers.srv0.logs = accessLogR.data.serverLogs
       config.logging = accessLogR.data.logging

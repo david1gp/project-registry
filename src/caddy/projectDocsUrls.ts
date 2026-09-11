@@ -1,6 +1,6 @@
-import * as a from "valibot"
 import { createResult, createResultErrorCode, type Result } from "#result"
-import { projectSchema } from "../project/projectSchema.js"
+import { projectCanonicalToLegacy } from "../project/projectCanonicalToLegacy.js"
+import { projectMigrate } from "../project/projectMigrate.js"
 
 const docsRelativePattern = /^(?:[A-Za-z0-9][A-Za-z0-9._-]*\/)*[A-Za-z0-9][A-Za-z0-9._-]*\.md$/
 
@@ -24,7 +24,9 @@ export function projectDocsUrls(project: unknown, relativePath: unknown, options
   const op = "projectDocsUrls"
   const parsed = (() => {
     try {
-      return a.safeParse(projectSchema, project)
+      const migrated = projectMigrate(project)
+      if (!migrated.success) return undefined
+      return projectCanonicalToLegacy(migrated.data)
     } catch {
       return undefined
     }
@@ -33,7 +35,7 @@ export function projectDocsUrls(project: unknown, relativePath: unknown, options
     return createResultErrorCode(op, "documentation configuration is invalid", "documentation.invalid-configuration")
   }
 
-  const projectValue = parsed.output
+  const projectValue = parsed.data
   const caddy = projectValue.caddy
   if (caddy === undefined || caddy === null) {
     return createResultErrorCode(op, "documentation configuration is invalid", "documentation.invalid-configuration")

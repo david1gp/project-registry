@@ -1,6 +1,7 @@
-import * as a from "valibot"
 import { createResult, createResultError, type Result } from "#result"
-import { projectSchema } from "../project/projectSchema.js"
+import { projectCaddyEntries } from "../project/projectCaddyEntries.js"
+import type { ProjectCanonical } from "../project/projectCanonicalSchema.js"
+import { projectMigrate } from "../project/projectMigrate.js"
 import type { CaddyConfig } from "./CaddyConfig.js"
 import type { CaddyConfigInspection } from "./CaddyConfigInspection.js"
 import { caddyConfigGenerate } from "./caddyConfigGenerate.js"
@@ -30,6 +31,22 @@ function configWithRoutes(config: CaddyConfig, routes: unknown[]): CaddyConfig {
   }
 }
 
+function projectsParse(value: unknown): ProjectCanonical[] | undefined {
+  if (!Array.isArray(value)) return undefined
+
+  const projects: ProjectCanonical[] = []
+  for (const project of value) {
+    const migrated = projectMigrate(project)
+    if (!migrated.success) return undefined
+    projects.push(migrated.data)
+  }
+  return projects
+}
+
+function activeProjectCount(projects: readonly ProjectCanonical[]): number {
+  return projects.filter((project) => projectCaddyEntries(project).some((entry) => !entry.caddy.disabled)).length
+}
+
 export function caddyConfigInspect(
   projects: unknown,
   options: unknown = {},
@@ -37,18 +54,18 @@ export function caddyConfigInspect(
 ): Result<CaddyConfigInspection> {
   const op = "caddyConfigInspect"
   try {
-    const parsed = a.safeParse(a.array(projectSchema), projects)
-    if (!parsed.success) return createResultError(op, "visible project snapshot is invalid")
+    const parsed = projectsParse(projects)
+    if (parsed === undefined) return createResultError(op, "visible project snapshot is invalid")
 
-    const generated = caddyConfigGenerate(parsed.output, options)
+    const generated = caddyConfigGenerate(parsed, options)
     if (!generated.success) return createResultError(op, "Caddy configuration could not be generated")
 
-    const summary = caddyConfigSummary(parsed.output)
+    const summary = caddyConfigSummary(parsed)
     let config = generated.data
     let routes = routesOf(config)
     if (selector !== undefined && selector !== "") {
       if (typeof selector !== "string") return createResultError(op, "configuration selector is invalid")
-      const selected = caddyConfigSelect(config, parsed.output, selector)
+      const selected = caddyConfigSelect(config, parsed, selector)
       if (!selected.success) return { ...selected, op }
       routes = selected.data
       config = configWithRoutes(config, routes)
@@ -58,7 +75,7 @@ export function caddyConfigInspect(
       config,
       summary,
       routes: [...routes],
-      projectCount: summary.length,
+      projectCount: activeProjectCount(parsed),
       routeCount: routes.length,
     })
   } catch {

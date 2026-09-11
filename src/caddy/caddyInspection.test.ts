@@ -146,6 +146,25 @@ describe("visibility-scoped Caddy inspection", () => {
     })
   })
 
+  test("keeps every canonical service route in visibility-scoped inspection", async () => {
+    const canonical = {
+      schemaVersion: 2,
+      owner: "alice",
+      name: "multi-service",
+      services: [
+        { id: "api", caddy: { port: 3015, domains: ["api.example"], docs: false } },
+        { id: "assets", caddy: { port: 3016, domains: ["assets.example"], docs: false } },
+      ],
+    }
+    const result = await inspection(actor("own"), { projectList: async () => createResult([canonical]) })
+
+    expect(result).toMatchObject({ success: true, data: { projectCount: 1, routeCount: 2 } })
+    if (!result.success) return
+    expect(result.data.config.apps.http.servers.srv0.routes).toHaveLength(2)
+    expect(JSON.stringify(result.data.config)).toContain("localhost:3015")
+    expect(JSON.stringify(result.data.config)).toContain("localhost:3016")
+  })
+
   test("requires an unambiguous visible project for legacy and canonical selectors", () => {
     const aliceShared = project("alice", "shared-name", 3011, "alice-shared.example")
     const bobShared = project("bob", "shared-name", 3012, "bob-shared.example")

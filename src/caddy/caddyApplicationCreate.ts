@@ -1,10 +1,10 @@
 import { types } from "node:util"
-import * as a from "valibot"
 import { createResult, createResultError, type PromiseResult, type Result } from "#result"
 import { projectAccessLogId } from "../access-log/projectAccessLogId.js"
 import { projectAccessLogRetentionMaximumActiveProjectIds } from "../access-log/projectAccessLogRetentionMaximumActiveProjectIds.js"
 import { projectAccessLogRetentionReconcile } from "../access-log/projectAccessLogRetentionReconcile.js"
-import { projectSchema } from "../project/projectSchema.js"
+import { projectCaddyEntries } from "../project/projectCaddyEntries.js"
+import { projectMigrate } from "../project/projectMigrate.js"
 import type { ProjectRepositorySnapshot } from "../project-store/ProjectRepositorySnapshot.js"
 import type { CaddyApplication } from "./CaddyApplication.js"
 import type { CaddyApplicationOptions } from "./CaddyApplicationOptions.js"
@@ -191,9 +191,13 @@ function caddyApplicationRepositorySnapshotNormalize(value: unknown): ProjectRep
 
     const serializedR = caddyConfigSerialize(data)
     if (!serializedR.success) return undefined
-    const projectsR = a.safeParse(a.array(projectSchema), projects)
-    if (!projectsR.success) return undefined
-    return { revision, projects: projectsR.output }
+    const canonicalProjects = []
+    for (const project of projects) {
+      const canonicalR = projectMigrate(project)
+      if (!canonicalR.success) return undefined
+      canonicalProjects.push(canonicalR.data)
+    }
+    return { revision, projects: canonicalProjects }
   } catch {
     return undefined
   }
@@ -647,7 +651,7 @@ export function caddyApplicationCreate(options: unknown): Result<CaddyApplicatio
         if (stillCurrent()) {
           try {
             const activeProjectIds = latestSuccessfulCaddyLoad.snapshot.projects
-              .filter((project) => project.caddy !== undefined && project.caddy !== null && !project.caddy.disabled)
+              .filter((project) => projectCaddyEntries(project).some((entry) => !entry.caddy.disabled))
               .map(projectAccessLogId)
             // An over-limit snapshot is not reconciled. Never truncate it: a partial active set could delete live logs.
             if (activeProjectIds.length <= projectAccessLogRetentionMaximumActiveProjectIds) {

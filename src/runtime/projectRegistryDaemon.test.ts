@@ -48,6 +48,7 @@ function repository(ready = true): ProjectRepository {
     create: async () => createResultError("test", "not implemented"),
     edit: async () => createResultError("test", "not implemented"),
     delete: async () => createResultError("test", "not implemented"),
+    migrate: async () => createResultError("test", "not implemented"),
     setUserDefaultDomain: async () => createResultError("test", "not implemented"),
     history: async () => createResult([]),
     ownerHistory: async () => createResult([]),

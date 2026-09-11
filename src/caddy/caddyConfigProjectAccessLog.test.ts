@@ -37,6 +37,33 @@ describe("Caddy project access logging", () => {
     }).toMatchSnapshot()
   })
 
+  test("maps every active canonical service domain to one project logger", () => {
+    const project = {
+      schemaVersion: 2,
+      owner: "leo",
+      name: "multi-service",
+      services: [
+        { id: "api", caddy: { port: 4100, domains: ["api.example"], docs: false } },
+        {
+          id: "assets",
+          caddy: { port: 4101, domains: ["assets.example"], kind: "static", path: "/srv/assets", docs: false },
+        },
+        { id: "disabled", caddy: { port: 4102, domains: ["disabled.example"], disabled: true, docs: false } },
+      ],
+    }
+    const config = accessLogConfig([project])
+    expect(config).toBeDefined()
+    if (config === undefined) return
+
+    const loggerId = projectAccessLogId(project)
+    expect(config.logging?.logs[loggerId]).toBeDefined()
+    expect(config.apps.http.servers.srv0.logs?.logger_names).toEqual({
+      "api.example": [loggerId],
+      "assets.example": [loggerId],
+    })
+    expect(config.apps.http.servers.srv0.logs?.logger_names["disabled.example"]).toBeUndefined()
+  })
+
   test("omits all access logging configuration when the root is unset", () => {
     const withoutRoot = caddyConfigGenerate([caddyConfigGenerateFixtures.proxy])
     const withEmptyOptions = caddyConfigGenerate([caddyConfigGenerateFixtures.proxy], {})

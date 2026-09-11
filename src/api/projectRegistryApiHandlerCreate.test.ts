@@ -16,6 +16,7 @@ import type {
 import type { CaddyApplication } from "../caddy/CaddyApplication.js"
 import type { Project } from "../project/Project.js"
 import type { ProjectKey } from "../project/projectKey.js"
+import { projectMigrate } from "../project/projectMigrate.js"
 import type { ProjectRepository } from "../project-store/ProjectRepository.js"
 import type { ProjectRepositoryMutation } from "../project-store/ProjectRepositoryMutation.js"
 import { projectRepositoryOpen } from "../project-store/projectRepositoryOpen.js"
@@ -125,6 +126,13 @@ function commit(sha: string, date: string, message: string): GitStoreCommitInfo 
   return { sha, date, author: "project-registry", message }
 }
 
+function stableSerialize(value: unknown): string {
+  return JSON.stringify(value, (_, nested) => {
+    if (!nested || typeof nested !== "object" || Array.isArray(nested)) return nested
+    return Object.fromEntries(Object.entries(nested).sort(([left], [right]) => left.localeCompare(right)))
+  })
+}
+
 function repositoryCreate(): RepositoryFake {
   const projects = projectsCreate()
   const histories: Record<string, GitStoreCommitInfo[]> = {
@@ -173,7 +181,12 @@ function repositoryCreate(): RepositoryFake {
       const index = repository.projects.findIndex((item) => item.owner === key.owner && item.name === key.name)
       if (index < 0) return createResultErrorCode("projectRepositoryEdit", "project not found", "projects.not-found")
       const value = project as Project
-      const changed = JSON.stringify(repository.projects[index]) !== JSON.stringify(value)
+      const existingCanonical = projectMigrate(repository.projects[index])
+      const valueCanonical = projectMigrate(value)
+      const changed =
+        !existingCanonical.success ||
+        !valueCanonical.success ||
+        stableSerialize(existingCanonical.data) !== stableSerialize(valueCanonical.data)
       if (changed) {
         repository.projects[index] = value
         repository.revision = nextRevision
@@ -190,6 +203,7 @@ function repositoryCreate(): RepositoryFake {
       repository.revision = nextRevision
       return createResult(mutation("delete", key, true, repository.revision))
     },
+    migrate: async () => createResultError("projectRepositoryMigration", "not implemented"),
     setUserDefaultDomain: async (owner, domain, options) => {
       repository.defaultDomainMutations.push({ owner, domain, options })
       if (options.expectedRevision !== repository.revision) {
@@ -494,7 +508,7 @@ describe("projectRegistryApiHandlerCreate", () => {
         owner: "leo",
         name: "new-app",
         labels: {},
-        caddy: expect.objectContaining({ port: 4101 }),
+        services: [expect.objectContaining({ id: "default", caddy: expect.objectContaining({ port: 4101 }) })],
       }),
     )
 
@@ -569,6 +583,68 @@ describe("projectRegistryApiHandlerCreate", () => {
     expect(notifications[1]).toMatchObject({ noDns: true, project: { name: "no-dns-app" } })
   })
 
+  test("round-trips canonical versioned services through create, edit, get, and list", async () => {
+    const repository = repositoryCreate()
+    const handler = projectRegistryApiHandlerCreate({ repository, caddyApplication: caddyApplicationCreate() })
+    const leo = { transport: "unix", username: "leo" } as const
+    const services = [
+      {
+        id: "api",
+        units: ["api.service"],
+        caddy: {
+          port: 4200,
+          domains: ["api.example"],
+          path: "",
+          access: "external",
+          kind: "proxy",
+          docs: true,
+          browse: false,
+          headerUp: {},
+          disabled: false,
+          denyDotfiles: false,
+          spa: false,
+        },
+      },
+      { id: "worker", units: ["worker.service"], caddy: null },
+    ]
+
+    const created = await requestJson(handler, "/api/v1/users/leo/projects", leo, "POST", {
+      expectedRevision: revision,
+      schemaVersion: 2,
+      name: "services-app",
+      description: "multi-service",
+      labels: { team: "platform" },
+      services,
+    })
+    expect(created.response.status).toBe(201)
+    expect(repository.projects).toContainEqual(expect.objectContaining({ schemaVersion: 2, services }))
+
+    const patched = await requestJson(handler, "/api/v1/users/leo/projects/services-app", leo, "PATCH", {
+      expectedRevision: nextRevision,
+      schemaVersion: 2,
+      description: "updated",
+    })
+    expect(patched.response.status).toBe(200)
+
+    const got = await requestJson(handler, "/api/v1/users/leo/projects/services-app", leo)
+    expect(got.body).toMatchObject({
+      success: true,
+      data: {
+        project: { schemaVersion: 2, description: "updated", services },
+      },
+    })
+
+    const listed = await requestJson(handler, "/api/v1/users/leo/projects", leo)
+    expect(listed.body).toMatchObject({
+      success: true,
+      data: {
+        projects: expect.arrayContaining([
+          expect.objectContaining({ name: "services-app", schemaVersion: 2, services }),
+        ]),
+      },
+    })
+  })
+
   test("generates a default project subdomain when the request omits domains", async () => {
     const repository = repositoryCreate()
     const handler = projectRegistryApiHandlerCreate({
@@ -591,7 +667,10 @@ describe("projectRegistryApiHandlerCreate", () => {
 
     expect(created.response.status).toBe(201)
     expect(repository.projects).toContainEqual(
-      expect.objectContaining({ name: "api", caddy: expect.objectContaining({ domains: ["api.leonardomora.de"] }) }),
+      expect.objectContaining({
+        name: "api",
+        services: [expect.objectContaining({ caddy: expect.objectContaining({ domains: ["api.leonardomora.de"] }) })],
+      }),
     )
   })
 
@@ -722,7 +801,11 @@ describe("projectRegistryApiHandlerCreate", () => {
     expect(repository.projects).toContainEqual(
       expect.objectContaining({
         name: "persisted-app",
-        caddy: expect.objectContaining({ domains: ["persisted-app.persisted.example"] }),
+        services: [
+          expect.objectContaining({
+            caddy: expect.objectContaining({ domains: ["persisted-app.persisted.example"] }),
+          }),
+        ],
       }),
     )
 
@@ -737,7 +820,7 @@ describe("projectRegistryApiHandlerCreate", () => {
     expect(repository.projects).toContainEqual(
       expect.objectContaining({
         name: "explicit-app",
-        caddy: expect.objectContaining({ domains: ["explicit.example"] }),
+        services: [expect.objectContaining({ caddy: expect.objectContaining({ domains: ["explicit.example"] }) })],
       }),
     )
     expect(repository.defaultDomainCalls.length).toBe(callsBeforeExplicit)
@@ -1000,6 +1083,32 @@ describe("projectRegistryApiHandlerCreate", () => {
     expect(repository.projects.some((project) => project.name === "by-port")).toBe(false)
     expect(repository.projects.some((project) => project.name === "opencode")).toBe(true)
     expect(application.projectChanges).toBe(1)
+  })
+
+  test("runs edit and delete lifecycle callbacks only after repository persistence", async () => {
+    const repository = repositoryCreate()
+    const events: string[] = []
+    const handler = projectRegistryApiHandlerCreate({
+      repository,
+      caddyApplication: caddyApplicationCreate(),
+      projectEditAfterPersistence: (_previous, project) => {
+        events.push(repository.projects.includes(project) ? `edit:${project.name}` : "edit-before-persistence")
+      },
+      projectDeleteAfterPersistence: (project) => {
+        events.push(
+          repository.projects.some((entry) => entry.name === project.name)
+            ? "delete-before-persistence"
+            : `delete:${project.name}`,
+        )
+      },
+    })
+    const leo = { transport: "unix", username: "leo" } as const
+
+    const edited = await requestJson(handler, "/projects/opencode", leo, "PATCH", { domains: ["edited.example"] })
+    expect(edited.response.status).toBe(200)
+    const deleted = await requestJson(handler, "/projects/by-port/4096", leo, "DELETE")
+    expect(deleted.response.status).toBe(200)
+    expect(events).toEqual(["edit:opencode", "delete:opencode"])
   })
 
   test("serves the legacy docs CLI request with normalized paths and socket-owner domains", async () => {

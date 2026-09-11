@@ -10,6 +10,7 @@ import type { CaddyConfigOptions } from "../caddy/caddyConfigOptionsSchema.js"
 import { projectDocsUrlsUseCase } from "../caddy/projectDocsUrlsUseCase.js"
 import type { Project } from "../project/Project.js"
 import type { ProjectMutationOptions } from "../project/ProjectMutationOptions.js"
+import { projectCanonicalToLegacy } from "../project/projectCanonicalToLegacy.js"
 import { projectCreate } from "../project/projectCreate.js"
 import { projectDelete } from "../project/projectDelete.js"
 import { projectDomainValidate } from "../project/projectDomainValidate.js"
@@ -517,7 +518,9 @@ function historyLimitParse(url: URL): number | undefined | null {
 }
 
 function legacyProjectMap(project: Project): Record<string, unknown> {
-  const caddy = project.caddy
+  const legacyR = projectCanonicalToLegacy(project)
+  const legacy = legacyR.success ? legacyR.data : project
+  const caddy = legacy.caddy
   return {
     name: project.name,
     user: project.owner,
@@ -907,7 +910,10 @@ export function projectRegistryApiHandlerCreate(options: ApiHandlerOptions): Pro
     if (route.kind === "project-by-port") {
       const projectsR = await projectListUseCase(useCaseOptions, { owner })
       if (!projectsR.success) return resultErrorResponse(projectsR, true, "projects")
-      const project = projectsR.data.projects.find((entry) => entry.caddy?.port === route.port)
+      const project = projectsR.data.projects.find((entry) => {
+        const legacyR = projectCanonicalToLegacy(entry)
+        return legacyR.success && legacyR.data.caddy?.port === route.port
+      })
       if (project === undefined) {
         return errorResponse(
           {

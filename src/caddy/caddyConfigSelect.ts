@@ -1,14 +1,22 @@
-import * as a from "valibot"
 import { createResult, createResultError, createResultErrorCode, type Result } from "#result"
 import type { Project } from "../project/Project.js"
+import { projectCaddyEntries } from "../project/projectCaddyEntries.js"
+import type { ProjectCaddy } from "../project/projectCaddySchema.js"
+import type { ProjectCanonical } from "../project/projectCanonicalSchema.js"
 import { projectKey } from "../project/projectKey.js"
-import { projectSchema } from "../project/projectSchema.js"
+import { projectMigrate } from "../project/projectMigrate.js"
 import type { CaddyConfig } from "./CaddyConfig.js"
 
 type RouteRecord = Record<string, unknown>
 
-function activeProject(project: Project): project is Project & { caddy: NonNullable<Project["caddy"]> } {
-  return project.caddy !== undefined && project.caddy !== null && !project.caddy.disabled
+type CaddyProjectRoute = {
+  project: ProjectCanonical
+  serviceId?: string
+  caddy: ProjectCaddy
+}
+
+function projectRoutes(project: ProjectCanonical): CaddyProjectRoute[] {
+  return projectCaddyEntries(project).map((entry) => ({ project, serviceId: entry.serviceId, caddy: entry.caddy }))
 }
 
 function stringCompare(left: string, right: string): number {
@@ -16,21 +24,39 @@ function stringCompare(left: string, right: string): number {
   return left < right ? -1 : 1
 }
 
-function projectCompare(
-  left: Project & { caddy: NonNullable<Project["caddy"]> },
-  right: Project & { caddy: NonNullable<Project["caddy"]> },
-): number {
-  const domainOrder = left.caddy.domains[0]!.localeCompare(right.caddy.domains[0]!)
-  if (domainOrder !== 0) return domainOrder
-  const ownerOrder = stringCompare(left.owner, right.owner)
-  if (ownerOrder !== 0) return ownerOrder
-  return stringCompare(left.name, right.name)
+function projectsParse(value: unknown): ProjectCanonical[] | undefined {
+  if (!Array.isArray(value)) return undefined
+
+  const projects: ProjectCanonical[] = []
+  for (const project of value) {
+    const migrated = projectMigrate(project)
+    if (!migrated.success) return undefined
+    projects.push(migrated.data)
+  }
+  return projects
 }
 
-function projectsParse(value: unknown): Project[] | undefined {
-  if (!Array.isArray(value)) return undefined
-  const parsed = a.safeParse(a.array(projectSchema), value)
-  return parsed.success ? parsed.output : undefined
+function activeRoutes(projects: readonly ProjectCanonical[]): CaddyProjectRoute[] {
+  return projects
+    .flatMap(projectRoutes)
+    .filter((route) => !route.caddy.disabled)
+    .sort((left, right) => {
+      const domainOrder = left.caddy.domains[0]!.localeCompare(right.caddy.domains[0]!)
+      if (domainOrder !== 0) return domainOrder
+      const ownerOrder = stringCompare(left.project.owner, right.project.owner)
+      if (ownerOrder !== 0) return ownerOrder
+      const nameOrder = stringCompare(left.project.name, right.project.name)
+      if (nameOrder !== 0) return nameOrder
+      return stringCompare(left.serviceId ?? "", right.serviceId ?? "")
+    })
+}
+
+function uniqueProjects(routes: readonly CaddyProjectRoute[]): ProjectCanonical[] {
+  const projects: ProjectCanonical[] = []
+  for (const route of routes) {
+    if (!projects.includes(route.project)) projects.push(route.project)
+  }
+  return projects
 }
 
 function recordValue(value: unknown): RouteRecord | undefined {
@@ -104,10 +130,8 @@ export function caddyConfigSelect(
     const routes = routesParse(config)
     if (routes === undefined) return createResultError(op, "Caddy configuration is invalid")
 
-    const active = parsedProjects.filter(activeProject).sort(projectCompare)
-    const visibleDomains = new Set(
-      active.flatMap((project) => project.caddy.domains.map((domain) => domain.toLowerCase())),
-    )
+    const active = activeRoutes(parsedProjects)
+    const visibleDomains = new Set(active.flatMap((route) => route.caddy.domains.map((domain) => domain.toLowerCase())))
     const scopedRoutes = routes.filter((route) => {
       const hosts = routeHosts(route)
       return hosts.length > 0 && hosts.every((host) => visibleDomains.has(host.toLowerCase()))
@@ -117,29 +141,35 @@ export function caddyConfigSelect(
     const parsedSelector = selectorKey(selector)
     if (parsedSelector?.kind === "invalid-canonical") return error()
 
-    const keyMatches =
-      parsedSelector?.kind === "canonical" || parsedSelector?.kind === "legacy"
-        ? active.filter((project) => project.owner === parsedSelector.owner && project.name === parsedSelector.name)
-        : []
-    const matches =
-      keyMatches.length > 0
-        ? keyMatches
-        : parsedSelector?.kind === "canonical"
-          ? []
-          : (() => {
-              const port = /^\d+$/.test(selector) ? Number(selector) : undefined
-              return active.filter(
-                (project) =>
-                  project.name.toLowerCase() === selectorLower ||
-                  (port !== undefined && project.caddy.port === port) ||
-                  project.caddy.domains.some((domain) => domain.toLowerCase() === selectorLower),
-              )
-            })()
+    let matchedRoutes: CaddyProjectRoute[]
+    if (parsedSelector?.kind === "canonical" || parsedSelector?.kind === "legacy") {
+      const matches = active.filter(
+        (route) => route.project.owner === parsedSelector.owner && route.project.name === parsedSelector.name,
+      )
+      const matchedProjects = uniqueProjects(matches)
+      if (matchedProjects.length !== 1) return error()
+      matchedRoutes = active.filter((route) => route.project === matchedProjects[0])
+    } else {
+      const nameMatches = uniqueProjects(active.filter((route) => route.project.name.toLowerCase() === selectorLower))
+      const port = /^\d+$/.test(selector) ? Number(selector) : undefined
+      const routeMatches = active.filter(
+        (route) =>
+          (port !== undefined && route.caddy.port === port) ||
+          route.caddy.domains.some((domain) => domain.toLowerCase() === selectorLower),
+      )
+      const matchedProjects = uniqueProjects([
+        ...nameMatches.flatMap((project) => projectRoutes(project)),
+        ...routeMatches,
+      ])
+      if (matchedProjects.length !== 1) return error()
+      matchedRoutes =
+        nameMatches.length > 0 ? active.filter((route) => route.project === matchedProjects[0]) : routeMatches
+    }
 
-    if (matches.length !== 1) return error()
-    const domains = [...matches[0]!.caddy.domains]
-
-    const domainSet = new Set(domains.map((domain) => domain.toLowerCase()))
+    if (matchedRoutes.length === 0) return error()
+    const domainSet = new Set(
+      matchedRoutes.flatMap((route) => route.caddy.domains.map((domain) => domain.toLowerCase())),
+    )
     const matched = scopedRoutes.filter((route) => {
       const hosts = routeHosts(route)
       return hosts.some((host) => domainSet.has(host.toLowerCase()))

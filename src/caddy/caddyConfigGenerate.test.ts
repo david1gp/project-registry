@@ -37,6 +37,60 @@ describe("caddyConfigGenerate", () => {
     expect(routesOf(result.data).map(hostOf)).toEqual([["demos.example"], ["opencode.example", "oc.example"]])
   })
 
+  test("generates one independent route per canonical service", () => {
+    const project = {
+      schemaVersion: 2,
+      owner: "leo",
+      name: "multi-service",
+      services: [
+        {
+          id: "api",
+          units: ["multi-api.service"],
+          caddy: { port: 4100, domains: ["api.example"], kind: "proxy", docs: false },
+        },
+        {
+          id: "assets",
+          units: ["multi-assets.service"],
+          caddy: { port: 4101, domains: ["assets.example"], kind: "static", path: "/srv/assets", docs: false },
+        },
+      ],
+    }
+    const result = caddyConfigGenerate([project])
+
+    expect(result.success).toBe(true)
+    if (!result.success) return
+
+    const routes = routesOf(result.data)
+    expect(routes.map(hostOf)).toEqual([["api.example"], ["assets.example"]])
+
+    const proxy = innerRoutesOf(routes[0]!).at(-1)!.handle as Array<Record<string, unknown>>
+    expect(proxy[0]!.handler).toBe("reverse_proxy")
+    expect(proxy[0]!.upstreams).toEqual([{ dial: "localhost:4100" }])
+
+    expect(innerRoutesOf(routes[1]!).at(-1)!.handle).toEqual([
+      { handler: "vars", root: "/srv/assets" },
+      { handler: "file_server" },
+    ])
+  })
+
+  test("rejects active domain collisions between canonical sibling services", () => {
+    const result = caddyConfigGenerate([
+      {
+        schemaVersion: 2,
+        owner: "leo",
+        name: "multi-service",
+        services: [
+          { id: "api", caddy: { port: 4100, domains: ["shared.example"], docs: false } },
+          { id: "worker", caddy: { port: 4101, domains: ["shared.example"], docs: false } },
+        ],
+      },
+    ])
+
+    expect(result.success).toBe(false)
+    if (result.success) return
+    expect(result.errorMessage).toContain("duplicate domain: shared.example")
+  })
+
   test("uses a validated custom HTTPS listener", () => {
     const result = caddyConfigGenerate([caddyConfigGenerateFixtures.proxy], { httpsListener: ":8443" })
 

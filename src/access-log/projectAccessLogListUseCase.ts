@@ -1,5 +1,6 @@
 import { createResult, createResultError, type PromiseResult, type Result, type ResultErr } from "#result"
 import type { ProjectAccess } from "../access/ProjectAccess.js"
+import { projectCanonicalToLegacy } from "../project/projectCanonicalToLegacy.js"
 import { projectGetUseCase } from "../project/projectGetUseCase.js"
 import type { ProjectKey } from "../project/projectKey.js"
 import type { ProjectRepository } from "../project-store/ProjectRepository.js"
@@ -103,7 +104,9 @@ export async function projectAccessLogListUseCase(
   const projectR = await projectGetUseCase(options, key)
   if (!projectR.success) return listError(projectFailureCode(projectR.code), "Project access logs are unavailable.")
 
-  const caddy = projectR.data.project.caddy
+  const legacyR = projectCanonicalToLegacy(projectR.data.project)
+  if (!legacyR.success) return listError("access-log.unavailable", "Project access logging is unavailable.")
+  const caddy = legacyR.data.caddy
   if (caddy === undefined || caddy === null || caddy.disabled) {
     return listError("access-log.unavailable", "Project access logging is unavailable.")
   }

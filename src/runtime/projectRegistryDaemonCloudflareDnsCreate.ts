@@ -5,6 +5,7 @@ import type { CloudflareDnsTrackedRecord } from "../cloudflare/CloudflareDnsTrac
 import { cloudflareDnsDeleteById } from "../cloudflare/cloudflareDnsDeleteById.js"
 import { cloudflareDnsReconcile } from "../cloudflare/cloudflareDnsReconcile.js"
 import type { Project } from "../project/Project.js"
+import { projectCaddyEntries } from "../project/projectCaddyEntries.js"
 import { projectDomainNormalize } from "../project/projectDomainNormalize.js"
 import type { ProjectKey } from "../project/projectKey.js"
 import type { ProjectRegistryDaemonCloudflareDnsTracking } from "./ProjectRegistryDaemonCloudflareDnsTracking.js"
@@ -18,13 +19,13 @@ type ProjectCreateOptions = {
   noDns: boolean
 }
 
-type ProjectSnapshot = readonly Project[] | undefined
-
 type RetryState = {
   attempts: number
   nextAt: number
   sequence: number
 }
+
+type ProjectSnapshot = readonly Project[] | undefined
 
 type QueueOutcome = "done" | "deferred" | "failed"
 
@@ -40,12 +41,18 @@ function projectKeyEqual(left: ProjectKey, right: ProjectKey): boolean {
   return left.owner === right.owner && left.name === right.name
 }
 
+function recordDomainEqual(record: CloudflareDnsTrackedRecord, hostname: string): boolean {
+  return projectDomainNormalize(record.name) === hostname
+}
+
 function hostnames(project: Project): string[] {
-  if (project.caddy === undefined || project.caddy === null || project.caddy.disabled) return []
   const values = new Set<string>()
-  for (const domain of project.caddy.domains) {
-    const normalized = projectDomainNormalize(domain)
-    if (normalized !== "") values.add(normalized)
+  for (const entry of projectCaddyEntries(project)) {
+    if (entry.caddy.disabled) continue
+    for (const domain of entry.caddy.domains) {
+      const normalized = projectDomainNormalize(domain)
+      if (normalized !== "") values.add(normalized)
+    }
   }
   return [...values]
 }
@@ -70,18 +77,6 @@ function projectKeysEqual(left: readonly ProjectKey[], right: readonly ProjectKe
   return left.every((key, index) => projectKeyEqual(key, right[index]!))
 }
 
-function uniqueProjectKeys(projectKeys: readonly ProjectKey[]): ProjectKey[] {
-  const seen = new Set<string>()
-  const unique: ProjectKey[] = []
-  for (const projectKey of projectKeys) {
-    const value = projectKeyValue(projectKey)
-    if (seen.has(value)) continue
-    seen.add(value)
-    unique.push({ ...projectKey })
-  }
-  return unique
-}
-
 function retryDelay(attempts: number): number {
   return Math.min(retryMaximumMs, retryBaseMs * 2 ** Math.min(attempts, 6))
 }
@@ -97,7 +92,7 @@ function stateCopy(
     version: state.version,
     records: state.records.map((record) => ({
       ...record,
-      projectKeys: record.projectKeys.map((projectKey) => ({ ...projectKey })),
+      projectKeys: record.projectKeys.map((project) => ({ ...project })),
     })),
   }
 }
@@ -115,7 +110,7 @@ function trackedRecordCreate(
     content: result.record.content,
     ttl: result.record.ttl,
     proxied: result.record.proxied,
-    projectKeys: uniqueProjectKeys(projectKeys),
+    projectKeys: projectKeys.map((project) => ({ ...project })),
   }
 }
 
@@ -141,9 +136,8 @@ export function projectRegistryDaemonCloudflareDnsCreate(options: {
   projectDeleteAfterPersistence(project: Project): void
 }> {
   const op = "projectRegistryDaemonCloudflareDnsCreate"
-  if (typeof options !== "object" || options === null) {
+  if (typeof options !== "object" || options === null)
     return createResultError(op, "Cloudflare DNS options are required")
-  }
   if (typeof options.enabled !== "boolean") return createResultError(op, "Cloudflare DNS enabled flag is invalid")
   if (options.token !== undefined && (typeof options.token !== "string" || options.token.trim() !== options.token)) {
     return createResultError(op, "Cloudflare API token is invalid")
@@ -163,7 +157,7 @@ export function projectRegistryDaemonCloudflareDnsCreate(options: {
   }
 
   const active = options.enabled && options.token !== undefined && options.token.length > 0
-  const pending = new Map<string, RetryState>()
+  const pendingProjects = new Map<string, RetryState>()
   const desiredProjects = new Map<string, Project>()
   const pendingDeletions = new Map<string, RetryState>()
   const controller = new AbortController()
@@ -175,6 +169,7 @@ export function projectRegistryDaemonCloudflareDnsCreate(options: {
   let stopped = false
   let intervalHandle: unknown
   let drainPromise: Promise<void> | undefined
+  let forceDrain = false
   let startupPromise: Promise<void> | undefined
   let startupRetry: RetryState | undefined
   let nextSequence = 0
@@ -184,17 +179,21 @@ export function projectRegistryDaemonCloudflareDnsCreate(options: {
     try {
       logger(message)
     } catch {
-      // Background logging must not affect project mutations or queue shutdown.
+      // Logging must not affect project mutations or queue shutdown.
     }
   }
 
-  function retryFor(map: Map<string, RetryState>, key: string): RetryState {
-    return map.get(key) ?? { attempts: 0, nextAt: 0, sequence: nextSequence++ }
+  function projectStateRetry(key: string): RetryState {
+    return pendingProjects.get(key) ?? { attempts: 0, nextAt: 0, sequence: nextSequence++ }
+  }
+
+  function deletionStateRetry(key: string): RetryState {
+    return pendingDeletions.get(key) ?? { attempts: 0, nextAt: 0, sequence: nextSequence++ }
   }
 
   function retryProject(key: string, retry: RetryState, deferred: boolean): void {
     const attempts = deferred ? retry.attempts : retry.attempts + 1
-    pending.set(key, {
+    pendingProjects.set(key, {
       attempts,
       nextAt: clock() + (deferred ? retryBaseMs : retryDelay(attempts)),
       sequence: retry.sequence,
@@ -202,16 +201,25 @@ export function projectRegistryDaemonCloudflareDnsCreate(options: {
   }
 
   function retryDeletion(key: string): void {
-    const retry = retryFor(pendingDeletions, key)
+    const retry = deletionStateRetry(key)
     const attempts = retry.attempts + 1
     pendingDeletions.set(key, { attempts, nextAt: clock() + retryDelay(attempts), sequence: retry.sequence })
   }
 
-  function due(retry: RetryState): boolean {
+  function pendingDue(retry: RetryState): boolean {
     return retry.nextAt <= clock()
   }
 
-  async function projectsCurrent(): Promise<Result<ProjectSnapshot>> {
+  function startupRetrySchedule(): void {
+    const attempts = (startupRetry?.attempts ?? 0) + 1
+    startupRetry = {
+      attempts,
+      nextAt: clock() + retryDelay(attempts),
+      sequence: startupRetry?.sequence ?? nextSequence++,
+    }
+  }
+
+  async function currentProjects(): Promise<Result<ProjectSnapshot>> {
     if (options.repositoryProjectsCurrent === undefined) return createResult(undefined)
     try {
       const result = await options.repositoryProjectsCurrent()
@@ -226,7 +234,7 @@ export function projectRegistryDaemonCloudflareDnsCreate(options: {
     }
   }
 
-  async function trackingWrite(next: ProjectRegistryDaemonCloudflareDnsTrackingState): Promise<boolean> {
+  async function trackingStateWrite(next: ProjectRegistryDaemonCloudflareDnsTrackingState): Promise<boolean> {
     if (options.tracking === undefined) {
       state = next
       return true
@@ -247,7 +255,7 @@ export function projectRegistryDaemonCloudflareDnsCreate(options: {
     }
   }
 
-  async function trackingInitialize(): Promise<void> {
+  async function trackingStateInitialize(): Promise<void> {
     if (options.tracking === undefined) return
     let readR: Awaited<ReturnType<ProjectRegistryDaemonCloudflareDnsTracking["read"]>>
     try {
@@ -265,123 +273,160 @@ export function projectRegistryDaemonCloudflareDnsCreate(options: {
     state = readR.data
     if (stopped) return
 
-    const projectsR = await projectsCurrent()
+    const projectsR = await currentProjects()
     if (!projectsR.success || stopped) {
-      startupRetry = { attempts: 1, nextAt: clock() + retryDelay(1), sequence: nextSequence++ }
+      if (!stopped) startupRetrySchedule()
       return
     }
-    if (projectsR.data !== undefined) {
-      const next = stateCopy(state)
-      let changed = false
-      for (const record of next.records) {
-        const owners = projectKeysForHostname(projectsR.data, projectDomainNormalize(record.name))
-        if (projectKeysEqual(record.projectKeys, owners)) continue
-        record.projectKeys = owners
-        changed = true
+    const projects = projectsR.data
+    if (projects === undefined) {
+      for (const record of state.records) {
+        if (record.projectKeys.length === 0) {
+          pendingDeletions.set(recordKeyValue(record), deletionStateRetry(recordKeyValue(record)))
+        }
       }
-      if (changed && !(await trackingWrite(next))) {
-        startupRetry = { attempts: 1, nextAt: clock() + retryDelay(1), sequence: nextSequence++ }
-        return
-      }
+      return
+    }
+
+    const next = stateCopy(state)
+    let changed = false
+    for (const record of next.records) {
+      const projectKeys = projectKeysForHostname(projects, projectDomainNormalize(record.name))
+      if (projectKeysEqual(record.projectKeys, projectKeys)) continue
+      record.projectKeys = projectKeys
+      changed = true
+    }
+    if (changed && !(await trackingStateWrite(next))) {
+      startupRetrySchedule()
+      return
     }
     startupRetry = undefined
     for (const record of state.records) {
       if (record.projectKeys.length === 0) {
-        const key = recordKeyValue(record)
-        pendingDeletions.set(key, retryFor(pendingDeletions, key))
+        pendingDeletions.set(recordKeyValue(record), deletionStateRetry(recordKeyValue(record)))
       }
     }
   }
 
-  async function trackingOwnersSet(
+  function trackingRecordFind(hostname: string, project?: ProjectKey): CloudflareDnsTrackedRecord | undefined {
+    return state.records.find(
+      (record) =>
+        recordDomainEqual(record, hostname) &&
+        (project === undefined || record.projectKeys.some((key) => projectKeyEqual(key, project))),
+    )
+  }
+
+  async function trackingRecordOwnersSet(
     record: CloudflareDnsTrackedRecord,
     projectKeys: readonly ProjectKey[],
   ): Promise<boolean> {
-    const owners = uniqueProjectKeys(projectKeys)
-    if (projectKeysEqual(record.projectKeys, owners)) return true
+    if (projectKeysEqual(record.projectKeys, projectKeys)) return true
     const next = stateCopy(state)
     const current = next.records.find((entry) => recordKeyValue(entry) === recordKeyValue(record))
     if (current === undefined) return true
-    current.projectKeys = owners
-    return trackingWrite(next)
+    current.projectKeys = projectKeys.map((project) => ({ ...project }))
+    return trackingStateWrite(next)
   }
 
-  async function deleteTracked(recordKey: string): Promise<QueueOutcome> {
-    const record = state.records.find((entry) => recordKeyValue(entry) === recordKey)
-    if (record === undefined || record.projectKeys.length > 0) {
-      pendingDeletions.delete(recordKey)
+  function currentOwners(
+    record: CloudflareDnsTrackedRecord,
+    project: ProjectKey,
+    projects: ProjectSnapshot,
+  ): ProjectKey[] {
+    if (projects !== undefined) {
+      return projectKeysForHostname(projects, projectDomainNormalize(record.name)).filter(
+        (key) => !projectKeyEqual(key, project),
+      )
+    }
+    return record.projectKeys.filter((key) => !projectKeyEqual(key, project))
+  }
+
+  async function deletionRun(record: CloudflareDnsTrackedRecord): Promise<QueueOutcome> {
+    if (stopped || record.projectKeys.length > 0) return "done"
+    if (!active) {
+      pendingDeletions.delete(recordKeyValue(record))
       return "done"
     }
-    if (!active || stopped) {
-      pendingDeletions.delete(recordKey)
-      return "done"
-    }
-    let result: Awaited<ReturnType<typeof cloudflareDnsDeleteById>>
     try {
-      result = await cloudflareDnsDeleteById({
+      const result = await cloudflareDnsDeleteById({
         token: options.token!,
         record,
         timeoutMs: options.timeoutMs,
         signal: controller.signal,
         ...(options.fetch === undefined ? {} : { fetch: options.fetch }),
       })
+      if (!result.success) {
+        log(`cloudflare DNS deletion outcome=failure recordId=${record.id} reason=${result.errorMessage}`)
+        retryDeletion(recordKeyValue(record))
+        return "failed"
+      }
+      if (stopped) return "done"
+      const next = stateCopy(state)
+      next.records = next.records.filter((entry) => recordKeyValue(entry) !== recordKeyValue(record))
+      if (!(await trackingStateWrite(next))) {
+        retryDeletion(recordKeyValue(record))
+        return "failed"
+      }
+      pendingDeletions.delete(recordKeyValue(record))
+      return "done"
     } catch {
       log(`cloudflare DNS deletion outcome=failure recordId=${record.id} reason=unexpected-error`)
-      retryDeletion(recordKey)
+      retryDeletion(recordKeyValue(record))
       return "failed"
     }
-    if (!result.success) {
-      log(`cloudflare DNS deletion outcome=failure recordId=${record.id} reason=${result.errorMessage}`)
-      retryDeletion(recordKey)
-      return "failed"
-    }
-    if (stopped) return "done"
-    const next = stateCopy(state)
-    next.records = next.records.filter((entry) => recordKeyValue(entry) !== recordKey)
-    if (!(await trackingWrite(next))) {
-      retryDeletion(recordKey)
-      return "failed"
-    }
-    pendingDeletions.delete(recordKey)
-    return "done"
   }
 
-  async function projectRun(keyValue: string, sequence: number): Promise<QueueOutcome> {
-    const project = desiredProjects.get(keyValue)
-    const projectsR = await projectsCurrent()
-    if (!projectsR.success && options.repositoryProjectsCurrent !== undefined) return "failed"
-    const projects = projectsR.success ? projectsR.data : undefined
-    const projectKey: ProjectKey = {
-      owner: keyValue.split("\u0000")[0] ?? "",
-      name: keyValue.split("\u0000")[1] ?? "",
+  async function trackedRecordDeletionRun(recordKey: string): Promise<QueueOutcome> {
+    const record = state.records.find((entry) => recordKeyValue(entry) === recordKey)
+    if (record === undefined) {
+      pendingDeletions.delete(recordKey)
+      return "done"
     }
+    if (record.projectKeys.length > 0) {
+      pendingDeletions.delete(recordKey)
+      return "done"
+    }
+    return deletionRun(record)
+  }
 
-    if (options.tracking !== undefined) {
-      const ownedRecords = state.records.filter((record) =>
-        record.projectKeys.some((owner) => projectKeyEqual(owner, projectKey)),
-      )
-      const currentHostnames = project === undefined ? new Set<string>() : new Set(hostnames(project))
-      for (const record of ownedRecords) {
-        const hostname = projectDomainNormalize(record.name)
-        if (currentHostnames.has(hostname)) continue
-        const owners =
-          projects === undefined
-            ? record.projectKeys.filter((owner) => !projectKeyEqual(owner, projectKey))
-            : projectKeysForHostname(projects, hostname).filter((owner) => !projectKeyEqual(owner, projectKey))
-        if (!(await trackingOwnersSet(record, owners))) return "failed"
-        const current = state.records.find((entry) => recordKeyValue(entry) === recordKeyValue(record))
-        if (current !== undefined && current.projectKeys.length === 0) {
-          const recordKey = recordKeyValue(current)
-          pendingDeletions.set(recordKey, retryFor(pendingDeletions, recordKey))
-        }
+  async function projectOwnershipReconcile(project: Project, projects: ProjectSnapshot): Promise<QueueOutcome> {
+    const key = { owner: project.owner, name: project.name }
+    const currentDomains = new Set(hostnames(project))
+    const recordsToRemove = state.records.filter(
+      (record) =>
+        record.projectKeys.some((projectKey) => projectKeyEqual(projectKey, key)) &&
+        !currentDomains.has(projectDomainNormalize(record.name)),
+    )
+    for (const record of recordsToRemove) {
+      if (stopped) return "done"
+      const owners = currentOwners(record, key, projects)
+      if (!(await trackingRecordOwnersSet(record, owners))) return "failed"
+      const current = state.records.find((entry) => recordKeyValue(entry) === recordKeyValue(record))
+      if (current === undefined || current.projectKeys.length > 0) continue
+      pendingDeletions.set(recordKeyValue(current), deletionStateRetry(recordKeyValue(current)))
+      if (pendingDue(pendingDeletions.get(recordKeyValue(current))!)) {
+        await trackedRecordDeletionRun(recordKeyValue(current))
       }
     }
 
-    if (project === undefined) {
-      if (pending.get(keyValue)?.sequence === sequence) pending.delete(keyValue)
-      return "done"
+    for (const hostname of currentDomains) {
+      const record = trackingRecordFind(hostname)
+      if (record === undefined) continue
+      const snapshotOwners = projects === undefined ? [] : projectKeysForHostname(projects, hostname)
+      const owners =
+        projects === undefined
+          ? [...record.projectKeys, ...(record.projectKeys.some((entry) => projectKeyEqual(entry, key)) ? [] : [key])]
+          : [...snapshotOwners, ...(snapshotOwners.some((entry) => projectKeyEqual(entry, key)) ? [] : [key])]
+      const uniqueOwners = owners.filter(
+        (entry, index) => owners.findIndex((candidate) => projectKeyEqual(candidate, entry)) === index,
+      )
+      if (!(await trackingRecordOwnersSet(record, uniqueOwners))) return "failed"
+      pendingDeletions.delete(recordKeyValue(record))
     }
+    return "done"
+  }
 
+  async function projectRemoteReconcile(project: Project, projects: ProjectSnapshot): Promise<QueueOutcome> {
     const address = options.serverIpCurrent()
     if (address === undefined || address === "") return "deferred"
     for (const hostname of hostnames(project)) {
@@ -408,19 +453,65 @@ export function projectRegistryDaemonCloudflareDnsCreate(options: {
       const existing = state.records.find(
         (record) => record.zoneId === reconcileR.data.zone.id && record.id === reconcileR.data.record.id,
       )
-      const owners =
+      const projectKey = { owner: project.owner, name: project.name }
+      const snapshotOwners = projects === undefined ? [] : projectKeysForHostname(projects, hostname)
+      const projectKeys =
         projects === undefined
-          ? uniqueProjectKeys([...(existing?.projectKeys ?? []), projectKey])
-          : uniqueProjectKeys(projectKeysForHostname(projects, hostname))
+          ? [...(existing?.projectKeys ?? []), projectKey]
+          : [
+              ...snapshotOwners,
+              ...(snapshotOwners.some((entry) => projectKeyEqual(entry, projectKey)) ? [] : [projectKey]),
+            ]
+      const uniqueOwners = projectKeys.filter(
+        (entry, index) => projectKeys.findIndex((candidate) => projectKeyEqual(candidate, entry)) === index,
+      )
       const next = stateCopy(state)
-      const tracked = trackedRecordCreate(reconcileR.data, owners)
+      const tracked = trackedRecordCreate(reconcileR.data, uniqueOwners)
       const index = next.records.findIndex((record) => recordKeyValue(record) === recordKeyValue(tracked))
       if (index < 0) next.records.push(tracked)
       else next.records[index] = tracked
-      if (options.tracking !== undefined && !(await trackingWrite(next))) return "failed"
+      if (!(await trackingStateWrite(next))) return "failed"
       pendingDeletions.delete(recordKeyValue(tracked))
     }
-    if (pending.get(keyValue)?.sequence === sequence) pending.delete(keyValue)
+    return "done"
+  }
+
+  async function projectRun(keyValue: string, sequence: number): Promise<QueueOutcome> {
+    const desired = desiredProjects.get(keyValue)
+    if (!active) {
+      if (pendingProjects.get(keyValue)?.sequence === sequence) pendingProjects.delete(keyValue)
+      return "done"
+    }
+    const projectsR = await currentProjects()
+    if (!projectsR.success && options.repositoryProjectsCurrent !== undefined) return "failed"
+    const projects = projectsR.success ? projectsR.data : undefined
+    if (desired === undefined) {
+      if (projectsR.success && projects === undefined && options.repositoryProjectsCurrent !== undefined)
+        return "failed"
+      if (options.tracking !== undefined) {
+        const projectKey = { owner: keyValue.split("\u0000")[0]!, name: keyValue.split("\u0000")[1]! }
+        const records = state.records.filter((record) =>
+          record.projectKeys.some((key) => projectKeyEqual(key, projectKey)),
+        )
+        for (const record of records) {
+          const owners = currentOwners(record, projectKey, projects)
+          if (!(await trackingRecordOwnersSet(record, owners))) return "failed"
+          const current = state.records.find((entry) => recordKeyValue(entry) === recordKeyValue(record))
+          if (current === undefined || current.projectKeys.length > 0) continue
+          pendingDeletions.set(recordKeyValue(current), deletionStateRetry(recordKeyValue(current)))
+        }
+      }
+      if (pendingProjects.get(keyValue)?.sequence === sequence) pendingProjects.delete(keyValue)
+      return "done"
+    }
+
+    if (options.tracking !== undefined) {
+      const ownershipOutcome = await projectOwnershipReconcile(desired, projects)
+      if (ownershipOutcome !== "done") return ownershipOutcome
+    }
+    const remoteOutcome = await projectRemoteReconcile(desired, projects)
+    if (remoteOutcome !== "done") return remoteOutcome
+    if (pendingProjects.get(keyValue)?.sequence === sequence) pendingProjects.delete(keyValue)
     return "done"
   }
 
@@ -428,25 +519,33 @@ export function projectRegistryDaemonCloudflareDnsCreate(options: {
     if (!started || stopped || (!active && options.tracking === undefined)) return
     if (startupPromise !== undefined) await startupPromise
     if (stopped || trackingBlocked) return
+
     while (!stopped) {
-      if (startupRetry !== undefined && due(startupRetry)) {
+      if (startupRetry !== undefined && pendingDue(startupRetry)) {
         startupRetry = undefined
-        await trackingInitialize()
+        await trackingStateInitialize()
         if (startupRetry !== undefined || trackingBlocked) return
       }
-      const dueDeletion = [...pendingDeletions.entries()].find(([, retry]) => due(retry))
-      const dueProject = [...pending.entries()].find(
-        ([, retry]) => due(retry) || (force && retry.attempts === 0 && options.serverIpCurrent() !== undefined),
+      const dueDeletion = [...pendingDeletions.entries()].find(([, retry]) => pendingDue(retry))
+      const dueProject = [...pendingProjects.entries()].find(
+        ([, retry]) =>
+          pendingDue(retry) ||
+          (force &&
+            retry.attempts === 0 &&
+            options.serverIpCurrent() !== undefined &&
+            options.serverIpCurrent() !== ""),
       )
       if (dueDeletion === undefined && dueProject === undefined) return
       if (dueDeletion !== undefined && (dueProject === undefined || dueDeletion[1].sequence < dueProject[1].sequence)) {
-        await deleteTracked(dueDeletion[0])
+        await trackedRecordDeletionRun(dueDeletion[0])
         continue
       }
-      const [key, retry] = dueProject!
-      const outcome = await projectRun(key, retry.sequence)
-      if (outcome === "failed" && pending.get(key)?.sequence === retry.sequence) retryProject(key, retry, false)
-      if (outcome === "deferred" && pending.get(key)?.sequence === retry.sequence) retryProject(key, retry, true)
+      const retry = dueProject![1]
+      const outcome = await projectRun(dueProject![0], retry.sequence)
+      if (outcome === "failed" && pendingProjects.get(dueProject![0])?.sequence === retry.sequence)
+        retryProject(dueProject![0], retry, false)
+      if (outcome === "deferred" && pendingProjects.get(dueProject![0])?.sequence === retry.sequence)
+        retryProject(dueProject![0], retry, true)
       if (outcome !== "done") return
     }
   }
@@ -454,16 +553,22 @@ export function projectRegistryDaemonCloudflareDnsCreate(options: {
   function hasDueWork(): boolean {
     if (trackingBlocked) return false
     return (
-      (startupRetry !== undefined && due(startupRetry)) ||
-      [...pendingDeletions.values()].some((retry) => due(retry)) ||
-      [...pending.values()].some((retry) => due(retry))
+      (startupRetry !== undefined && pendingDue(startupRetry)) ||
+      [...pendingDeletions.values()].some((retry) => pendingDue(retry)) ||
+      [...pendingProjects.values()].some((retry) => pendingDue(retry))
     )
   }
 
   function drainSchedule(force = false): void {
-    if (!started || stopped || drainPromise !== undefined) return
+    if (!started || stopped) return
+    if (drainPromise !== undefined) {
+      forceDrain ||= force
+      return
+    }
+    const requestedForce = forceDrain || force
+    forceDrain = false
     const current = Promise.resolve()
-      .then(() => drain(force))
+      .then(() => drain(requestedForce))
       .catch(() => undefined)
     drainPromise = current
     void current.then(() => {
@@ -477,7 +582,11 @@ export function projectRegistryDaemonCloudflareDnsCreate(options: {
     if (!active || !started || stopped) return
     const key = projectKeyValue(project)
     desiredProjects.set(key, project)
-    pending.set(key, { attempts: 0, nextAt: 0, sequence: nextSequence++ })
+    pendingProjects.set(key, {
+      attempts: 0,
+      nextAt: 0,
+      sequence: nextSequence++,
+    })
     drainSchedule()
   }
 
@@ -494,7 +603,11 @@ export function projectRegistryDaemonCloudflareDnsCreate(options: {
     if (!active || !started || stopped) return
     const key = projectKeyValue(project)
     desiredProjects.delete(key)
-    pending.set(key, { attempts: 0, nextAt: 0, sequence: nextSequence++ })
+    pendingProjects.set(key, {
+      attempts: 0,
+      nextAt: 0,
+      sequence: nextSequence++,
+    })
     drainSchedule()
   }
 
@@ -510,7 +623,7 @@ export function projectRegistryDaemonCloudflareDnsCreate(options: {
     }
     started = true
     startupPromise = Promise.resolve()
-      .then(trackingInitialize)
+      .then(trackingStateInitialize)
       .catch(() => {
         trackingBlocked = true
         log("cloudflare DNS tracking outcome=failure operation=startup reason=unexpected-error")
@@ -531,7 +644,7 @@ export function projectRegistryDaemonCloudflareDnsCreate(options: {
       }
       intervalHandle = undefined
     }
-    pending.clear()
+    pendingProjects.clear()
     const current = drainPromise
     const startup = startupPromise
     const wait = Promise.all([current, startup].filter((value): value is Promise<void> => value !== undefined))

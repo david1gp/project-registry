@@ -3,28 +3,33 @@ import type { Project } from "../project/Project.js"
 import { projectRegistryDaemonCloudflareDnsCreate } from "./projectRegistryDaemonCloudflareDnsCreate.js"
 import { projectRegistryDaemonConfigFromEnv } from "./projectRegistryDaemonConfigFromEnv.js"
 
-function project(domains: string[]): Project {
+function project(domains: string[], disabled = false): Project {
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     owner: "leo",
     name: "dns-app",
     type: "customer",
     order: Number.MAX_SAFE_INTEGER,
-    services: [],
+    services: [
+      {
+        id: "default",
+        units: [],
+        caddy: {
+          port: 4300,
+          domains,
+          path: "",
+          access: "external",
+          kind: "proxy",
+          docs: true,
+          browse: false,
+          headerUp: {},
+          disabled,
+          denyDotfiles: false,
+          spa: false,
+        },
+      },
+    ],
     labels: {},
-    caddy: {
-      port: 4300,
-      domains,
-      path: "",
-      access: "external",
-      kind: "proxy",
-      docs: true,
-      browse: false,
-      headerUp: {},
-      disabled: false,
-      denyDotfiles: false,
-      spa: false,
-    },
   }
 }
 
@@ -173,6 +178,29 @@ describe("projectRegistryDaemonCloudflareDnsCreate", () => {
       expect(fetches).toBe(0)
       await queueR.data.shutdown()
     }
+  })
+
+  test("does not reconcile disabled Caddy entries", async () => {
+    const timer = timerCreate()
+    let fetches = 0
+    const queueR = projectRegistryDaemonCloudflareDnsCreate({
+      enabled: true,
+      token: "token",
+      timeoutMs: 1000,
+      serverIpCurrent: () => "203.0.113.10",
+      timer: timer.timer,
+      fetch: async () => {
+        fetches += 1
+        return new Response()
+      },
+    })
+    expect(queueR.success).toBe(true)
+    if (!queueR.success) return
+    expect(queueR.data.start().success).toBe(true)
+    queueR.data.projectCreateAfterPersistence(project(["disabled.example.com"], true), { noDns: false })
+    await settle()
+    expect(fetches).toBe(0)
+    await queueR.data.shutdown()
   })
 
   test("does not fail creation work when the remote API fails", async () => {

@@ -539,6 +539,56 @@ describe("caddyApplication", () => {
     applicationR.data.stop()
   })
 
+  test("applies every canonical service route without projecting to the legacy project shape", async () => {
+    const project: Project = {
+      schemaVersion: 2,
+      owner: "leo",
+      name: "multi-service",
+      type: "customer",
+      order: 0,
+      labels: {},
+      services: [
+        {
+          id: "api",
+          units: ["multi-api.service"],
+          caddy: { ...caddyConfigGenerateFixtures.proxy.caddy, port: 4100, domains: ["api.example"], docs: false },
+        },
+        {
+          id: "assets",
+          units: ["multi-assets.service"],
+          caddy: {
+            ...caddyConfigGenerateFixtures.static.caddy,
+            port: 4101,
+            domains: ["assets.example"],
+            path: "/srv/assets",
+            docs: false,
+          },
+        },
+      ],
+    }
+    let generated: string | undefined
+    const applicationR = caddyApplicationCreate({
+      repository: { read: async () => createResult(snapshotProjects("revision-multi-service", [project])) },
+      initializeFromGeneratedConfig: true,
+      timer: timerFake().timer,
+      processRunner: async (_command: string, _args: readonly string[], input: string) => {
+        generated = input
+        return createResult({ exitCode: 0, stdout: "", stderr: "" })
+      },
+    })
+    expect(applicationR.success).toBe(true)
+    if (!applicationR.success) return
+
+    expect((await applicationR.data.start()).success).toBe(true)
+    expect(generated).toBeDefined()
+    if (generated === undefined) return
+    expect(
+      (JSON.parse(generated) as { apps: { http: { servers: { srv0: { routes: unknown[] } } } } }).apps.http.servers.srv0
+        .routes,
+    ).toHaveLength(2)
+    await applicationR.data.stop()
+  })
+
   test("reconciles inactive access-log directories only after a successful load", async () => {
     const root = await mkdtemp(join(tmpdir(), "project-registry-caddy-retention-"))
     const oldId = projectAccessLogId({ owner: "deleted-owner", name: "deleted-project" })
