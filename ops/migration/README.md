@@ -189,16 +189,24 @@ reload, or systemd daemon reload. It installs the normalized OIDC file as root-o
 mode `0600`, the non-secret environment as `0640`, and the unit as `0644`. The
 unit separately references the required root-owned `0600` `/etc/project-registry/zitadel.env`;
 provision that file from a secret store or pass it with `PROJECT_REGISTRY_ZITADEL_SOURCE`.
-Cloudflare DNS credentials are optional and are kept in a separate root-owned `0600` environment
-file. Provision it outside Git and pass it with `PROJECT_REGISTRY_CLOUDFLARE_SOURCE`; it may define
-`CLOUDFLARE_API_TOKEN` (preferred) or `CF_API_TOKEN`. The unit loads the file when present, so a
-missing token makes DNS a no-op rather than a daemon startup failure. The installer never prints
-the file contents. Set `PROJECT_REGISTRY_CLOUDFLARE_DNS_ENABLED=false` in the non-secret daemon
-environment to disable DNS even when a token is present. For example:
+Cloudflare DNS credentials are owner-scoped. The daemon reads
+`/etc/project-registry/cloudflare/{owner}.env`, where `{owner}` is the project owner; set
+`PROJECT_REGISTRY_CLOUDFLARE_CREDENTIALS_DIR` to use another absolute directory. The installer
+reads the existing owner environment files from `PROJECT_REGISTRY_CLOUDFLARE_{LEO,DAVID,FABIAN}_SOURCE`
+(defaulting to the three server-repository `env/env.conf` files), then seeds missing owner files in a root-owned `0700`
+directory. Existing owner targets must be regular non-symbolic files; their contents are preserved while ownership and
+mode are normalized to root-owned `0600`. Each source may define
+`CLOUDFLARE_API_TOKEN`; the daemon also accepts `CF_API_TOKEN` in owner files, with the preferred
+name winning. There is no global-token fallback.
+An apply also removes the legacy `/etc/project-registry/cloudflare.env` and its old systemd drop-in.
+The installer never prints credential contents. Set `PROJECT_REGISTRY_CLOUDFLARE_DNS_ENABLED=false`
+in the non-secret daemon environment to disable DNS globally. For example:
 
 ```bash
 sudo env \
-  PROJECT_REGISTRY_CLOUDFLARE_SOURCE=/run/secrets/project-registry-cloudflare.env \
+  PROJECT_REGISTRY_CLOUDFLARE_LEO_SOURCE=/home/david/leo_internal/leo-server/env/env.conf \
+  PROJECT_REGISTRY_CLOUDFLARE_DAVID_SOURCE=/home/david/leo_internal/david-server/env/env.conf \
+  PROJECT_REGISTRY_CLOUDFLARE_FABIAN_SOURCE=/home/david/leo_internal/fabian-server/env/env.conf \
   PROJECT_REGISTRY_ZITADEL_SOURCE=/run/secrets/project-registry-zitadel.env \
   BUN_BIN=/home/david/.bun/bin/bun \
   PROJECT_REGISTRY_SOURCE=/home/david/adaptive/project-registry \
@@ -209,7 +217,10 @@ After a successful project create, the daemon reconciles each normalized saved d
 background using the current discovered server IP. A create remains successful if Cloudflare is
 not configured, `--no-dns` is supplied, IP discovery is still pending, or a remote DNS request
 fails. Pending work is retried when discovery supplies an IP and is cancelled during shutdown.
-DNS records are not deleted and later project edits are not synchronized automatically.
+With DNS enabled, project creates and edits reconcile normalized domains by creating or updating
+records, while domain removals and project deletes remove tracked records once no project owns the
+hostname. Creates and edits use the current project owner's credential; deletions retain the original
+owner credential. A shared record remains until its last owner is removed.
 The OIDC file supplies the session cookie credential, while session limits remain in the
 non-secret environment. Do not
 activate the unit during task 5; service activation belongs to the later cutover

@@ -16,9 +16,9 @@ EnvironmentFile=/etc/project-registry/leonardomora.oidc.env
 # Required task-4 Zitadel management/session runtime settings. Provision this
 # root-owned mode-0600 file separately; no credential values belong in Git.
 EnvironmentFile=/etc/project-registry/zitadel.env
-# Optional root-owned mode-0600 Cloudflare credentials. The file may define
-# CLOUDFLARE_API_TOKEN or the legacy-compatible CF_API_TOKEN name.
-EnvironmentFile=-/etc/project-registry/cloudflare.env
+# Cloudflare credentials are selected by project owner from the directory named
+# by PROJECT_REGISTRY_CLOUDFLARE_CREDENTIALS_DIR. Do not add a global token
+# EnvironmentFile here; owner isolation is enforced by the daemon resolver.
 WorkingDirectory=/home/caddy/project-registry
 ExecStart=/usr/local/bin/project-registry-bun /home/caddy/project-registry/dist/daemon.js
 Restart=on-failure

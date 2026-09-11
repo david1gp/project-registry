@@ -116,6 +116,9 @@ describe("project-registryd production staging", () => {
       "PROJECT_REGISTRY_HTTPS_LISTENER=:443",
       "PROJECT_REGISTRY_PORT_FROM=3000",
       "PROJECT_REGISTRY_PORT_TO=3999",
+      "PROJECT_REGISTRY_USERS=leo,david,fabian",
+      'PROJECT_REGISTRY_DEFAULT_USER_DOMAINS={"leo":"leonardomora.de","david":"david-siewert.com","fabian":"webflows.de"}',
+      "PROJECT_REGISTRY_CLOUDFLARE_CREDENTIALS_DIR=/etc/project-registry/cloudflare",
       "# PROJECT_REGISTRY_CADDY_ACCESS_LOG_ROOT=/var/lib/project-registry/caddy-access-logs",
       "# PROJECT_REGISTRY_CLOUDFLARE_DNS_ENABLED=false",
     ]) {
@@ -135,7 +138,8 @@ describe("project-registryd production staging", () => {
 
     expect(service).toContain("EnvironmentFile=/etc/project-registry/leonardomora.oidc.env")
     expect(service).toContain("EnvironmentFile=/etc/project-registry/zitadel.env")
-    expect(service).toContain("EnvironmentFile=-/etc/project-registry/cloudflare.env")
+    expect(service).not.toContain("cloudflare.env")
+    expect(service).not.toContain("CLOUDFLARE_API_TOKEN")
     expect(service).toContain("UMask=0077")
     expect(service).toContain(
       "ExecStart=/usr/local/bin/project-registry-bun /home/caddy/project-registry/dist/daemon.js",
@@ -262,7 +266,11 @@ describe("project-registryd production staging", () => {
     try {
       const source = join(directory, "source")
       const oidc = join(directory, "oidc.env")
-      const cloudflare = join(directory, "cloudflare.env")
+      const cloudflareSources = {
+        leo: join(directory, "leo.env"),
+        david: join(directory, "david.env"),
+        fabian: join(directory, "fabian.env"),
+      }
       const bun = join(directory, "bun")
       const tools = join(directory, "tools")
       const installLog = join(directory, "install.log")
@@ -279,7 +287,9 @@ describe("project-registryd production staging", () => {
         oidc,
         "PROJECT_REGISTRY_OIDC_CLIENT_ID=id\nPROJECT_REGISTRY_OIDC_CLIENT_SECRET=secret\nPROJECT_REGISTRY_OIDC_COOKIE_SECRET=cookie\n",
       )
-      await Bun.write(cloudflare, "CLOUDFLARE_API_TOKEN=fixture-token\n")
+      await Bun.write(cloudflareSources.leo, "CLOUDFLARE_API_TOKEN=leo-fixture-token\n")
+      await Bun.write(cloudflareSources.david, "CLOUDFLARE_API_TOKEN=david-fixture-token\n")
+      await Bun.write(cloudflareSources.fabian, "CLOUDFLARE_API_TOKEN=fabian-fixture-token\n")
       await Bun.write(
         bun,
         '#!/bin/sh\nset -eu\nif [ "$1" = "--version" ]; then exit 0; fi\nif [ "$1" = "run" ] && [ "$2" = "build:lib" ]; then mkdir -p dist node_modules; printf \'daemon\\n\' > dist/daemon.js; exit 0; fi\nexit 1\n',
@@ -314,12 +324,24 @@ describe("project-registryd production staging", () => {
         SERVER_IP: "2001:db8::42",
         PROJECT_REGISTRY_SERVER_IP_CACHE_PATH: join(directory, "state", "server-ip"),
         PROJECT_REGISTRY_SERVER_IP_DISCOVERY_TIMEOUT_MS: "1750",
-        PROJECT_REGISTRY_CLOUDFLARE_SOURCE: cloudflare,
+        PROJECT_REGISTRY_CLOUDFLARE_LEO_SOURCE: cloudflareSources.leo,
+        PROJECT_REGISTRY_CLOUDFLARE_DAVID_SOURCE: cloudflareSources.david,
+        PROJECT_REGISTRY_CLOUDFLARE_FABIAN_SOURCE: cloudflareSources.fabian,
+        PROJECT_REGISTRY_LEGACY_CLOUDFLARE_PATH: join(directory, "legacy-cloudflare.env"),
+        PROJECT_REGISTRY_LEGACY_CLOUDFLARE_DROPIN_PATH: join(directory, "cloudflare.conf"),
         PROJECT_REGISTRY_CLOUDFLARE_DNS_ENABLED: "false",
         PROJECT_REGISTRY_CADDY_ACCESS_LOG_ROOT: "",
         CADDY_SERVICE_IDENTITY_FILE: join(identityFixtureDirectory, "matching.properties"),
       }
       delete environment.INSTALL_BIN
+      await Bun.write(environment.PROJECT_REGISTRY_LEGACY_CLOUDFLARE_PATH, "CLOUDFLARE_API_TOKEN=legacy\n")
+      await Bun.write(environment.PROJECT_REGISTRY_LEGACY_CLOUDFLARE_DROPIN_PATH, "[Service]\nEnvironmentFile=legacy\n")
+      const credentialDirectory = join(configRoot, "cloudflare")
+      await mkdir(credentialDirectory, { recursive: true, mode: 0o700 })
+      await Bun.write(join(credentialDirectory, "leo.env"), "CLOUDFLARE_API_TOKEN=user-updated-leo\n")
+      await Bun.write(join(credentialDirectory, "fabian.env"), "CLOUDFLARE_API_TOKEN=other-owner-value\n")
+      await chmod(join(credentialDirectory, "leo.env"), 0o644)
+      await chmod(join(credentialDirectory, "fabian.env"), 0o644)
 
       const result = await command("bash", [installer, "--apply"], environment)
 
@@ -335,14 +357,20 @@ describe("project-registryd production staging", () => {
       )
       expect(stagedEnvironment).toContain("PROJECT_REGISTRY_SERVER_IP_DISCOVERY_TIMEOUT_MS=1750\n")
       expect(stagedEnvironment).toContain("PROJECT_REGISTRY_CLOUDFLARE_DNS_ENABLED=false\n")
+      expect(stagedEnvironment).toContain("PROJECT_REGISTRY_CLOUDFLARE_CREDENTIALS_DIR=")
       expect(stagedEnvironment).not.toContain("fixture-token")
-      expect(await readFile(join(configRoot, "cloudflare.env"), "utf8")).toBe("CLOUDFLARE_API_TOKEN=fixture-token\n")
-
-      const withoutCloudflare = { ...environment }
-      delete withoutCloudflare.PROJECT_REGISTRY_CLOUDFLARE_SOURCE
-      const rerun = await command("bash", [installer, "--apply"], withoutCloudflare)
-      expect(rerun.exitCode, `${rerun.stdout}\n${rerun.stderr}`).toBe(0)
+      for (const [owner, token] of Object.entries({
+        leo: "user-updated-leo",
+        david: "david-fixture-token",
+        fabian: "other-owner-value",
+      })) {
+        const credentialPath = join(configRoot, "cloudflare", `${owner}.env`)
+        expect(await readFile(credentialPath, "utf8")).toContain(`CLOUDFLARE_API_TOKEN=${token}`)
+        expect((await stat(credentialPath)).mode & 0o777).toBe(0o600)
+      }
+      expect((await stat(join(configRoot, "cloudflare"))).mode & 0o777).toBe(0o700)
       expect(await Bun.file(join(configRoot, "cloudflare.env")).exists()).toBe(false)
+      expect(await Bun.file(environment.PROJECT_REGISTRY_LEGACY_CLOUDFLARE_DROPIN_PATH).exists()).toBe(false)
       expect(await Bun.file(unitPath).exists()).toBe(true)
       expect(await readFile(installLog, "utf8")).not.toContain("umask")
     } finally {

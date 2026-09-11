@@ -15,8 +15,12 @@ OIDC_SOURCE="${PROJECT_REGISTRY_OIDC_SOURCE:-/home/david/leo/leo-server/caddy/oi
 OIDC_TARGET="${PROJECT_REGISTRY_OIDC_TARGET:-$CONFIG_ROOT/leonardomora.oidc.env}"
 ZITADEL_SOURCE="${PROJECT_REGISTRY_ZITADEL_SOURCE:-}"
 ZITADEL_TARGET="${PROJECT_REGISTRY_ZITADEL_TARGET:-$CONFIG_ROOT/zitadel.env}"
-CLOUDFLARE_SOURCE="${PROJECT_REGISTRY_CLOUDFLARE_SOURCE:-}"
-CLOUDFLARE_TARGET="${PROJECT_REGISTRY_CLOUDFLARE_TARGET:-$CONFIG_ROOT/cloudflare.env}"
+CLOUDFLARE_CREDENTIALS_DIR="${PROJECT_REGISTRY_CLOUDFLARE_CREDENTIALS_DIR:-$CONFIG_ROOT/cloudflare}"
+CLOUDFLARE_LEO_SOURCE="${PROJECT_REGISTRY_CLOUDFLARE_LEO_SOURCE:-/home/david/leo_internal/leo-server/env/env.conf}"
+CLOUDFLARE_DAVID_SOURCE="${PROJECT_REGISTRY_CLOUDFLARE_DAVID_SOURCE:-/home/david/leo_internal/david-server/env/env.conf}"
+CLOUDFLARE_FABIAN_SOURCE="${PROJECT_REGISTRY_CLOUDFLARE_FABIAN_SOURCE:-/home/david/leo_internal/fabian-server/env/env.conf}"
+LEGACY_CLOUDFLARE_PATH="${PROJECT_REGISTRY_LEGACY_CLOUDFLARE_PATH:-$CONFIG_ROOT/cloudflare.env}"
+LEGACY_CLOUDFLARE_DROPIN_PATH="${PROJECT_REGISTRY_LEGACY_CLOUDFLARE_DROPIN_PATH:-/etc/systemd/system/project-registryd.service.d/cloudflare.conf}"
 REPOSITORY_PATH="${PROJECT_REGISTRY_REPOSITORY_PATH:-/home/caddy/project-registry-history}"
 CADDY_BINARY_PATH="${PROJECT_REGISTRY_CADDY_BINARY:-/home/caddy/.local/bin/caddy}"
 BUN_BIN="${BUN_BIN:-}"
@@ -55,8 +59,10 @@ Environment:
   PROJECT_REGISTRY_OIDC_TARGET   copied OIDC env destination (default: config root)
   PROJECT_REGISTRY_ZITADEL_SOURCE  optional separately provisioned Zitadel env to copy
   PROJECT_REGISTRY_ZITADEL_TARGET  required Zitadel env destination (default: config root/zitadel.env)
-  PROJECT_REGISTRY_CLOUDFLARE_SOURCE  optional separately provisioned Cloudflare token env to copy
-  PROJECT_REGISTRY_CLOUDFLARE_TARGET  Cloudflare token destination (default: config root/cloudflare.env)
+  PROJECT_REGISTRY_CLOUDFLARE_CREDENTIALS_DIR  owner credential directory (default: config root/cloudflare)
+  PROJECT_REGISTRY_CLOUDFLARE_{LEO,DAVID,FABIAN}_SOURCE  existing owner env files containing CLOUDFLARE_API_TOKEN
+  PROJECT_REGISTRY_LEGACY_CLOUDFLARE_PATH  old global token path to remove during apply
+  PROJECT_REGISTRY_LEGACY_CLOUDFLARE_DROPIN_PATH  old systemd drop-in to remove during apply
   PROJECT_REGISTRY_CADDY_ACCESS_LOG_ROOT  opt-in Caddy access-log root (unset disables logging)
   CADDY_USER/CADDY_GROUP  optional expected identity; it must exactly match caddy.service
   CADDY_SERVICE_IDENTITY_FILE  read-only identity fixture for tests/offline preparation
@@ -102,12 +108,6 @@ if [[ -n "$ZITADEL_SOURCE" ]]; then
     exit 1
   }
 fi
-if [[ -n "$CLOUDFLARE_SOURCE" ]]; then
-  [[ -f "$CLOUDFLARE_SOURCE" && ! -L "$CLOUDFLARE_SOURCE" && -r "$CLOUDFLARE_SOURCE" ]] || {
-    printf 'missing or unreadable Cloudflare environment: %s\n' "$CLOUDFLARE_SOURCE" >&2
-    exit 1
-  }
-fi
 
 [[ -n "$INSTALL_ROOT" && "$INSTALL_ROOT" != / ]] || { printf 'invalid runtime destination\n' >&2; exit 1; }
 [[ -n "$CONFIG_ROOT" && "$CONFIG_ROOT" != / ]] || { printf 'invalid config destination\n' >&2; exit 1; }
@@ -116,7 +116,18 @@ fi
 [[ -n "$CADDY_BINARY_PATH" && "$CADDY_BINARY_PATH" != *$'\n'* ]] || { printf 'invalid Caddy binary path\n' >&2; exit 1; }
 [[ -n "$OIDC_TARGET" && "$OIDC_TARGET" != *$'\n'* ]] || { printf 'invalid OIDC destination\n' >&2; exit 1; }
 [[ -n "$ZITADEL_TARGET" && "$ZITADEL_TARGET" != *$'\n'* ]] || { printf 'invalid Zitadel destination\n' >&2; exit 1; }
-[[ -n "$CLOUDFLARE_TARGET" && "$CLOUDFLARE_TARGET" != *$'\n'* ]] || { printf 'invalid Cloudflare destination\n' >&2; exit 1; }
+[[ "$CLOUDFLARE_CREDENTIALS_DIR" == /* && "$CLOUDFLARE_CREDENTIALS_DIR" != *$'\n'* ]] || {
+  printf 'invalid Cloudflare credentials directory\n' >&2
+  exit 1
+}
+[[ "$LEGACY_CLOUDFLARE_PATH" == /* && "$LEGACY_CLOUDFLARE_PATH" != *$'\n'* ]] || {
+  printf 'invalid legacy Cloudflare path\n' >&2
+  exit 1
+}
+[[ "$LEGACY_CLOUDFLARE_DROPIN_PATH" == /* && "$LEGACY_CLOUDFLARE_DROPIN_PATH" != *$'\n'* ]] || {
+  printf 'invalid legacy Cloudflare drop-in path\n' >&2
+  exit 1
+}
 [[ -n "$PROJECT_REGISTRY_BUN_RUNTIME_PATH" && "$PROJECT_REGISTRY_BUN_RUNTIME_PATH" == /* && "$PROJECT_REGISTRY_BUN_RUNTIME_PATH" != *$'\n'* ]] || {
   printf 'invalid Bun runtime path\n' >&2
   exit 1
@@ -182,11 +193,9 @@ if [[ "$DRY_RUN" -eq 1 ]]; then
   else
     printf 'dry-run: would retain separately provisioned Zitadel environment at %s (required before activation)\n' "$ZITADEL_TARGET"
   fi
-  if [[ -n "$CLOUDFLARE_SOURCE" ]]; then
-    printf 'dry-run: would map separately provisioned Cloudflare environment to %s (root-owned mode 0600)\n' "$CLOUDFLARE_TARGET"
-  else
-    printf 'dry-run: Cloudflare DNS credentials remain optional at %s\n' "$CLOUDFLARE_TARGET"
-  fi
+  printf 'dry-run: would provision leo,david,fabian Cloudflare credentials under %s (root-owned mode 0600; directory mode 0700)\n' "$CLOUDFLARE_CREDENTIALS_DIR"
+  printf 'dry-run: would remove legacy global Cloudflare environment %s and drop-in %s\n' \
+    "$LEGACY_CLOUDFLARE_PATH" "$LEGACY_CLOUDFLARE_DROPIN_PATH"
   if [[ -n "$PROJECT_REGISTRY_CADDY_ACCESS_LOG_ROOT" ]]; then
      printf 'dry-run: would provision Caddy access-log root %s (%s:%s, directories 0700)\n' \
        "$PROJECT_REGISTRY_CADDY_ACCESS_LOG_ROOT" "$CADDY_USER" "$CADDY_GROUP"
@@ -218,7 +227,19 @@ fi
   exit 1
 }
 
-"$INSTALL_BIN" -d -o root -g root -m 0755 "$INSTALL_ROOT" "$CONFIG_ROOT" "$(dirname "$UNIT_PATH")" "$(dirname "$OIDC_TARGET")" "$(dirname "$ZITADEL_TARGET")" "$(dirname "$CLOUDFLARE_TARGET")"
+for cloudflare_source in "$CLOUDFLARE_LEO_SOURCE" "$CLOUDFLARE_DAVID_SOURCE" "$CLOUDFLARE_FABIAN_SOURCE"; do
+  [[ -f "$cloudflare_source" && ! -L "$cloudflare_source" && -r "$cloudflare_source" ]] || {
+    printf 'missing or unreadable owner Cloudflare environment: %s\n' "$cloudflare_source" >&2
+    exit 1
+  }
+done
+[[ ! -L "$CLOUDFLARE_CREDENTIALS_DIR" ]] || {
+  printf 'Cloudflare credentials directory must not be a symbolic link: %s\n' "$CLOUDFLARE_CREDENTIALS_DIR" >&2
+  exit 1
+}
+
+"$INSTALL_BIN" -d -o root -g root -m 0755 "$INSTALL_ROOT" "$CONFIG_ROOT" "$(dirname "$UNIT_PATH")" "$(dirname "$OIDC_TARGET")" "$(dirname "$ZITADEL_TARGET")" "$(dirname "$CLOUDFLARE_CREDENTIALS_DIR")"
+"$INSTALL_BIN" -d -o root -g root -m 0700 "$CLOUDFLARE_CREDENTIALS_DIR"
 if [[ -n "$PROJECT_REGISTRY_CADDY_ACCESS_LOG_ROOT" ]]; then
   caddy_access_log_root_prepare "$PROJECT_REGISTRY_CADDY_ACCESS_LOG_ROOT" "$CADDY_USER" "$CADDY_GROUP" || exit 1
 fi
@@ -245,8 +266,10 @@ fi
 environment_stage="$(mktemp)"
 oidc_stage="$(mktemp)"
 unit_stage="$(mktemp)"
+cloudflare_stage_directory="$(mktemp -d)"
 cleanup_staging() {
   rm -f "$environment_stage" "$oidc_stage" "$unit_stage"
+  rm -rf "$cloudflare_stage_directory"
 }
 trap cleanup_staging EXIT
 
@@ -293,12 +316,35 @@ normalize_oidc_environment() {
   chmod 0600 "$output"
 }
 
+normalize_cloudflare_environment() {
+  local source="$1"
+  local output="$2"
+  (
+    set +u
+    unset CLOUDFLARE_API_TOKEN CF_API_TOKEN
+    # shellcheck source=/dev/null
+    source "$source" >/dev/null 2>&1
+    local token="${CLOUDFLARE_API_TOKEN:-}"
+    [[ -n "$token" ]] || { printf 'Cloudflare environment is missing CLOUDFLARE_API_TOKEN\n' >&2; exit 1; }
+    [[ "$token" != *$'\n'* && "$token" != *$'\r'* ]] || {
+      printf 'Cloudflare API token contains a newline\n' >&2
+      exit 1
+    }
+    umask 077
+    printf '# Owner-scoped Cloudflare credentials for project-registryd.\nCLOUDFLARE_API_TOKEN=%s\n' \
+      "$token" > "$output"
+  )
+  chmod 0600 "$output"
+}
+
 printf '%s\n' \
   '# Non-secret production settings for project-registryd.' \
   '# Normalized OIDC values are staged separately from the non-secret settings.' \
   "PROJECT_REGISTRY_REPOSITORY_PATH=$REPOSITORY_PATH" \
   'PROJECT_REGISTRY_REPOSITORY_BRANCH=main' \
-  'PROJECT_REGISTRY_USERS=leo,david' \
+  'PROJECT_REGISTRY_USERS=leo,david,fabian' \
+  'PROJECT_REGISTRY_DEFAULT_USER_DOMAINS={"leo":"leonardomora.de","david":"david-siewert.com","fabian":"webflows.de"}' \
+  "PROJECT_REGISTRY_CLOUDFLARE_CREDENTIALS_DIR=$CLOUDFLARE_CREDENTIALS_DIR" \
   'PROJECT_REGISTRY_SOCKET_DIRECTORY=/run/project-registry' \
   'PROJECT_REGISTRY_WEB_HOST=127.0.0.1' \
   'PROJECT_REGISTRY_WEB_PORT=8080' \
@@ -335,16 +381,39 @@ normalize_oidc_environment "$oidc_stage"
 if [[ -n "$ZITADEL_SOURCE" ]]; then
   "$INSTALL_BIN" -o root -g root -m 0600 "$ZITADEL_SOURCE" "$ZITADEL_TARGET"
 fi
-if [[ -n "$CLOUDFLARE_SOURCE" ]]; then
-  "$INSTALL_BIN" -o root -g root -m 0600 "$CLOUDFLARE_SOURCE" "$CLOUDFLARE_TARGET"
-else
-  rm -f -- "$CLOUDFLARE_TARGET"
-fi
+normalize_cloudflare_environment "$CLOUDFLARE_LEO_SOURCE" "$cloudflare_stage_directory/leo.env"
+normalize_cloudflare_environment "$CLOUDFLARE_DAVID_SOURCE" "$cloudflare_stage_directory/david.env"
+normalize_cloudflare_environment "$CLOUDFLARE_FABIAN_SOURCE" "$cloudflare_stage_directory/fabian.env"
+for owner in leo david fabian; do
+  target="$CLOUDFLARE_CREDENTIALS_DIR/$owner.env"
+  if [[ -L "$target" ]]; then
+    printf 'Cloudflare credential target must not be a symbolic link: %s\n' "$target" >&2
+    exit 1
+  fi
+  if [[ -e "$target" && ! -f "$target" ]]; then
+    printf 'Cloudflare credential target must be a regular file: %s\n' "$target" >&2
+    exit 1
+  fi
+  if [[ -e "$target" ]]; then
+    chown root:root "$target"
+    chmod 0600 "$target"
+    continue
+  fi
+  "$INSTALL_BIN" -o root -g root -m 0600 "$cloudflare_stage_directory/$owner.env" "$target"
+done
+remove_legacy_path() {
+  local path="$1"
+  [[ ! -L "$path" ]] || { printf 'refusing to remove symbolic link: %s\n' "$path" >&2; exit 1; }
+  [[ ! -e "$path" ]] && return
+  [[ -f "$path" ]] || { printf 'legacy path is not a regular file: %s\n' "$path" >&2; exit 1; }
+  rm -f -- "$path"
+}
+remove_legacy_path "$LEGACY_CLOUDFLARE_PATH"
+remove_legacy_path "$LEGACY_CLOUDFLARE_DROPIN_PATH"
 sed \
   -e "s|/etc/project-registry/project-registryd.env|$CONFIG_ROOT/project-registryd.env|g" \
   -e "s|/etc/project-registry/leonardomora.oidc.env|$OIDC_TARGET|g" \
   -e "s|/etc/project-registry/zitadel.env|$ZITADEL_TARGET|g" \
-  -e "s|/etc/project-registry/cloudflare.env|$CLOUDFLARE_TARGET|g" \
   -e "s|/home/caddy/project-registry|$INSTALL_ROOT|g" \
   -e "s|/home/caddy/.local/bin/caddy|$CADDY_BINARY_PATH|g" \
   -e "s|/usr/local/bin/project-registry-bun|$PROJECT_REGISTRY_BUN_RUNTIME_PATH|g" \
