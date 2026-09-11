@@ -79,6 +79,15 @@ function runOptions(data: unknown, paths: string[], stdout: string[], stderr: st
   }
 }
 
+function tokenStdin(value: string): ReadableStream<Uint8Array> {
+  return new ReadableStream({
+    start(controller) {
+      controller.enqueue(new TextEncoder().encode(value))
+      controller.close()
+    },
+  })
+}
+
 describe("projectRegistryCliRun", () => {
   test.each([
     [["project", "list"], [project], "/projects"],
@@ -171,6 +180,118 @@ describe("projectRegistryCliRun", () => {
       "unset david/default-domain\n",
     ])
   })
+
+  test("reads one final token line ending and updates the current owner's Cloudflare credential", async () => {
+    const requests: Array<{ path: string; method: string; body?: unknown; unix: string | undefined }> = []
+    const stdout: string[] = []
+    const exitCode = await projectRegistryCliRun(
+      ["user", "cloudflare-token", "set", "--token-stdin", "--socket", "/run/project-registry/custom.sock"],
+      {
+        environment: { USER: "david" },
+        stdin: tokenStdin("token-from-stdin\r\n"),
+        requestFetch: async (input, init) => {
+          requests.push({
+            path: new URL(String(input)).pathname,
+            method: init?.method ?? "GET",
+            body: init?.body === undefined ? undefined : JSON.parse(String(init.body)),
+            unix: (init as (RequestInit & { unix?: string }) | undefined)?.unix,
+          })
+          return Response.json({ success: true, data: { updated: true } })
+        },
+        stdout: (text) => stdout.push(text),
+      },
+    )
+
+    expect(exitCode).toBe(0)
+    expect(requests).toEqual([
+      {
+        path: "/api/v1/users/david/cloudflare-token",
+        method: "PUT",
+        body: { token: "token-from-stdin" },
+        unix: "/run/project-registry/custom.sock",
+      },
+    ])
+    expect(stdout).toEqual(["updated cloudflare-token\n"])
+  })
+
+  test("emits only the safe Cloudflare credential update envelope as JSON", async () => {
+    const stdout: string[] = []
+    const exitCode = await projectRegistryCliRun(["user", "cloudflare-token", "set", "--token-stdin", "--json"], {
+      environment: { USER: "david" },
+      stdin: tokenStdin("token-for-json\n"),
+      requestFetch: async () =>
+        Response.json({ success: true, data: { updated: true, token: "server-must-not-be-printed" } }),
+      stdout: (text) => stdout.push(text),
+    })
+
+    expect(exitCode).toBe(0)
+    expect(stdout.join("")).toBe(`${JSON.stringify({ success: true, data: { updated: true } })}\n`)
+    expect(stdout.join("")).not.toContain("server-must-not-be-printed")
+  })
+
+  test("does not read stdin when the token flag is absent", async () => {
+    const stderr: string[] = []
+    const stdin = {
+      getReader() {
+        throw new Error("stdin must not be read")
+      },
+    } as unknown as ReadableStream<Uint8Array>
+
+    const exitCode = await projectRegistryCliRun(["user", "cloudflare-token", "set"], {
+      environment: { USER: "david" },
+      stdin,
+      stderr: (text) => stderr.push(text),
+    })
+
+    expect(exitCode).toBe(2)
+    expect(stderr.join("")).toContain("Cloudflare token command arguments are invalid.")
+  })
+
+  test("does not echo invalid credential command arguments", async () => {
+    const suppliedCases: readonly (readonly string[])[] = [
+      ["CLOUDFLARE_TOKEN_PLACEHOLDER_20260911"],
+      ["--token", "CLOUDFLARE_TOKEN_PLACEHOLDER_20260911"],
+      ["--token=CLOUDFLARE_TOKEN_PLACEHOLDER_20260911"],
+      ["--header-up", "CLOUDFLARE_TOKEN_PLACEHOLDER_20260911"],
+      ["--label=CLOUDFLARE_TOKEN_PLACEHOLDER_20260911"],
+    ]
+    for (const supplied of suppliedCases) {
+      const stdout: string[] = []
+      const stderr: string[] = []
+      const exitCode = await projectRegistryCliRun(["user", "cloudflare-token", "set", ...supplied, "--json"], {
+        stdout: (text) => stdout.push(text),
+        stderr: (text) => stderr.push(text),
+      })
+
+      expect(exitCode).toBe(2)
+      expect(stdout).toEqual([])
+      expect(stderr.join("")).not.toContain("CLOUDFLARE_TOKEN_PLACEHOLDER_20260911")
+      const errorObject = JSON.parse(stderr.join(""))
+      expect(errorObject.error.message).toBe("Cloudflare token command arguments are invalid.")
+      expect(JSON.stringify(errorObject.error)).not.toContain("CLOUDFLARE_TOKEN_PLACEHOLDER_20260911")
+    }
+  })
+
+  test.each(["\n", "\r\n", "first\nsecond\n", "x".repeat(16_385)])(
+    "rejects unsafe Cloudflare token stdin input without a request",
+    async (input) => {
+      const stderr: string[] = []
+      let requests = 0
+      const exitCode = await projectRegistryCliRun(["user", "cloudflare-token", "set", "--token-stdin"], {
+        environment: { USER: "david" },
+        stdin: tokenStdin(input),
+        requestFetch: async () => {
+          requests += 1
+          return Response.json({ success: true, data: { updated: true } })
+        },
+        stderr: (text) => stderr.push(text),
+      })
+
+      expect(exitCode).toBe(1)
+      expect(requests).toBe(0)
+      expect(stderr.join("")).toBe("error: Cloudflare token input must be one non-empty line.\n")
+    },
+  )
 
   test("emits complete JSON data for user default-domain commands", async () => {
     const responses = [defaultDomain, defaultDomainMutation("set", "example.com"), defaultDomainMutation("unset", null)]

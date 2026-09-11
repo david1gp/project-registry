@@ -23,6 +23,7 @@ import { projectServicesPatchApply } from "./projectServicesPatchApply.js"
 type CliRunOptions = {
   environment?: Readonly<Record<string, string | undefined>>
   requestFetch?: ProjectRegistryCliFetch
+  stdin?: ReadableStream<Uint8Array>
   stdout?: (text: string) => void
   stderr?: (text: string) => void
 }
@@ -33,6 +34,25 @@ type RequestOptions = {
 }
 
 type CliError = ResultErr & { hint?: string }
+
+type CloudflareTokenReader = {
+  read: () => Promise<
+    | {
+        done: false
+        value: Uint8Array
+      }
+    | {
+        done: true
+        value?: Uint8Array
+      }
+  >
+  cancel: () => Promise<unknown>
+  releaseLock: () => void
+}
+
+const maximumCloudflareTokenInputBytes = 16_384
+const maximumCloudflareTokenLength = 8_192
+const cloudflareTokenInputError = "Cloudflare token input must be one non-empty line."
 
 function requestPath(invocation: ProjectRegistryCliInvocation): string {
   const command = invocation.command
@@ -74,6 +94,62 @@ function ownerResolve(environment: Readonly<Record<string, string | undefined>>)
     return createResultError(op, "The current Unix user is unavailable.")
   }
   return createResult(owner)
+}
+
+async function cloudflareTokenRead(stdin: ReadableStream<Uint8Array> | undefined): Promise<Result<string>> {
+  const op = "projectRegistryCliCloudflareTokenRead"
+  if (stdin === undefined) return createResultError(op, cloudflareTokenInputError)
+
+  let reader: CloudflareTokenReader
+  try {
+    reader = stdin.getReader()
+  } catch {
+    return createResultError(op, cloudflareTokenInputError)
+  }
+  const chunks: Uint8Array[] = []
+  let totalBytes = 0
+  try {
+    while (true) {
+      const chunkR = await reader.read()
+      if (chunkR.done) break
+      totalBytes += chunkR.value.byteLength
+      if (totalBytes > maximumCloudflareTokenInputBytes) {
+        await reader.cancel()
+        return createResultError(op, cloudflareTokenInputError)
+      }
+      chunks.push(chunkR.value)
+    }
+  } catch {
+    return createResultError(op, cloudflareTokenInputError)
+  } finally {
+    reader.releaseLock()
+  }
+
+  const bytes = new Uint8Array(totalBytes)
+  let offset = 0
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset)
+    offset += chunk.byteLength
+  }
+
+  let token: string
+  try {
+    token = new TextDecoder("utf-8", { fatal: true }).decode(bytes)
+  } catch {
+    return createResultError(op, cloudflareTokenInputError)
+  }
+  if (token.endsWith("\r\n")) token = token.slice(0, -2)
+  else if (token.endsWith("\n")) token = token.slice(0, -1)
+  if (
+    token.length === 0 ||
+    token.trim() === "" ||
+    token.length > maximumCloudflareTokenLength ||
+    token.includes("\n") ||
+    token.includes("\r")
+  ) {
+    return createResultError(op, cloudflareTokenInputError)
+  }
+  return createResult(token)
 }
 
 function revisionParse(data: unknown): Result<string> {
@@ -204,6 +280,7 @@ async function commandRequest(
   socketPath: string,
   environment: Readonly<Record<string, string | undefined>>,
   requestFetch?: ProjectRegistryCliFetch,
+  stdin?: ReadableStream<Uint8Array>,
 ): Promise<Result<unknown> & { hint?: string }> {
   const command = invocation.command
   if (invocation.json && (command.kind === "project-list" || command.kind === "project-get")) {
@@ -220,7 +297,8 @@ async function commandRequest(
     command.kind !== "project-access-logs" &&
     command.kind !== "user-default-domain-get" &&
     command.kind !== "user-default-domain-set" &&
-    command.kind !== "user-default-domain-unset"
+    command.kind !== "user-default-domain-unset" &&
+    command.kind !== "user-cloudflare-token-set"
   ) {
     return projectRegistryCliRequest(socketPath, requestPath(invocation), {}, requestFetch)
   }
@@ -259,6 +337,17 @@ async function commandRequest(
       socketPath,
       path,
       { method: "DELETE", body: { expectedRevision: revisionR.data } },
+      requestFetch,
+    )
+  }
+
+  if (command.kind === "user-cloudflare-token-set") {
+    const tokenR = await cloudflareTokenRead(stdin)
+    if (!tokenR.success) return tokenR
+    return projectRegistryCliRequest(
+      socketPath,
+      `/api/v1/users/${ownerPath}/cloudflare-token`,
+      { method: "PUT", body: { token: tokenR.data } },
       requestFetch,
     )
   }
@@ -420,7 +509,9 @@ export async function projectRegistryCliRun(args: readonly string[], options: Cl
     errorWrite({ ...socketR, code: "cli.socket" }, invocation.json, writeError)
     return 1
   }
-  const responseR = await commandRequest(invocation, socketR.data, environment, options.requestFetch)
+  const stdin =
+    invocation.command.kind === "user-cloudflare-token-set" ? (options.stdin ?? Bun.stdin.stream()) : undefined
+  const responseR = await commandRequest(invocation, socketR.data, environment, options.requestFetch, stdin)
   if (!responseR.success) {
     errorWrite(responseR, invocation.json, writeError)
     return 1

@@ -42,6 +42,7 @@ describe("projectRegistryCliArgumentsParse", () => {
     [["user", "default-domain", "get"], { kind: "user-default-domain-get" }],
     [["user", "default-domain", "set", "Example.COM."], { kind: "user-default-domain-set", domain: "example.com" }],
     [["user", "default-domain", "unset"], { kind: "user-default-domain-unset" }],
+    [["user", "cloudflare-token", "set", "--token-stdin"], { kind: "user-cloudflare-token-set", tokenStdin: true }],
     [["--help"], { kind: "help" }],
     [["-V"], { kind: "version" }],
   ] as const)("parses %p", (args, command) => {
@@ -226,6 +227,14 @@ describe("projectRegistryCliArgumentsParse", () => {
       ["user", "default-domain", "unset", "example.com"],
       "Unknown command or invalid syntax: user default-domain unset example.com.",
     ],
+    [["user", "cloudflare-token", "set"], "Cloudflare token command arguments are invalid."],
+    [["user", "cloudflare-token", "set", "secret"], "Cloudflare token command arguments are invalid."],
+    [["user", "cloudflare-token", "set", "--token", "secret"], "Cloudflare token command arguments are invalid."],
+    [["user", "cloudflare-token", "set", "--token-stdin", "extra"], "Cloudflare token command arguments are invalid."],
+    [
+      ["user", "cloudflare-token", "set", "--token-stdin", "--token-stdin"],
+      "Option --token-stdin may only be provided once.",
+    ],
     [["status", "--socket"], "Option --socket requires a path."],
     [["status", "--json", "--json"], "Option --json may only be provided once."],
     [["--help", "--version"], "Options --help and --version cannot be combined."],
@@ -236,6 +245,26 @@ describe("projectRegistryCliArgumentsParse", () => {
     const result = projectRegistryCliArgumentsParse(args)
 
     expect(result).toMatchObject({ success: false, op: "projectRegistryCliArgumentsParse", errorMessage: message })
+  })
+
+  test("does not echo credential command arguments", () => {
+    const suppliedCases: readonly (readonly string[])[] = [
+      ["CLOUDFLARE_TOKEN_PLACEHOLDER_20260911"],
+      ["--token", "CLOUDFLARE_TOKEN_PLACEHOLDER_20260911"],
+      ["--token=CLOUDFLARE_TOKEN_PLACEHOLDER_20260911"],
+      ["--header-up", "CLOUDFLARE_TOKEN_PLACEHOLDER_20260911"],
+      ["--label=CLOUDFLARE_TOKEN_PLACEHOLDER_20260911"],
+    ]
+    for (const supplied of suppliedCases) {
+      const result = projectRegistryCliArgumentsParse(["user", "cloudflare-token", "set", ...supplied])
+
+      expect(result).toMatchObject({
+        success: false,
+        op: "projectRegistryCliArgumentsParse",
+        errorMessage: "Cloudflare token command arguments are invalid.",
+      })
+      expect(JSON.stringify(result)).not.toContain("CLOUDFLARE_TOKEN_PLACEHOLDER_20260911")
+    }
   })
 
   test.each([

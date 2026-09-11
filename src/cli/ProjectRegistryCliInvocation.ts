@@ -8,6 +8,7 @@ export type ProjectRegistryCliInvocation = {
     | { kind: "user-default-domain-get" }
     | { kind: "user-default-domain-set"; domain: string }
     | { kind: "user-default-domain-unset" }
+    | { kind: "user-cloudflare-token-set"; tokenStdin: true }
     | { kind: "project-list" }
     | { kind: "project-get"; name: string }
     | {

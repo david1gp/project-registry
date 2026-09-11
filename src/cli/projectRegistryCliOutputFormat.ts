@@ -59,6 +59,7 @@ const userDefaultDomainMutationSchema = a.looseObject({
     errorMessage: a.optional(a.string()),
   }),
 })
+const cloudflareTokenMutationSchema = a.object({ updated: a.literal(true) })
 const legacyDeleteSchema = a.object({ deleted: a.string() })
 const docsSchema = a.object({ urls: a.array(a.string()) })
 const regenerateSchema = a.looseObject({
@@ -154,6 +155,11 @@ export function projectRegistryCliOutputFormat(
     }
     parsedData = parsedR.data
   }
+  if (command.kind === "user-cloudflare-token-set") {
+    const parsedR = dataParse(cloudflareTokenMutationSchema, data, "Cloudflare token update")
+    if (!parsedR.success) return parsedR
+    parsedData = parsedR.data
+  }
   if (command.kind === "project-delete-by-port") {
     const parsedR = dataParse(legacyDeleteSchema, data, "project deletion")
     if (!parsedR.success) return parsedR
@@ -235,6 +241,7 @@ export function projectRegistryCliOutputFormat(
     if (!mutation.changed) return createResult(`unchanged ${mutation.owner}/default-domain\n`)
     return createResult(`${mutation.action} ${mutation.owner}/default-domain\n`)
   }
+  if (command.kind === "user-cloudflare-token-set") return createResult("updated cloudflare-token\n")
   if (command.kind === "project-delete-by-port") {
     const deleted = parsedData as a.InferOutput<typeof legacyDeleteSchema>
     return createResult(`deleted ${owner === undefined ? deleted.deleted : `${owner}/${deleted.deleted}`}\n`)

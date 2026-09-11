@@ -11,6 +11,7 @@ const ownerPattern = /^[A-Za-z_][A-Za-z0-9_.-]*\$?$/
 const serviceIdPattern = /^[a-z0-9][a-z0-9-]*$/
 const maximumAccessLogLimit = 1_000
 const maximumAccessLogCursorLength = 4_096
+const cloudflareTokenArgumentsError = "Cloudflare token command arguments are invalid."
 
 function positiveIntegerParse(value: string | undefined): number | undefined {
   if (value === undefined || !/^[1-9]\d*$/.test(value)) return undefined
@@ -48,6 +49,10 @@ function projectNameOptionError(op: string): Extract<Result<never>, { success: f
   }
 }
 
+function cloudflareTokenSetPositionalsMatch(positionals: readonly string[]): boolean {
+  return positionals[0] === "user" && positionals[1] === "cloudflare-token" && positionals[2] === "set"
+}
+
 export function projectRegistryCliArgumentsParse(args: readonly string[]): Result<ProjectRegistryCliInvocation> {
   const op = "projectRegistryCliArgumentsParse"
   const positionals: string[] = []
@@ -74,6 +79,7 @@ export function projectRegistryCliArgumentsParse(args: readonly string[]): Resul
   let version = false
   let hasLabels = false
   let clearLabels = false
+  let tokenStdin = false
 
   for (let index = 0; index < args.length; index += 1) {
     const argument = args[index]!
@@ -99,12 +105,14 @@ export function projectRegistryCliArgumentsParse(args: readonly string[]): Resul
       "--http",
       "--clear-labels",
       "--no-dns",
+      "--token-stdin",
     ]
     if (booleanNames.includes(argument)) {
       if (booleans.has(argument)) return createResultError(op, `Option ${argument} may only be provided once.`)
       booleans.add(argument)
       if (argument === "--clear-labels") clearLabels = true
       if (argument === "--no-dns") noDns = true
+      if (argument === "--token-stdin") tokenStdin = true
       continue
     }
 
@@ -215,6 +223,8 @@ export function projectRegistryCliArgumentsParse(args: readonly string[]): Resul
       }
       if (option === "--header-up") {
         if (value === undefined || !value.includes("=")) {
+          if (cloudflareTokenSetPositionalsMatch(positionals))
+            return createResultError(op, cloudflareTokenArgumentsError)
           return createResultError(
             op,
             `Option --header-up requires K=V${value === undefined ? "." : `, got: ${value}.`}`,
@@ -225,6 +235,8 @@ export function projectRegistryCliArgumentsParse(args: readonly string[]): Resul
       }
       if (option === "--label") {
         if (value === undefined || !value.includes("=")) {
+          if (cloudflareTokenSetPositionalsMatch(positionals))
+            return createResultError(op, cloudflareTokenArgumentsError)
           return createResultError(op, `Option --label requires K=V${value === undefined ? "." : `, got: ${value}.`}`)
         }
         const separator = value.indexOf("=")
@@ -251,7 +263,10 @@ export function projectRegistryCliArgumentsParse(args: readonly string[]): Resul
       continue
     }
 
-    if (argument.startsWith("-")) return createResultError(op, `Unknown option: ${argument}.`)
+    if (argument.startsWith("-")) {
+      if (cloudflareTokenSetPositionalsMatch(positionals)) return createResultError(op, cloudflareTokenArgumentsError)
+      return createResultError(op, `Unknown option: ${argument}.`)
+    }
     positionals.push(argument)
   }
 
@@ -297,7 +312,7 @@ export function projectRegistryCliArgumentsParse(args: readonly string[]): Resul
   const hasOnlyPortOption = port !== undefined && Object.keys(caddy).length === 1
   const hasLabelOptions = hasLabels || removeLabels.length > 0 || clearLabels
   const hasMutationOptions =
-    hasCaddyOptions || flagName !== undefined || service !== undefined || noDns || hasLabelOptions
+    hasCaddyOptions || flagName !== undefined || service !== undefined || noDns || hasLabelOptions || tokenStdin
   const hasAccessLogOptions = owner !== undefined || before !== undefined
   const hasHttp = booleans.has("--http")
 
@@ -361,6 +376,23 @@ export function projectRegistryCliArgumentsParse(args: readonly string[]): Resul
     !hasHttp
   ) {
     return createResult({ command: { kind: "user-default-domain-unset" }, json, socket })
+  }
+  if (
+    subject === "user" &&
+    action === "cloudflare-token" &&
+    value === "set" &&
+    extra.length === 0 &&
+    tokenStdin &&
+    limit === undefined &&
+    !hasCaddyOptions &&
+    flagName === undefined &&
+    service === undefined &&
+    !noDns &&
+    !hasLabelOptions &&
+    !hasAccessLogOptions &&
+    !hasHttp
+  ) {
+    return createResult({ command: { kind: "user-cloudflare-token-set", tokenStdin: true }, json, socket })
   }
   if (
     subject === "project" &&
@@ -538,5 +570,6 @@ export function projectRegistryCliArgumentsParse(args: readonly string[]): Resul
   ) {
     return createResult({ command: { kind: "status" }, json, socket })
   }
+  if (cloudflareTokenSetPositionalsMatch(positionals)) return createResultError(op, cloudflareTokenArgumentsError)
   return createResultError(op, `Unknown command or invalid syntax: ${positionals.join(" ")}.`)
 }

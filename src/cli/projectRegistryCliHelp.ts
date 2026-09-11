@@ -19,6 +19,7 @@ Commands:
   user default-domain get
   user default-domain set <domain>
   user default-domain unset
+  user cloudflare-token set --token-stdin
 
 Project create/edit options:
   --port <port>              Upstream port (create allocates one when omitted)
@@ -39,6 +40,10 @@ Project create/edit options:
   --remove-label <KEY>       Remove a project label; repeat (edit only)
   --clear-labels              Clear all project labels (edit only)
   --flush-interval <number>  Reverse proxy flush interval (-1 for immediate)
+
+Cloudflare credentials:
+  user cloudflare-token set --token-stdin
+                              Read one token line from stdin; never pass it as an argument
 
 Project names:
   Start with a lowercase letter or digit; use only lowercase letters, digits, and hyphens.
