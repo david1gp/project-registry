@@ -62,6 +62,7 @@ describe("projectMigrate", () => {
       id: "default",
       units: ["catalog.service", "worker@preview.service"],
       caddy: legacyCaddy,
+      ownership: "registry",
     })
     expect(Object.hasOwn(result.data, "caddy")).toBe(false)
   })
@@ -101,7 +102,7 @@ describe("projectMigrate", () => {
       name: "catalog",
       labels: { team: "platform" },
       services: [
-        { id: "api", units: ["api.service"], caddy: { port: 3000, domains: ["api.example"] } },
+        { id: "api", units: ["api.service"], ownership: "external", caddy: { port: 3000, domains: ["api.example"] } },
         { id: "assets", units: [], caddy: { port: 3001, domains: ["assets.example"], kind: "static" as const } },
       ],
     }
@@ -127,6 +128,8 @@ describe("projectMigrate", () => {
         ],
       },
     })
+    if (result.success)
+      expect(result.data.services.map((service) => service.ownership)).toEqual(["external", "registry"])
     expect(mixed.success).toBe(false)
   })
 
@@ -143,6 +146,6 @@ describe("projectMigrate", () => {
     if (!result.success) return
     const serialized = JSON.parse(result.data) as Record<string, unknown>
     expect(serialized.caddy).toBeUndefined()
-    expect(serialized.services).toEqual([{ id: "default", units: [], caddy: legacyCaddy }])
+    expect(serialized.services).toEqual([{ id: "default", units: [], caddy: legacyCaddy, ownership: "registry" }])
   })
 })

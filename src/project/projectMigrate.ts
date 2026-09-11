@@ -6,6 +6,16 @@ import { projectSchema } from "./projectSchema.js"
 
 const legacyServiceId = "default"
 
+function projectCanonicalOwnershipNormalize(project: ProjectCanonical): ProjectCanonical {
+  return {
+    ...project,
+    services: project.services.map((service) => ({
+      ...service,
+      ownership: service.ownership ?? "registry",
+    })),
+  }
+}
+
 function projectCanonicalFromLegacy(project: Project): ProjectCanonical {
   const { caddy, services, ...metadata } = project
   const hasService = services.length > 0 || (caddy !== undefined && caddy !== null)
@@ -18,6 +28,7 @@ function projectCanonicalFromLegacy(project: Project): ProjectCanonical {
             id: legacyServiceId,
             units: services,
             caddy: caddy ?? null,
+            ownership: "registry",
           },
         ]
       : [],
@@ -27,7 +38,7 @@ function projectCanonicalFromLegacy(project: Project): ProjectCanonical {
 export function projectMigrate(input: unknown): Result<ProjectCanonical> {
   const op = "projectMigrate"
   const canonical = a.safeParse(projectCanonicalSchema, input)
-  if (canonical.success) return createResult(canonical.output)
+  if (canonical.success) return createResult(projectCanonicalOwnershipNormalize(canonical.output))
 
   const legacy = a.safeParse(projectSchema, input)
   if (!legacy.success) return createResultErrorCode(op, a.summarize(legacy.issues), "request.invalid")

@@ -62,10 +62,26 @@ function projectEditCanonicalPatch(input: Record<string, unknown>): Record<strin
   return patch
 }
 
+function projectEditCanonicalServiceOwnershipPreserve(
+  existing: ProjectCanonical,
+  patch: Record<string, unknown>,
+): Record<string, unknown> {
+  if (!Array.isArray(patch.services)) return patch
+  const existingServices = new Map(existing.services.map((service) => [service.id, service]))
+  patch.services = patch.services.map((service) => {
+    if (service === null || typeof service !== "object" || Array.isArray(service)) return service
+    const serviceRecord = service as Record<string, unknown>
+    if (Object.hasOwn(serviceRecord, "ownership") || typeof serviceRecord.id !== "string") return service
+    const existingService = existingServices.get(serviceRecord.id)
+    return existingService === undefined ? service : { ...serviceRecord, ownership: existingService.ownership }
+  })
+  return patch
+}
+
 function projectEditCanonicalInput(existing: ProjectCanonical, input: unknown): unknown {
   if (!input || typeof input !== "object" || Array.isArray(input)) return input
   const rawPatch = input as Record<string, unknown>
-  const patch = projectEditCanonicalPatch(rawPatch)
+  const patch = projectEditCanonicalServiceOwnershipPreserve(existing, projectEditCanonicalPatch(rawPatch))
   const services = patch.services
   const isCanonicalPatch =
     patch.schemaVersion === 2 ||

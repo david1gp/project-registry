@@ -1,6 +1,7 @@
 import * as a from "valibot"
 import { createResult, createResultError, type Result } from "#result"
 import { projectLabelsSchema } from "../project/projectLabelsSchema.js"
+import { projectServiceOwnershipSchema } from "../project/projectServiceOwnershipSchema.js"
 import { projectRegistryVersion } from "../projectRegistryVersion.js"
 import type { ProjectRegistryCliInvocation } from "./ProjectRegistryCliInvocation.js"
 
@@ -8,6 +9,7 @@ const projectSchema = a.looseObject({
   name: a.string(),
   user: a.string(),
   service: a.optional(a.string()),
+  ownership: a.optional(projectServiceOwnershipSchema, "registry"),
   port: a.optional(a.number()),
   domains: a.array(a.string()),
   kind: a.picklist(["proxy", "static"]),

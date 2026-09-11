@@ -15,6 +15,7 @@ function project(domains: string[], disabled = false, owner = "leo", name = "dns
       {
         id: "default",
         units: [],
+        ownership: "registry",
         caddy: {
           port: 4300,
           domains,

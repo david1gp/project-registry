@@ -24,13 +24,15 @@ export function projectCanonicalNormalize(
   if (record?.schemaVersion === 2) {
     const parsed = a.safeParse(projectCanonicalSchema, canonicalInput(input))
     if (!parsed.success) return createResultErrorCode(op, a.summarize(parsed.issues), "request.invalid")
+    const migrated = projectMigrate(parsed.output)
+    if (!migrated.success) return { ...migrated, op }
     const collisions = projectCollisions(options.projects ?? [], {
       excludeKey: options.excludeKey,
       excludeProject: options.excludeProject,
-      replacement: parsed.output,
+      replacement: migrated.data,
     })
     if (!collisions.success) return { ...collisions, op }
-    return createResult(parsed.output)
+    return createResult(migrated.data)
   }
 
   const legacyR = projectNormalize(input, options)

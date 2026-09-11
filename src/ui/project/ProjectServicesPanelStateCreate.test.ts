@@ -20,8 +20,8 @@ const caddy: NonNullable<ProjectServicesService["caddy"]> = {
 }
 
 const services: ProjectServicesService[] = [
-  { id: "default", units: [], caddy: { ...caddy } },
-  { id: "api", units: [], caddy: { ...caddy, port: 3001, domains: ["api.example"] } },
+  { id: "default", units: [], ownership: "registry", caddy: { ...caddy } },
+  { id: "api", units: [], ownership: "external", caddy: { ...caddy, port: 3001, domains: ["api.example"] } },
 ]
 
 function project(): ProjectServices {
@@ -87,6 +87,7 @@ describe("projectServicesPanelStateCreate", () => {
         state.editorOpen("api")
         expect(searchParams.values.get("service")).toBe("api")
         expect(state.draft()?.port).toBe("3001")
+        expect(state.draft()?.ownership).toBe("external")
 
         state.draftFieldSet("port", "3009")
         state.save()
@@ -97,6 +98,7 @@ describe("projectServicesPanelStateCreate", () => {
         const saved = (patches[0] as { services: ProjectServicesService[] }).services
         expect(saved[0]?.caddy?.port).toBe(3000)
         expect(saved[1]?.caddy?.port).toBe(3009)
+        expect(saved[1]?.ownership).toBe("external")
         expect(state.revision()).toBe("r2")
         expect(searchParams.values.has("service")).toBe(false)
         dispose()

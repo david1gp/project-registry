@@ -526,7 +526,13 @@ describe("projectRegistryApiHandlerCreate", () => {
         owner: "leo",
         name: "new-app",
         labels: {},
-        services: [expect.objectContaining({ id: "default", caddy: expect.objectContaining({ port: 4101 }) })],
+        services: [
+          expect.objectContaining({
+            id: "default",
+            ownership: "registry",
+            caddy: expect.objectContaining({ port: 4101 }),
+          }),
+        ],
       }),
     )
 
@@ -609,6 +615,7 @@ describe("projectRegistryApiHandlerCreate", () => {
       {
         id: "api",
         units: ["api.service"],
+        ownership: "external",
         caddy: {
           port: 4200,
           domains: ["api.example"],
@@ -623,7 +630,7 @@ describe("projectRegistryApiHandlerCreate", () => {
           spa: false,
         },
       },
-      { id: "worker", units: ["worker.service"], caddy: null },
+      { id: "worker", units: ["worker.service"], caddy: null, ownership: "registry" },
     ]
 
     const created = await requestJson(handler, "/api/v1/users/leo/projects", leo, "POST", {
@@ -641,6 +648,26 @@ describe("projectRegistryApiHandlerCreate", () => {
       expectedRevision: nextRevision,
       schemaVersion: 2,
       description: "updated",
+      services: [
+        {
+          id: "api",
+          units: ["api.service"],
+          caddy: {
+            port: 4200,
+            domains: ["api.example"],
+            path: "",
+            access: "external",
+            kind: "proxy",
+            docs: true,
+            browse: false,
+            headerUp: {},
+            disabled: false,
+            denyDotfiles: false,
+            spa: false,
+          },
+        },
+        { id: "worker", units: ["worker.service"], caddy: null },
+      ],
     })
     expect(patched.response.status).toBe(200)
 
@@ -651,6 +678,9 @@ describe("projectRegistryApiHandlerCreate", () => {
         project: { schemaVersion: 2, description: "updated", services },
       },
     })
+    const gotProject = (got.body as { data?: { project?: { services?: Array<{ ownership?: string }> } } }).data?.project
+    expect(gotProject?.services?.[0]?.ownership).toBe("external")
+    expect(gotProject?.services?.[1]?.ownership).toBe("registry")
 
     const listed = await requestJson(handler, "/api/v1/users/leo/projects", leo)
     expect(listed.body).toMatchObject({

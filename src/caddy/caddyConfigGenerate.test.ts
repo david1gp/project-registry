@@ -73,6 +73,33 @@ describe("caddyConfigGenerate", () => {
     ])
   })
 
+  test("omits externally owned canonical services from Caddy routes", () => {
+    const result = caddyConfigGenerate([
+      {
+        schemaVersion: 2,
+        owner: "leo",
+        name: "mixed-services",
+        services: [
+          {
+            id: "api",
+            ownership: "external",
+            caddy: { port: 4100, domains: ["api.example"], docs: false },
+          },
+          {
+            id: "web",
+            ownership: "registry",
+            caddy: { port: 4101, domains: ["web.example"], docs: false },
+          },
+        ],
+      },
+    ])
+
+    expect(result.success).toBe(true)
+    if (!result.success) return
+    expect(routesOf(result.data).map(hostOf)).toEqual([["web.example"]])
+    expect(JSON.stringify(result.data)).not.toContain("api.example")
+  })
+
   test("rejects active domain collisions between canonical sibling services", () => {
     const result = caddyConfigGenerate([
       {

@@ -3,7 +3,7 @@ import { createResult, createResultError, type Result } from "#result"
 import { projectAccessLogCaddyRetention } from "../access-log/projectAccessLogCaddyRetention.js"
 import { projectAccessLogId } from "../access-log/projectAccessLogId.js"
 import { projectAccessLogPath } from "../access-log/projectAccessLogPath.js"
-import { projectCaddyEntries } from "../project/projectCaddyEntries.js"
+import { projectLocalCaddyEntries } from "../project/projectLocalCaddyEntries.js"
 import type { ProjectCaddy } from "../project/projectCaddySchema.js"
 import type { ProjectCanonical } from "../project/projectCanonicalSchema.js"
 import { projectMigrate } from "../project/projectMigrate.js"
@@ -34,7 +34,7 @@ function projectsParse(projects: unknown): Result<CaddyProject[]> {
 }
 
 function projectRoutes(project: CaddyProject): CaddyProjectRoute[] {
-  return projectCaddyEntries(project).map((entry) => ({ project, serviceId: entry.serviceId, caddy: entry.caddy }))
+  return projectLocalCaddyEntries(project).map((entry) => ({ project, serviceId: entry.serviceId, caddy: entry.caddy }))
 }
 
 function stringCompare(left: string, right: string): number {

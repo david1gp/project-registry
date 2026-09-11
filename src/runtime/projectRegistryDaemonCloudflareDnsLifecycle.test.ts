@@ -30,6 +30,37 @@ function project(name: string, domains: string[], owner = "leo"): Project {
   }
 }
 
+function canonicalProject(name: string, ownership: "registry" | "external", owner = "leo"): Project {
+  return {
+    schemaVersion: 2,
+    owner,
+    name,
+    type: "customer",
+    order: 0,
+    services: [
+      {
+        id: "default",
+        units: [],
+        ownership,
+        caddy: {
+          port: 4300,
+          domains: [`${name}.example.com`],
+          path: "/srv/app",
+          access: "external",
+          kind: "proxy",
+          docs: true,
+          browse: false,
+          headerUp: {},
+          disabled: false,
+          denyDotfiles: false,
+          spa: false,
+        },
+      },
+    ],
+    labels: {},
+  }
+}
+
 function timerCreate(): {
   timer: { setInterval(callback: () => void, delayMs: number): unknown; clearInterval(handle: unknown): void }
   tick(): void
@@ -436,6 +467,92 @@ describe("projectRegistryDaemonCloudflareDns lifecycle", () => {
     expect(stored.state).toEqual(initial)
     expect(records.size).toBe(1)
     expect(owners).toEqual([])
+    expect(calls).toEqual([])
+    await queueR.data.shutdown()
+  })
+
+  test("relinquishes registry DNS on external transition and reacquires it when restored", async () => {
+    const timer = timerCreate()
+    const records = new Map<
+      string,
+      { id: string; name: string; type: string; content: string; ttl: number; proxied: boolean }
+    >()
+    const calls: string[] = []
+    const stored = trackingCreate({ version: 1, records: [] })
+    let projects: Project[] = []
+    const queueR = projectRegistryDaemonCloudflareDnsCreate({
+      enabled: true,
+      credentialResolve: async () => createResult("token"),
+      timeoutMs: 1000,
+      serverIpCurrent: () => "203.0.113.10",
+      timer: timer.timer,
+      tracking: stored.tracking,
+      repositoryProjectsCurrent: async () => createResult(projects),
+      fetch: fetchCreate(records, calls),
+    })
+    expect(queueR.success).toBe(true)
+    if (!queueR.success) return
+    queueR.data.start()
+
+    const registry = canonicalProject("app", "registry")
+    projects = [registry]
+    queueR.data.projectCreateAfterPersistence(registry, { noDns: false })
+    await settle()
+    expect(records.size).toBe(1)
+    const callsAfterCreate = calls.length
+
+    const external = canonicalProject("app", "external")
+    projects = [external]
+    queueR.data.projectEditAfterPersistence(registry, external)
+    await settle()
+    expect(records.size).toBe(1)
+    expect(stored.state.records).toEqual([])
+    expect(calls.slice(callsAfterCreate).some((call) => call.startsWith("DELETE "))).toBe(false)
+
+    timer.tick()
+    await settle()
+    expect(calls.slice(callsAfterCreate).some((call) => call.includes("/dns_records"))).toBe(false)
+
+    const restored = canonicalProject("app", "registry")
+    const externalRecord = records.get("record-1")
+    if (externalRecord !== undefined) externalRecord.content = "198.51.100.20"
+    projects = [restored]
+    queueR.data.projectEditAfterPersistence(external, restored)
+    await settle()
+    expect(calls.some((call) => call.startsWith("PUT "))).toBe(true)
+    expect(stored.state.records).toHaveLength(1)
+
+    projects = []
+    queueR.data.projectDeleteAfterPersistence(restored)
+    await settle()
+    expect(records.size).toBe(0)
+    await queueR.data.shutdown()
+  })
+
+  test("does not reconcile externally owned services on create or recurring scans", async () => {
+    const timer = timerCreate()
+    const calls: string[] = []
+    let projects: Project[] = []
+    const external = canonicalProject("pages", "external")
+    const queueR = projectRegistryDaemonCloudflareDnsCreate({
+      enabled: true,
+      credentialResolve: async () => createResult("token"),
+      timeoutMs: 1000,
+      serverIpCurrent: () => "203.0.113.10",
+      timer: timer.timer,
+      repositoryProjectsCurrent: async () => createResult(projects),
+      fetch: fetchCreate(new Map(), calls),
+    })
+    expect(queueR.success).toBe(true)
+    if (!queueR.success) return
+    queueR.data.start()
+    projects = [external]
+    queueR.data.projectCreateAfterPersistence(external, { noDns: false })
+    await settle()
+    expect(calls).toEqual([])
+
+    timer.tick()
+    await settle()
     expect(calls).toEqual([])
     await queueR.data.shutdown()
   })

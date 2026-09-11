@@ -32,10 +32,12 @@ function canonicalService(
   port: number,
   domain: string,
   disabled = false,
+  ownership: "registry" | "external" = "registry",
 ): ProjectCanonical["services"][number] {
   return {
     id,
     units: [],
+    ownership,
     caddy: {
       port,
       domains: [domain],
@@ -161,6 +163,22 @@ describe("projectCollisions", () => {
     if (result.success) return
     expect(result.errorMessage).toContain("active domain collision")
     expect(result.errorMessage).not.toContain("disabled")
+  })
+
+  test("does not reserve external ports but still rejects duplicate domain metadata", () => {
+    const portOnly = projectCollisions([
+      canonicalProject("alice", "external", [canonicalService("api", 3000, "external.example", false, "external")]),
+      canonicalProject("bob", "local", [canonicalService("web", 3000, "local.example")]),
+    ])
+    expect(portOnly.success).toBe(true)
+
+    const domainDuplicate = projectCollisions([
+      canonicalProject("alice", "external", [canonicalService("api", 3001, "shared.example", false, "external")]),
+      canonicalProject("bob", "local", [canonicalService("web", 3000, "shared.example")]),
+    ])
+    expect(domainDuplicate.success).toBe(false)
+    if (domainDuplicate.success) return
+    expect(domainDuplicate.errorMessage).toContain("active domain collision")
   })
 
   test("validates canonical replacements against all active services", () => {

@@ -18,8 +18,13 @@ const caddy: NonNullable<ProjectServicesService["caddy"]> = {
 }
 
 const services: ProjectServicesService[] = [
-  { id: "default", units: [], caddy: { ...caddy } },
-  { id: "api", units: ["api.service"], caddy: { ...caddy, port: 3001, domains: ["api.example"] } },
+  { id: "default", units: [], ownership: "registry", caddy: { ...caddy } },
+  {
+    id: "api",
+    units: ["api.service"],
+    ownership: "external",
+    caddy: { ...caddy, port: 3001, domains: ["api.example"] },
+  },
 ]
 
 describe("projectServiceDraftApply", () => {
@@ -39,6 +44,7 @@ describe("projectServiceDraftApply", () => {
       domains: ["api2.example", "api.example"],
       headerUp: { Host: "localhost" },
     })
+    expect(result.data[1]?.ownership).toBe("external")
   })
 
   test("appends a new service when the drafted ID is unknown", () => {
@@ -49,6 +55,15 @@ describe("projectServiceDraftApply", () => {
     if (!result.success) return
     expect(result.data).toHaveLength(3)
     expect(result.data[2]).toMatchObject({ id: "docs", units: [], caddy: { port: 3010, domains: ["docs.example"] } })
+    expect(result.data[2]?.ownership).toBe("registry")
+  })
+
+  test("preserves an existing external ownership when a legacy draft omits it", () => {
+    const draft = { ...projectServiceDraftFrom(services[1], "api") }
+    delete (draft as { ownership?: string }).ownership
+    const result = projectServiceDraftApply(services, draft)
+
+    expect(result).toMatchObject({ success: true, data: [{ id: "default" }, { id: "api", ownership: "external" }] })
   })
 
   test.each([

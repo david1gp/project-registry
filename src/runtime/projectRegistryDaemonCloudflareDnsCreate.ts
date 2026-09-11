@@ -5,9 +5,10 @@ import type { CloudflareDnsTrackedRecord } from "../cloudflare/CloudflareDnsTrac
 import { cloudflareDnsDeleteById } from "../cloudflare/cloudflareDnsDeleteById.js"
 import { cloudflareDnsReconcile } from "../cloudflare/cloudflareDnsReconcile.js"
 import type { Project } from "../project/Project.js"
-import { projectCaddyEntries } from "../project/projectCaddyEntries.js"
 import { projectDomainNormalize } from "../project/projectDomainNormalize.js"
+import { projectLocalCaddyEntries } from "../project/projectLocalCaddyEntries.js"
 import type { ProjectKey } from "../project/projectKey.js"
+import type { ProjectService } from "../project/projectServiceSchema.js"
 import type { ProjectRegistryDaemonCloudflareDnsTracking } from "./ProjectRegistryDaemonCloudflareDnsTracking.js"
 import type { ProjectRegistryDaemonCloudflareDnsTrackingState } from "./ProjectRegistryDaemonCloudflareDnsTrackingState.js"
 
@@ -47,9 +48,23 @@ function recordDomainEqual(record: CloudflareDnsTrackedRecord, hostname: string)
 
 function hostnames(project: Project): string[] {
   const values = new Set<string>()
-  for (const entry of projectCaddyEntries(project)) {
+  for (const entry of projectLocalCaddyEntries(project)) {
     if (entry.caddy.disabled) continue
     for (const domain of entry.caddy.domains) {
+      const normalized = projectDomainNormalize(domain)
+      if (normalized !== "") values.add(normalized)
+    }
+  }
+  return [...values]
+}
+
+function externalHostnames(project: Project): string[] {
+  if (project.schemaVersion !== 2) return []
+
+  const values = new Set<string>()
+  for (const service of project.services as readonly ProjectService[]) {
+    if (service.ownership !== "external" || service.caddy === null) continue
+    for (const domain of service.caddy.domains) {
       const normalized = projectDomainNormalize(domain)
       if (normalized !== "") values.add(normalized)
     }
@@ -63,6 +78,21 @@ function projectKeysForHostname(projects: ProjectSnapshot, hostname: string): Pr
   const seen = new Set<string>()
   for (const project of projects) {
     if (!hostnames(project).includes(hostname)) continue
+    const key = { owner: project.owner, name: project.name }
+    const value = projectKeyValue(key)
+    if (seen.has(value)) continue
+    seen.add(value)
+    keys.push(key)
+  }
+  return keys
+}
+
+function projectKeysForExternalHostname(projects: ProjectSnapshot, hostname: string): ProjectKey[] {
+  if (projects === undefined) return []
+  const keys: ProjectKey[] = []
+  const seen = new Set<string>()
+  for (const project of projects) {
+    if (!externalHostnames(project).includes(hostname)) continue
     const key = { owner: project.owner, name: project.name }
     const value = projectKeyValue(key)
     if (seen.has(value)) continue
@@ -260,7 +290,13 @@ export function projectRegistryDaemonCloudflareDnsCreate(options: {
   function intervalEnsure(): void {
     if (!active || stopped || intervalHandle !== undefined) return
     try {
-      intervalHandle = options.timer.setInterval(() => drainSchedule(true), reconcileIntervalMs)
+      intervalHandle = options.timer.setInterval(() => {
+        if (options.repositoryProjectsCurrent === undefined) {
+          drainSchedule(true)
+          return
+        }
+        void recurringReconcile()
+      }, reconcileIntervalMs)
     } catch {
       log("cloudflare DNS timer setup failed")
     }
@@ -288,6 +324,22 @@ export function projectRegistryDaemonCloudflareDnsCreate(options: {
       log("cloudflare DNS repository snapshot outcome=failure reason=unexpected-error")
       return createResultError("projectRegistryDaemonCloudflareDnsSnapshot", "repository snapshot failed")
     }
+  }
+
+  async function recurringReconcile(): Promise<void> {
+    if (!active || !started || stopped) return
+    const projectsR = await currentProjects()
+    if (!projectsR.success || projectsR.data === undefined) {
+      drainSchedule(true)
+      return
+    }
+
+    for (const project of projectsR.data) {
+      const key = projectKeyValue(project)
+      desiredProjects.set(key, project)
+      pendingProjects.set(key, { attempts: 0, nextAt: 0, sequence: nextSequence++ })
+    }
+    drainSchedule(true)
   }
 
   async function trackingStateWrite(next: ProjectRegistryDaemonCloudflareDnsTrackingState): Promise<boolean> {
@@ -343,7 +395,14 @@ export function projectRegistryDaemonCloudflareDnsCreate(options: {
     const deletionOwners = new Map<string, ProjectKey[]>()
     let changed = false
     for (const record of next.records) {
-      const projectKeys = projectKeysForHostname(projects, projectDomainNormalize(record.name))
+      const hostname = projectDomainNormalize(record.name)
+      const projectKeys = projectKeysForHostname(projects, hostname)
+      const externalProjectKeys = projectKeysForExternalHostname(projects, hostname)
+      if (projectKeys.length === 0 && externalProjectKeys.length > 0) {
+        next.records = next.records.filter((entry) => recordKeyValue(entry) !== recordKeyValue(record))
+        changed = true
+        continue
+      }
       if (projectKeysEqual(record.projectKeys, projectKeys)) continue
       if (projectKeys.length === 0 && record.projectKeys.length === 1) {
         deletionOwners.set(
@@ -385,6 +444,14 @@ export function projectRegistryDaemonCloudflareDnsCreate(options: {
     if (current === undefined) return true
     current.projectKeys = projectKeys.map((project) => ({ ...project }))
     return trackingStateWrite(next)
+  }
+
+  async function trackingRecordRelease(record: CloudflareDnsTrackedRecord): Promise<boolean> {
+    const next = stateCopy(state)
+    next.records = next.records.filter((entry) => recordKeyValue(entry) !== recordKeyValue(record))
+    const written = await trackingStateWrite(next)
+    if (written) deletionPendingClear(recordKeyValue(record))
+    return written
   }
 
   function currentOwners(
@@ -471,6 +538,14 @@ export function projectRegistryDaemonCloudflareDnsCreate(options: {
     for (const record of recordsToRemove) {
       if (stopped) return "done"
       const owners = currentOwners(record, key, projects)
+      if (projectKeysForExternalHostname(projects, projectDomainNormalize(record.name)).length > 0) {
+        if (owners.length === 0) {
+          if (!(await trackingRecordRelease(record))) return "failed"
+        } else if (!(await trackingRecordOwnersSet(record, owners))) {
+          return "failed"
+        }
+        continue
+      }
       if (owners.length === 0) {
         deletionSchedule(recordKeyValue(record), record.projectKeys)
         if (pendingDeletions.has(recordKeyValue(record)) && pendingDue(pendingDeletions.get(recordKeyValue(record))!)) {
@@ -703,6 +778,10 @@ export function projectRegistryDaemonCloudflareDnsCreate(options: {
     started = true
     startupPromise = Promise.resolve()
       .then(trackingStateInitialize)
+      .then(async () => {
+        if (startupRetry !== undefined || trackingBlocked || stopped) return
+        await recurringReconcile()
+      })
       .catch(() => {
         trackingBlocked = true
         log("cloudflare DNS tracking outcome=failure operation=startup reason=unexpected-error")

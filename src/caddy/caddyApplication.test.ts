@@ -551,11 +551,13 @@ describe("caddyApplication", () => {
         {
           id: "api",
           units: ["multi-api.service"],
+          ownership: "registry",
           caddy: { ...caddyConfigGenerateFixtures.proxy.caddy, port: 4100, domains: ["api.example"], docs: false },
         },
         {
           id: "assets",
           units: ["multi-assets.service"],
+          ownership: "registry",
           caddy: {
             ...caddyConfigGenerateFixtures.static.caddy,
             port: 4101,

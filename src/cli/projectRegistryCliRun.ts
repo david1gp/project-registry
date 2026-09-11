@@ -2,7 +2,7 @@ import { basename, resolve } from "node:path"
 import * as a from "valibot"
 import { createResult, createResultError, type Result, type ResultErr } from "#result"
 import type { Project } from "../project/Project.js"
-import { projectCaddyEntries } from "../project/projectCaddyEntries.js"
+import { projectLocalCaddyEntries } from "../project/projectLocalCaddyEntries.js"
 import { type ProjectCanonical, projectCanonicalSchema } from "../project/projectCanonicalSchema.js"
 import { projectLabelsSchema } from "../project/projectLabelsSchema.js"
 import { projectMigrate } from "../project/projectMigrate.js"
@@ -227,7 +227,7 @@ function projectCreateDefaultsCollision(
   return projects.some((project) => {
     if (command.name === undefined && project.name === name) return true
     if (command.caddy.path !== undefined) return false
-    return projectCaddyEntries(project).some(
+    return projectLocalCaddyEntries(project).some(
       (entry) => entry.caddy.path !== undefined && entry.caddy.path !== "" && resolve(entry.caddy.path) === path,
     )
   })
@@ -421,7 +421,17 @@ async function commandRequest(
         name: defaults.name,
         ...(command.service === undefined
           ? { caddy: defaults.caddy }
-          : { schemaVersion: 2, services: [{ id: command.service, units: [], caddy: defaults.caddy }] }),
+          : {
+              schemaVersion: 2,
+              services: [
+                {
+                  id: command.service,
+                  units: [],
+                  caddy: defaults.caddy,
+                  ownership: command.ownership ?? "registry",
+                },
+              ],
+            }),
         ...(command.noDns === true ? { noDns: true } : {}),
         ...(command.labels === undefined ? {} : { labels: command.labels }),
       },
@@ -432,7 +442,12 @@ async function commandRequest(
       const projectResponse = recordValue(currentR.data)
       const canonicalR = projectCanonicalParse(projectResponse?.project, "projectRegistryCliProjectResponseParse")
       if (!canonicalR.success) return canonicalR
-      const servicesR = projectServicesPatchApply(canonicalR.data.services, command.service, command.caddy)
+      const servicesR = projectServicesPatchApply(
+        canonicalR.data.services,
+        command.service,
+        command.caddy,
+        command.ownership,
+      )
       if (!servicesR.success) {
         return { ...servicesR, hint: "Run 'project-registry project get <name> --json' to list existing services." }
       }

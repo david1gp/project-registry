@@ -1,3 +1,4 @@
+import type { ProjectServiceOwnership } from "../project/projectServiceOwnershipSchema.js"
 import type { ProjectRegistryCliCaddyOptions } from "./ProjectRegistryCliCaddyOptions.js"
 
 export type ProjectRegistryCliInvocation = {
@@ -15,6 +16,7 @@ export type ProjectRegistryCliInvocation = {
         kind: "project-create"
         name?: string
         service?: string
+        ownership?: ProjectServiceOwnership
         noDns?: boolean
         caddy: ProjectRegistryCliCaddyOptions
         labels?: Record<string, string>
@@ -23,6 +25,7 @@ export type ProjectRegistryCliInvocation = {
         kind: "project-edit"
         name: string
         service?: string
+        ownership?: ProjectServiceOwnership
         caddy: ProjectRegistryCliCaddyOptions
         labels?: Record<string, string>
         removeLabels?: string[]

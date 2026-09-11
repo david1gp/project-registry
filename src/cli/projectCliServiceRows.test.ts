@@ -33,8 +33,13 @@ describe("projectCliServiceRows", () => {
   test("emits one row per service with its own stable ID, port, and domains", () => {
     const rows = projectCliServiceRows(
       project([
-        { id: "default", units: [], caddy: { ...caddy } },
-        { id: "api", units: ["app-api.service"], caddy: { ...caddy, port: 3001, domains: ["api.example"] } },
+        { id: "default", units: [], ownership: "registry", caddy: { ...caddy } },
+        {
+          id: "api",
+          units: ["app-api.service"],
+          ownership: "external",
+          caddy: { ...caddy, port: 3001, domains: ["api.example"] },
+        },
       ]),
     )
 
@@ -43,12 +48,15 @@ describe("projectCliServiceRows", () => {
       ["default", 3000, ["app.example"]],
       ["api", 3001, ["api.example"]],
     ])
+    expect(rows.map((row) => row.ownership)).toEqual(["registry", "external"])
     expect(rows[1]?.units).toEqual(["app-api.service"])
     expect(rows.every((row) => row.name === "app" && row.user === "leo")).toBe(true)
   })
 
   test("keeps a service row for a service without Caddy configuration", () => {
-    const rows = projectCliServiceRows(project([{ id: "worker", units: ["w.service"], caddy: null }]))
+    const rows = projectCliServiceRows(
+      project([{ id: "worker", units: ["w.service"], ownership: "registry", caddy: null }]),
+    )
 
     expect(rows).toEqual([expect.objectContaining({ service: "worker", port: undefined, domains: [], disabled: true })])
   })

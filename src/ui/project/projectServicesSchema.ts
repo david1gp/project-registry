@@ -1,4 +1,5 @@
 import * as v from "valibot"
+import { projectServiceOwnershipSchema } from "../../project/projectServiceOwnershipSchema.js"
 
 const projectServiceCaddySchema = v.object({
   port: v.pipe(v.number(), v.integer(), v.minValue(1), v.maxValue(65535)),
@@ -21,6 +22,7 @@ const projectServiceSchema = v.object({
   id: v.string(),
   units: v.optional(v.array(v.string()), []),
   caddy: v.optional(v.nullable(projectServiceCaddySchema), null),
+  ownership: v.optional(projectServiceOwnershipSchema, "registry"),
 })
 
 /** Canonical version 2 project shape as consumed by the project services UI. */

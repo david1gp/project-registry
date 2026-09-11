@@ -11,7 +11,8 @@ Allow one owner/project identity to contain multiple independently routed servic
 - Preserve labels and other project metadata at project level.
 - Enforce domain and port uniqueness across active services, including services in the same project.
 - Read and migrate existing project files losslessly; write only the new canonical structure.
-- Group only explicitly unambiguous Leo records; leave ambiguous records such as `sales` separate.
+- Group only explicitly mapped Leo records; group `sales-api`, `sales-web-preview`, and `sales-web-prod`
+  under `sales` while preserving their service IDs and existing disabled/active Caddy settings.
 - Keep Git history as rollback; migration changes are validated before activation.
 
 ## Approach
@@ -20,7 +21,7 @@ Allow one owner/project identity to contain multiple independently routed servic
 - Adapt collision checks, port allocation, persistence, and Caddy generation to iterate services.
 - Add a deterministic repository migration for legacy records and explicit Leo grouping mappings.
 - Update CLI/UI consumers and tests to display and edit services under one project.
-- Current context: implementation and verification are complete. Canonical version 2 services are `{ id, units, caddy }`; legacy records parse compatibly and canonical writes preserve metadata. CRUD, persistence, collision/allocation, per-service Caddy routes, CLI, and UI support multiple services. The atomic migration maps Leo's emailoutreach and allgroups-chat records, excludes sales, and has not been applied to external data.
+- Current context: implementation and verification are complete. Canonical version 2 services are `{ id, units, caddy }`; legacy records parse compatibly and canonical writes preserve metadata. CRUD, persistence, collision/allocation, per-service Caddy routes, CLI, and UI support multiple services. The atomic migration maps Leo's emailoutreach, allgroups-chat, and sales service records, and has not been applied to external data.
 
 ## Tasks
 

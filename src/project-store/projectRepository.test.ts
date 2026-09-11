@@ -55,6 +55,7 @@ function canonicalProject(name: string, port: number): Project {
       {
         id: "api",
         units: ["api.service"],
+        ownership: "registry",
         caddy: {
           port,
           domains: [`${name}.example`],
@@ -69,7 +70,7 @@ function canonicalProject(name: string, port: number): Project {
           spa: false,
         },
       },
-      { id: "worker", units: ["worker.service"], caddy: null },
+      { id: "worker", units: ["worker.service"], ownership: "registry", caddy: null },
     ],
   }
 }

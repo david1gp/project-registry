@@ -26,6 +26,7 @@ function canonicalProject(): ProjectCanonical {
       {
         id: "api",
         units: [],
+        ownership: "registry",
         caddy: {
           port: 3000,
           domains: ["api.example"],
@@ -43,6 +44,7 @@ function canonicalProject(): ProjectCanonical {
       {
         id: "assets",
         units: [],
+        ownership: "external",
         caddy: {
           port: 3001,
           domains: ["assets.example"],
@@ -78,6 +80,7 @@ describe("projectPortCollision", () => {
 
   test("finds a port used by any active canonical service", () => {
     const canonical = canonicalProject()
-    expect(projectPortCollision([canonical], 3001)).toBe(canonical)
+    expect(projectPortCollision([canonical], 3001)).toBeNull()
+    expect(projectPortCollision([canonical], 3000)).toBe(canonical)
   })
 })

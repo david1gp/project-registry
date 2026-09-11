@@ -712,7 +712,12 @@ function projectRepositoryMigrationServices(source: ProjectCanonical, serviceId:
     if (services.some((service) => service.id === id)) {
       return createResultErrorCode(op, `duplicate grouped service ID: ${id}`, "projects.conflict")
     }
-    services.push({ id, units: [...sourceService.units], caddy: sourceService.caddy })
+    services.push({
+      id,
+      units: [...sourceService.units],
+      caddy: sourceService.caddy,
+      ownership: sourceService.ownership,
+    })
   }
   return createResult(services)
 }

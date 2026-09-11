@@ -1,10 +1,10 @@
 import { basename, isAbsolute, relative, resolve, sep } from "node:path"
 import { createResult, createResultError, type Result } from "#result"
 import type { Project } from "../project/Project.js"
-import { projectCaddyEntries } from "../project/projectCaddyEntries.js"
+import { projectLocalCaddyEntries } from "../project/projectLocalCaddyEntries.js"
 
 function projectPaths(project: Project): string[] {
-  return projectCaddyEntries(project)
+  return projectLocalCaddyEntries(project)
     .map((entry) => entry.caddy.path)
     .filter((path): path is string => path !== undefined && path !== "")
 }

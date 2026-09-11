@@ -15,7 +15,15 @@ describe("projectRegistryCliArgumentsParse", () => {
     ],
     [["project", "create", "--name", "site"], { kind: "project-create", name: "site", caddy: {} }],
     [["project", "create"], { kind: "project-create", name: undefined, caddy: {} }],
+    [
+      ["project", "create", "--service", "api", "--ownership", "external"],
+      { kind: "project-create", name: undefined, service: "api", ownership: "external", caddy: {} },
+    ],
     [["project", "edit", "site"], { kind: "project-edit", name: "site", caddy: {} }],
+    [
+      ["project", "edit", "site", "--service=api", "--ownership=registry"],
+      { kind: "project-edit", name: "site", service: "api", ownership: "registry", caddy: {} },
+    ],
     [["project", "delete", "site"], { kind: "project-delete", name: "site" }],
     [["delete", "--port", "4321"], { kind: "project-delete-by-port", port: 4321 }],
     [["delete", "--port=4321"], { kind: "project-delete-by-port", port: 4321 }],
@@ -215,6 +223,12 @@ describe("projectRegistryCliArgumentsParse", () => {
     [["project", "access-logs", "site", "--before", "--json"], "Option --before requires a bounded cursor."],
     [["project", "access-logs", "site", "--before", "--limit", "25"], "Option --before requires a bounded cursor."],
     [["project", "access-logs", "site", "--before="], "Option --before requires a bounded cursor."],
+    [["project", "create", "--ownership", "external"], "Option --ownership requires --service."],
+    [["project", "edit", "site", "--ownership", "registry"], "Option --ownership requires --service."],
+    [
+      ["project", "edit", "site", "--service", "api", "--ownership", "local"],
+      "Option --ownership must be registry or external.",
+    ],
     [["project", "access-logs", "site", "--follow"], "Unknown option: --follow."],
     [["user", "default-domain", "get", "extra"], "Unknown command or invalid syntax: user default-domain get extra."],
     [["user", "default-domain", "set"], "Unknown command or invalid syntax: user default-domain set."],

@@ -3,7 +3,7 @@ import { createResult, createResultError, type PromiseResult, type Result } from
 import { projectAccessLogId } from "../access-log/projectAccessLogId.js"
 import { projectAccessLogRetentionMaximumActiveProjectIds } from "../access-log/projectAccessLogRetentionMaximumActiveProjectIds.js"
 import { projectAccessLogRetentionReconcile } from "../access-log/projectAccessLogRetentionReconcile.js"
-import { projectCaddyEntries } from "../project/projectCaddyEntries.js"
+import { projectLocalCaddyEntries } from "../project/projectLocalCaddyEntries.js"
 import { projectMigrate } from "../project/projectMigrate.js"
 import type { ProjectRepositorySnapshot } from "../project-store/ProjectRepositorySnapshot.js"
 import type { CaddyApplication } from "./CaddyApplication.js"
@@ -651,7 +651,7 @@ export function caddyApplicationCreate(options: unknown): Result<CaddyApplicatio
         if (stillCurrent()) {
           try {
             const activeProjectIds = latestSuccessfulCaddyLoad.snapshot.projects
-              .filter((project) => projectCaddyEntries(project).some((entry) => !entry.caddy.disabled))
+              .filter((project) => projectLocalCaddyEntries(project).some((entry) => !entry.caddy.disabled))
               .map(projectAccessLogId)
             // An over-limit snapshot is not reconciled. Never truncate it: a partial active set could delete live logs.
             if (activeProjectIds.length <= projectAccessLogRetentionMaximumActiveProjectIds) {

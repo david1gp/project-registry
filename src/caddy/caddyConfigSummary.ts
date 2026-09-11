@@ -1,4 +1,4 @@
-import { projectCaddyEntries } from "../project/projectCaddyEntries.js"
+import { projectLocalCaddyEntries } from "../project/projectLocalCaddyEntries.js"
 import type { ProjectCaddy } from "../project/projectCaddySchema.js"
 import type { ProjectCanonical } from "../project/projectCanonicalSchema.js"
 import { projectMigrate } from "../project/projectMigrate.js"
@@ -11,7 +11,7 @@ type CaddySummaryRoute = {
 }
 
 function projectRoutes(project: ProjectCanonical): CaddySummaryRoute[] {
-  return projectCaddyEntries(project).map((entry) => ({ project, serviceId: entry.serviceId, caddy: entry.caddy }))
+  return projectLocalCaddyEntries(project).map((entry) => ({ project, serviceId: entry.serviceId, caddy: entry.caddy }))
 }
 
 function validProjects(value: unknown): ProjectCanonical[] | undefined {

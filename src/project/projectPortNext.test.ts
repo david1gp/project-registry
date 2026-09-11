@@ -14,7 +14,12 @@ function project(owner: string, name: string, port: number, disabled = false): P
   return result.data
 }
 
-function canonicalProject(owner: string, name: string, ports: number[]): ProjectCanonical {
+function canonicalProject(
+  owner: string,
+  name: string,
+  ports: number[],
+  ownership: "registry" | "external" = "registry",
+): ProjectCanonical {
   return {
     schemaVersion: 2,
     owner,
@@ -25,6 +30,7 @@ function canonicalProject(owner: string, name: string, ports: number[]): Project
     services: ports.map((port, index) => ({
       id: `service-${index}`,
       units: [],
+      ownership,
       caddy: {
         port,
         domains: [`${name}-${index}.example`],
@@ -103,5 +109,14 @@ describe("projectPortNext", () => {
     )
 
     expect(result).toMatchObject({ success: true, data: 3003 })
+  })
+
+  test("does not reserve external service ports", () => {
+    const result = projectPortNext([canonicalProject("alice", "external", [4000], "external")], {
+      from: 4000,
+      to: 4000,
+    })
+
+    expect(result).toMatchObject({ success: true, data: 4000 })
   })
 })

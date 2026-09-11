@@ -1,5 +1,5 @@
 import { createResult, createResultError, type Result } from "#result"
-import { projectCaddyEntries } from "../project/projectCaddyEntries.js"
+import { projectLocalCaddyEntries } from "../project/projectLocalCaddyEntries.js"
 import type { ProjectCanonical } from "../project/projectCanonicalSchema.js"
 import { projectMigrate } from "../project/projectMigrate.js"
 import type { CaddyConfig } from "./CaddyConfig.js"
@@ -44,7 +44,7 @@ function projectsParse(value: unknown): ProjectCanonical[] | undefined {
 }
 
 function activeProjectCount(projects: readonly ProjectCanonical[]): number {
-  return projects.filter((project) => projectCaddyEntries(project).some((entry) => !entry.caddy.disabled)).length
+  return projects.filter((project) => projectLocalCaddyEntries(project).some((entry) => !entry.caddy.disabled)).length
 }
 
 export function caddyConfigInspect(

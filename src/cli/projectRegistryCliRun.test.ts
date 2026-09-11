@@ -6,6 +6,7 @@ import { projectRegistryCliRun } from "./projectRegistryCliRun.js"
 const project = {
   name: "site",
   user: "david",
+  ownership: "registry",
   port: 4321,
   domains: ["site.example"],
   kind: "proxy",
@@ -543,6 +544,94 @@ describe("projectRegistryCliRun", () => {
       },
     ])
     expect(stdout.join("")).toBe("created david/site\n")
+  })
+
+  test("creates a selected service with persistent external ownership", async () => {
+    const bodies: unknown[] = []
+    const exitCode = await projectRegistryCliRun(
+      ["project", "create", "--name", "site", "--service", "api", "--ownership", "external", "--domain", "api.example"],
+      {
+        environment: { USER: "david" },
+        requestFetch: async (_input, init) => {
+          if (init?.method === "POST") {
+            bodies.push(typeof init.body === "string" ? JSON.parse(init.body) : undefined)
+            return Response.json({ success: true, data: mutation("create") }, { status: 201 })
+          }
+          return Response.json({ success: true, data: { projects: [], revision: "current" } })
+        },
+        stdout: () => {},
+      },
+    )
+
+    expect(exitCode).toBe(0)
+    expect(bodies).toEqual([
+      {
+        expectedRevision: "current",
+        name: "site",
+        schemaVersion: 2,
+        services: [
+          {
+            id: "api",
+            units: [],
+            ownership: "external",
+            caddy: { domains: ["api.example"], docs: true, path: process.cwd() },
+          },
+        ],
+      },
+    ])
+  })
+
+  test("edits a selected service without an ownership flag while preserving ownership and siblings", async () => {
+    const bodies: unknown[] = []
+    const exitCode = await projectRegistryCliRun(
+      ["project", "edit", "site", "--service", "api", "--domain", "new-api.example"],
+      {
+        environment: { USER: "david" },
+        requestFetch: async (_input, init) => {
+          if (init?.method === "PATCH") {
+            bodies.push(typeof init.body === "string" ? JSON.parse(init.body) : undefined)
+            return Response.json({ success: true, data: mutation("edit") })
+          }
+          return Response.json({
+            success: true,
+            data: {
+              project: {
+                schemaVersion: 2,
+                owner: "david",
+                name: "site",
+                services: [
+                  {
+                    id: "api",
+                    units: ["api.service"],
+                    ownership: "external",
+                    caddy: { port: 4300, domains: ["api.example"] },
+                  },
+                  { id: "worker", units: ["worker.service"], ownership: "registry", caddy: null },
+                ],
+              },
+              revision: "current",
+            },
+          })
+        },
+        stdout: () => {},
+      },
+    )
+
+    expect(exitCode).toBe(0)
+    expect(bodies).toHaveLength(1)
+    expect(bodies[0]).toMatchObject({
+      expectedRevision: "current",
+      schemaVersion: 2,
+      services: [
+        {
+          id: "api",
+          ownership: "external",
+          units: ["api.service"],
+          caddy: { port: 4300, domains: ["new-api.example"] },
+        },
+        { id: "worker", ownership: "registry", units: ["worker.service"], caddy: null },
+      ],
+    })
   })
 
   test("propagates --no-dns only on project create", async () => {

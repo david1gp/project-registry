@@ -1,5 +1,6 @@
 import { createResult, createResultError, type Result } from "#result"
 import { projectDomainValidate } from "../project/projectDomainValidate.js"
+import type { ProjectServiceOwnership } from "../project/projectServiceOwnershipSchema.js"
 import type { ProjectRegistryCliCaddyOptions } from "./ProjectRegistryCliCaddyOptions.js"
 import type { ProjectRegistryCliInvocation } from "./ProjectRegistryCliInvocation.js"
 
@@ -66,6 +67,7 @@ export function projectRegistryCliArgumentsParse(args: readonly string[]): Resul
   let limit: number | undefined
   let flagName: string | undefined
   let service: string | undefined
+  let ownership: ProjectServiceOwnership | undefined
   let noDns = false
   let port: number | undefined
   let path: string | undefined
@@ -121,6 +123,7 @@ export function projectRegistryCliArgumentsParse(args: readonly string[]): Resul
       "--limit",
       "--name",
       "--service",
+      "--ownership",
       "--port",
       "--domain",
       "--path",
@@ -169,6 +172,13 @@ export function projectRegistryCliArgumentsParse(args: readonly string[]): Resul
           )
         }
         service = value
+        continue
+      }
+      if (option === "--ownership") {
+        if (value !== "registry" && value !== "external") {
+          return createResultError(op, "Option --ownership must be registry or external.")
+        }
+        ownership = value
         continue
       }
       if (option === "--port") {
@@ -312,7 +322,13 @@ export function projectRegistryCliArgumentsParse(args: readonly string[]): Resul
   const hasOnlyPortOption = port !== undefined && Object.keys(caddy).length === 1
   const hasLabelOptions = hasLabels || removeLabels.length > 0 || clearLabels
   const hasMutationOptions =
-    hasCaddyOptions || flagName !== undefined || service !== undefined || noDns || hasLabelOptions || tokenStdin
+    hasCaddyOptions ||
+    flagName !== undefined ||
+    service !== undefined ||
+    ownership !== undefined ||
+    noDns ||
+    hasLabelOptions ||
+    tokenStdin
   const hasAccessLogOptions = owner !== undefined || before !== undefined
   const hasHttp = booleans.has("--http")
 
@@ -432,6 +448,9 @@ export function projectRegistryCliArgumentsParse(args: readonly string[]): Resul
     !hasAccessLogOptions &&
     !hasHttp
   ) {
+    if (ownership !== undefined && service === undefined) {
+      return createResultError(op, "Option --ownership requires --service.")
+    }
     if (removeLabels.length > 0 || clearLabels) {
       return createResultError(op, "Options --remove-label and --clear-labels are only valid for project edit.")
     }
@@ -440,6 +459,7 @@ export function projectRegistryCliArgumentsParse(args: readonly string[]): Resul
         kind: "project-create",
         name: flagName,
         ...(service === undefined ? {} : { service }),
+        ...(ownership === undefined ? {} : { ownership }),
         ...(noDns ? { noDns: true } : {}),
         caddy,
         ...(hasLabels ? { labels } : {}),
@@ -460,11 +480,15 @@ export function projectRegistryCliArgumentsParse(args: readonly string[]): Resul
   ) {
     if (!projectNamePattern.test(value)) return projectNameError(op)
     if (flagName !== undefined) return createResultError(op, "Option --name cannot edit an immutable project name.")
+    if (ownership !== undefined && service === undefined) {
+      return createResultError(op, "Option --ownership requires --service.")
+    }
     return createResult({
       command: {
         kind: "project-edit",
         name: value,
         ...(service === undefined ? {} : { service }),
+        ...(ownership === undefined ? {} : { ownership }),
         caddy,
         ...(hasLabels ? { labels } : {}),
         ...(removeLabels.length > 0 ? { removeLabels } : {}),

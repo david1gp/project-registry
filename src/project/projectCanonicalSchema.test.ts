@@ -12,6 +12,7 @@ describe("projectCanonicalSchema", () => {
         {
           id: "primary",
           units: ["catalog.service"],
+          ownership: "external",
           caddy: {
             port: 3000,
             domains: ["catalog.example"],
@@ -39,6 +40,7 @@ describe("projectCanonicalSchema", () => {
     if (!result.success) return
     expect(result.output.services).toHaveLength(1)
     expect(result.output.services[0]?.id).toBe("primary")
+    expect(result.output.services[0]?.ownership).toBe("external")
     expect(result.output.services[0]?.caddy).toMatchObject({
       port: 3000,
       domains: ["catalog.example"],
@@ -60,7 +62,7 @@ describe("projectCanonicalSchema", () => {
     })
   })
 
-  test("requires unique stable service IDs and rejects the legacy project Caddy field", () => {
+  test("requires unique stable service IDs and rejects invalid ownership and the legacy project Caddy field", () => {
     const duplicate = a.safeParse(projectCanonicalSchema, {
       schemaVersion: 2,
       owner: "alice",
@@ -76,8 +78,15 @@ describe("projectCanonicalSchema", () => {
       name: "catalog",
       caddy: { port: 3000, domains: ["catalog.example"] },
     })
+    const invalidOwnership = a.safeParse(projectCanonicalSchema, {
+      schemaVersion: 2,
+      owner: "alice",
+      name: "catalog",
+      services: [{ id: "primary", ownership: "local" }],
+    })
 
     expect(duplicate.success).toBe(false)
+    expect(invalidOwnership.success).toBe(false)
     expect(legacyCaddy.success).toBe(false)
   })
 })

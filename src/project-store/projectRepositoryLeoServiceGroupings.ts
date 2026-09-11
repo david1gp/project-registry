@@ -26,4 +26,19 @@ export const projectRepositoryLeoServiceGroupings: readonly ProjectRepositorySer
     parent: { owner: "leo", name: "allgroups-chat" },
     serviceId: "allgroups-chat-dash",
   },
+  {
+    source: { owner: "leo", name: "sales-api" },
+    parent: { owner: "leo", name: "sales" },
+    serviceId: "sales-api",
+  },
+  {
+    source: { owner: "leo", name: "sales-web-preview" },
+    parent: { owner: "leo", name: "sales" },
+    serviceId: "sales-web-preview",
+  },
+  {
+    source: { owner: "leo", name: "sales-web-prod" },
+    parent: { owner: "leo", name: "sales" },
+    serviceId: "sales-web-prod",
+  },
 ]

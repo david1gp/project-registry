@@ -1,6 +1,6 @@
 import { createResult, createResultError, createResultErrorCode, type Result } from "#result"
 import type { Project } from "../project/Project.js"
-import { projectCaddyEntries } from "../project/projectCaddyEntries.js"
+import { projectLocalCaddyEntries } from "../project/projectLocalCaddyEntries.js"
 import type { ProjectCaddy } from "../project/projectCaddySchema.js"
 import type { ProjectCanonical } from "../project/projectCanonicalSchema.js"
 import { projectKey } from "../project/projectKey.js"
@@ -16,7 +16,7 @@ type CaddyProjectRoute = {
 }
 
 function projectRoutes(project: ProjectCanonical): CaddyProjectRoute[] {
-  return projectCaddyEntries(project).map((entry) => ({ project, serviceId: entry.serviceId, caddy: entry.caddy }))
+  return projectLocalCaddyEntries(project).map((entry) => ({ project, serviceId: entry.serviceId, caddy: entry.caddy }))
 }
 
 function stringCompare(left: string, right: string): number {

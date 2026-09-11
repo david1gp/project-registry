@@ -9,6 +9,7 @@ export function projectServiceDraftFrom(
   const caddy = service?.caddy ?? null
   return {
     id: service?.id ?? serviceId,
+    ownership: service?.ownership ?? "registry",
     port: caddy === null ? "" : String(caddy.port),
     domains: caddy === null ? "" : caddy.domains.join(", "),
     path: caddy?.path ?? "",

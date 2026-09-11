@@ -23,8 +23,9 @@ The operation validates every resulting project and generated Caddy configuratio
 the worktree, writes one Git commit, and removes grouped source records only in that commit. Repeat
 apply is a no-op; use Git history to review or roll back the migration. The map merges
 `emailoutreach-prod` into `emailoutreach` and groups `allgroups-chat-ui`, `allgroups-chat-convex`,
-`allgroups-chat-api`, and `allgroups-chat-dash` under `allgroups-chat`; `sales` and
-`sales-web-prod` are intentionally unmapped. The Leo repository is not invoked by this workspace change.
+`allgroups-chat-api`, and `allgroups-chat-dash` under `allgroups-chat`; it also groups
+`sales-api`, `sales-web-preview`, and `sales-web-prod` under `sales`, preserving their service IDs.
+Existing disabled/active Caddy settings are preserved. The Leo repository is not invoked by this workspace change.
 
 `legacy-migrate.ts` reads the existing Leo Caddy project repository and converts a separate
 destination repository. It is a dry-run unless `--apply` is supplied. Apply uses copied Git

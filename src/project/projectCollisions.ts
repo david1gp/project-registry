@@ -5,6 +5,7 @@ import { projectDomainNormalize } from "./projectDomainNormalize.js"
 import type { ProjectKey } from "./projectKey.js"
 import { projectKey } from "./projectKey.js"
 import { projectKeyEqual } from "./projectKeyEqual.js"
+import { projectLocalCaddyEntries } from "./projectLocalCaddyEntries.js"
 
 export type ProjectCollisionOptions = {
   excludeKey?: ProjectKey
@@ -78,6 +79,7 @@ export function projectCollisions(
     }
     keys.push(project)
 
+    const localEntries = projectLocalCaddyEntries(project)
     for (const entry of projectCaddyEntries(project)) {
       if (entry.caddy.disabled) continue
       const resource = { project, serviceId: entry.serviceId }
@@ -94,6 +96,8 @@ export function projectCollisions(
         }
         domains.set(domain, resource)
       }
+
+      if (!localEntries.some((localEntry) => localEntry.serviceId === entry.serviceId)) continue
 
       const previous = ports.get(entry.caddy.port)
       if (previous) {

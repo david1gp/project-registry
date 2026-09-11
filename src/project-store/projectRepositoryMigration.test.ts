@@ -82,6 +82,8 @@ async function fileBytes(directory: string): Promise<Record<string, string>> {
     "projects/leo/allgroups-chat-api.json",
     "projects/leo/allgroups-chat-dash.json",
     "projects/leo/sales.json",
+    "projects/leo/sales-api.json",
+    "projects/leo/sales-web-preview.json",
     "projects/leo/sales-web-prod.json",
   ]
   const result: Record<string, string> = {}
@@ -98,6 +100,12 @@ afterEach(async () => {
 
 describe("projectRepository.migrate", () => {
   test("canonicalizes losslessly, applies explicit Leo grouping, and is idempotent", async () => {
+    const salesProject = legacyProject("sales", 3020)
+    salesProject.caddy = { ...salesProject.caddy, domains: ["sales.contentoren.de"], disabled: true }
+    const salesApiProject = legacyProject("sales-api", 3021)
+    const salesWebPreviewProject = legacyProject("sales-web-preview", 3022)
+    const salesWebProdProject = legacyProject("sales-web-prod", 3023)
+    salesWebProdProject.caddy = { ...salesWebProdProject.caddy, domains: ["sales.contentoren.de"] }
     const directory = await seed([
       legacyProject("emailoutreach", 3000, { labels: { parent: "yes" } }),
       legacyProject("emailoutreach-prod", 3001, {
@@ -110,8 +118,10 @@ describe("projectRepository.migrate", () => {
       legacyProject("allgroups-chat-convex", 3012),
       legacyProject("allgroups-chat-api", 3013),
       legacyProject("allgroups-chat-dash", 3014),
-      legacyProject("sales", 3020),
-      legacyProject("sales-web-prod", 3021),
+      salesProject,
+      salesApiProject,
+      salesWebPreviewProject,
+      salesWebProdProject,
     ])
     const before = await fileBytes(directory)
     const beforeHead = await gitHead(directory)
@@ -124,7 +134,7 @@ describe("projectRepository.migrate", () => {
       dryRun: true,
       groupings: projectRepositoryLeoServiceGroupings,
     })
-    expect(dryRunR).toMatchObject({ success: true, data: { dryRun: true, changed: true, canonicalized: 9 } })
+    expect(dryRunR).toMatchObject({ success: true, data: { dryRun: true, changed: true, canonicalized: 11 } })
     expect(await fileBytes(directory)).toEqual(before)
     expect(await gitHead(directory)).toBe(beforeHead)
 
@@ -136,13 +146,16 @@ describe("projectRepository.migrate", () => {
       success: true,
       data: {
         changed: true,
-        canonicalized: 9,
+        canonicalized: 11,
         removed: [
           { owner: "leo", name: "allgroups-chat-api" },
           { owner: "leo", name: "allgroups-chat-convex" },
           { owner: "leo", name: "allgroups-chat-dash" },
           { owner: "leo", name: "allgroups-chat-ui" },
           { owner: "leo", name: "emailoutreach-prod" },
+          { owner: "leo", name: "sales-api" },
+          { owner: "leo", name: "sales-web-preview" },
+          { owner: "leo", name: "sales-web-prod" },
         ],
       },
     })
@@ -176,20 +189,28 @@ describe("projectRepository.migrate", () => {
       "allgroups-chat-dash",
       "allgroups-chat-ui",
     ])
-    expect(JSON.parse(await readFile(join(directory, "projects/leo/sales.json"), "utf8"))).toMatchObject({
-      schemaVersion: 2,
-      services: [{ id: "default" }],
-    })
-    expect(JSON.parse(await readFile(join(directory, "projects/leo/sales-web-prod.json"), "utf8"))).toMatchObject({
-      schemaVersion: 2,
-      services: [{ id: "default" }],
-    })
+    const salesCanonical = JSON.parse(await readFile(join(directory, "projects/leo/sales.json"), "utf8")) as {
+      schemaVersion: number
+      services: Array<{ id: string; caddy: ProjectCaddy | null }>
+    }
+    expect(salesCanonical.schemaVersion).toBe(2)
+    expect(salesCanonical.services.map((service) => service.id)).toEqual([
+      "default",
+      "sales-api",
+      "sales-web-preview",
+      "sales-web-prod",
+    ])
+    expect(salesCanonical.services[0]?.caddy).toMatchObject({ domains: ["sales.contentoren.de"], disabled: true })
+    expect(salesCanonical.services[3]?.caddy).toMatchObject({ domains: ["sales.contentoren.de"], disabled: false })
     expect(await fileBytes(directory)).toMatchObject({
       "projects/leo/emailoutreach-prod.json": "",
       "projects/leo/allgroups-chat-ui.json": "",
       "projects/leo/allgroups-chat-convex.json": "",
       "projects/leo/allgroups-chat-api.json": "",
       "projects/leo/allgroups-chat-dash.json": "",
+      "projects/leo/sales-api.json": "",
+      "projects/leo/sales-web-preview.json": "",
+      "projects/leo/sales-web-prod.json": "",
     })
 
     const repeatR = await openR.data.migrate({

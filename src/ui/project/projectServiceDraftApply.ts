@@ -49,7 +49,16 @@ export function projectServiceDraftApply(
   } as NonNullable<ProjectServicesService["caddy"]>
 
   if (existing === undefined) {
-    return createResult([...services, { id: parsed.output.id, units: [], caddy }])
+    return createResult([
+      ...services,
+      { id: parsed.output.id, units: [], caddy, ownership: parsed.output.ownership ?? "registry" },
+    ])
   }
-  return createResult(services.map((service) => (service.id === existing.id ? { ...service, caddy } : service)))
+  return createResult(
+    services.map((service) =>
+      service.id === existing.id
+        ? { ...service, caddy, ownership: parsed.output.ownership ?? service.ownership ?? "registry" }
+        : service,
+    ),
+  )
 }
