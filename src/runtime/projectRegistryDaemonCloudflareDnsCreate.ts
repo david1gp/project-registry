@@ -626,7 +626,7 @@ export function projectRegistryDaemonCloudflareDnsCreate(options: {
   }
 
   async function projectRun(keyValue: string, sequence: number): Promise<QueueOutcome> {
-    const desired = desiredProjects.get(keyValue)
+    const requested = desiredProjects.get(keyValue)
     if (!active) {
       if (pendingProjects.get(keyValue)?.sequence === sequence) pendingProjects.delete(keyValue)
       return "done"
@@ -634,6 +634,10 @@ export function projectRegistryDaemonCloudflareDnsCreate(options: {
     const projectsR = await currentProjects()
     if (!projectsR.success && options.repositoryProjectsCurrent !== undefined) return "failed"
     const projects = projectsR.success ? projectsR.data : undefined
+    const desired =
+      projects === undefined || requested === undefined
+        ? requested
+        : projects.find((project) => projectKeyValue(project) === keyValue)
     if (desired === undefined) {
       if (projectsR.success && projects === undefined && options.repositoryProjectsCurrent !== undefined)
         return "failed"
