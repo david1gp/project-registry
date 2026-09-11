@@ -28,7 +28,7 @@ function record(
   type: string,
   content: string,
   ttl = 1,
-  proxied = true,
+  proxied = false,
 ): Record<string, unknown> {
   return { id, name, type, content, ttl, proxied }
 }
@@ -82,12 +82,12 @@ describe("cloudflareDnsReconcile", () => {
       name: "app.eu.example.co.uk",
       content: "203.0.113.8",
       ttl: 1,
-      proxied: true,
+      proxied: false,
     })
   })
 
-  test("updates a single exact record and skips an identical record", async () => {
-    const existing = record("record-id", "app.example.com.", "A", "203.0.113.7", 300, false)
+  test("updates a proxied exact record to DNS-only and skips an identical record", async () => {
+    const existing = record("record-id", "app.example.com.", "A", "203.0.113.8", 1, true)
     let records = [existing]
     const mock = fetchCreate((url, init) => {
       if (url.pathname.endsWith("/zones")) return json(zoneResult())
@@ -117,6 +117,7 @@ describe("cloudflareDnsReconcile", () => {
     expect(updated).toMatchObject({ success: true, data: { action: "updated" } })
     const updateCall = mock.calls.find((call) => call.init.method === "PUT")
     expect(updateCall?.url.toString()).toBe("https://api.cloudflare.com/client/v4/zones/zone-id/dns_records/record-id")
+    expect(JSON.parse(String(updateCall?.init.body))).toMatchObject({ proxied: false })
 
     const skipped = await cloudflareDnsReconcile({
       token: "token",

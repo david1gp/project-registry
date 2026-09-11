@@ -9,7 +9,7 @@ Automatically create or update Cloudflare DNS records from project lifecycle cha
 - Resolve credentials by project owner from `/etc/project-registry/cloudflare/{owner}.env`, or from the directory configured by `PROJECT_REGISTRY_CLOUDFLARE_CREDENTIALS_DIR`; do not fall back to global token environment variables.
 - Use the current server IP for A/AAAA records and exact domain matching; discover the longest matching accessible zone.
 - DNS runs after successful persistence, without blocking entry creation. Queue work while initial IP discovery is pending.
-- Create missing records, update matching records, skip identical records, and report incompatible record conflicts.
+- Create missing records, update matching records, skip identical records, and report incompatible record conflicts. Managed A/AAAA records are DNS-only (`proxied: false`); existing proxied records are updated to DNS-only during reconciliation.
 - Use existing dependencies and native fetch. Parse owner credential files without executing them, and never log credentials.
 - Persist managed record identities daemon-locally; edits remove tracked removed domains and deletes remove tracked records.
 

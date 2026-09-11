@@ -88,7 +88,7 @@ function mutationRecordIsExpected(
     record.type.toUpperCase() === recordType &&
     addressMatches(record.content, address) &&
     record.ttl === 1 &&
-    record.proxied === true
+    record.proxied === false
   )
 }
 
@@ -288,7 +288,7 @@ export async function cloudflareDnsReconcile(
       name: hostname,
       content: options.address,
       ttl: 1,
-      proxied: true,
+      proxied: false,
     }
     if (currentRecord !== undefined) {
       if (
