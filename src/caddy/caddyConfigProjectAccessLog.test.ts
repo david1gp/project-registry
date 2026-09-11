@@ -64,6 +64,25 @@ describe("Caddy project access logging", () => {
     expect(config.apps.http.servers.srv0.logs?.logger_names["disabled.example"]).toBeUndefined()
   })
 
+  test("does not create registry access logging for external services", () => {
+    const project = {
+      schemaVersion: 2,
+      owner: "leo",
+      name: "mixed-service-logs",
+      services: [
+        { id: "api", ownership: "external", caddy: { port: 4100, domains: ["api.example"], docs: false } },
+        { id: "web", ownership: "registry", caddy: { port: 4101, domains: ["web.example"], docs: false } },
+      ],
+    }
+    const config = accessLogConfig([project], "/var/lib/project-registry/caddy-access-logs")
+    expect(config).toBeDefined()
+    if (config === undefined) return
+
+    const loggerId = projectAccessLogId(project)
+    expect(config.logging?.logs[loggerId]).toBeDefined()
+    expect(config.apps.http.servers.srv0.logs?.logger_names).toEqual({ "web.example": [loggerId] })
+  })
+
   test("omits all access logging configuration when the root is unset", () => {
     const withoutRoot = caddyConfigGenerate([caddyConfigGenerateFixtures.proxy])
     const withEmptyOptions = caddyConfigGenerate([caddyConfigGenerateFixtures.proxy], {})
