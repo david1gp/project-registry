@@ -1,9 +1,10 @@
 import { createResult, createResultErrorCode, type Result } from "#result"
+import type { Project } from "./Project.js"
+import { projectCaddyEntries } from "./projectCaddyEntries.js"
 import { projectDomainNormalize } from "./projectDomainNormalize.js"
 import type { ProjectKey } from "./projectKey.js"
 import { projectKey } from "./projectKey.js"
 import { projectKeyEqual } from "./projectKeyEqual.js"
-import type { Project } from "./projectSchema.js"
 
 export type ProjectCollisionOptions = {
   excludeKey?: ProjectKey
@@ -40,8 +41,25 @@ function projectCollisionCandidates(
   return [...candidates, options.replacement]
 }
 
-function projectActive(project: Project): boolean {
-  return project.caddy !== undefined && project.caddy !== null && !project.caddy.disabled
+type ProjectCollisionResource = {
+  project: Project
+  serviceId: string | undefined
+}
+
+function projectCollisionResourceLabel(resource: ProjectCollisionResource): string {
+  return resource.serviceId === undefined
+    ? projectKey(resource.project)
+    : `${projectKey(resource.project)} service ${resource.serviceId}`
+}
+
+function projectCollisionLabels(
+  previous: ProjectCollisionResource,
+  current: ProjectCollisionResource,
+): [string, string] {
+  if (!projectKeyEqual(previous.project, current.project)) {
+    return [projectKey(previous.project), projectKey(current.project)]
+  }
+  return [projectCollisionResourceLabel(previous), projectCollisionResourceLabel(current)]
 }
 
 export function projectCollisions(
@@ -50,8 +68,8 @@ export function projectCollisions(
 ): Result<void> {
   const op = "projectCollisions"
   const keys: Project[] = []
-  const ports = new Map<number, Project>()
-  const domains = new Map<string, Project>()
+  const ports = new Map<number, ProjectCollisionResource>()
+  const domains = new Map<string, ProjectCollisionResource>()
 
   for (const project of projectCollisionCandidates(projects, options)) {
     const previousKey = keys.find((candidate) => projectKeyEqual(candidate, project))
@@ -60,31 +78,34 @@ export function projectCollisions(
     }
     keys.push(project)
 
-    if (!projectActive(project)) continue
-    const caddy = project.caddy
-    if (caddy === undefined || caddy === null) continue
+    for (const entry of projectCaddyEntries(project)) {
+      if (entry.caddy.disabled) continue
+      const resource = { project, serviceId: entry.serviceId }
 
-    for (const domain of new Set(caddy.domains.map(projectDomainNormalize))) {
-      const previous = domains.get(domain)
-      if (previous && !projectKeyEqual(previous, project)) {
+      for (const domain of new Set(entry.caddy.domains.map(projectDomainNormalize))) {
+        const previous = domains.get(domain)
+        if (previous) {
+          const [previousLabel, currentLabel] = projectCollisionLabels(previous, resource)
+          return createResultErrorCode(
+            op,
+            `active domain collision: ${domain} used by ${previousLabel} and ${currentLabel}`,
+            "projects.conflict",
+          )
+        }
+        domains.set(domain, resource)
+      }
+
+      const previous = ports.get(entry.caddy.port)
+      if (previous) {
+        const [previousLabel, currentLabel] = projectCollisionLabels(previous, resource)
         return createResultErrorCode(
           op,
-          `active domain collision: ${domain} used by ${projectKey(previous)} and ${projectKey(project)}`,
+          `active port collision: ${entry.caddy.port} used by ${previousLabel} and ${currentLabel}`,
           "projects.conflict",
         )
       }
-      domains.set(domain, project)
+      ports.set(entry.caddy.port, resource)
     }
-
-    const previous = ports.get(caddy.port)
-    if (previous && !projectKeyEqual(previous, project)) {
-      return createResultErrorCode(
-        op,
-        `active port collision: ${caddy.port} used by ${projectKey(previous)} and ${projectKey(project)}`,
-        "projects.conflict",
-      )
-    }
-    ports.set(caddy.port, project)
   }
 
   return createResult(undefined)

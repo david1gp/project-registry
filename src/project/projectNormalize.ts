@@ -1,5 +1,6 @@
 import * as a from "valibot"
 import { createResult, createResultErrorCode, type Result } from "#result"
+import type { Project as ProjectAny } from "./Project.js"
 import { projectDomainNormalize } from "./projectDomainNormalize.js"
 import { type ProjectInput, projectInputSchema } from "./projectInputSchema.js"
 import type { ProjectKey } from "./projectKey.js"
@@ -8,12 +9,12 @@ import type { Project } from "./projectSchema.js"
 import { projectValidate } from "./projectValidate.js"
 
 export type ProjectNormalizeOptions = {
-  projects?: readonly Project[]
+  projects?: readonly ProjectAny[]
   portRange?: ProjectPortRange
   defaultUserDomains?: Readonly<Record<string, string>>
   defaultUserDomain?: string | null
   excludeKey?: ProjectKey
-  excludeProject?: Project
+  excludeProject?: ProjectAny
 }
 
 function recordValue(input: unknown): Record<string, unknown> | null {

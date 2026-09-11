@@ -3,10 +3,13 @@ import type { ProjectRepositoryMutation } from "../project-store/ProjectReposito
 import type { Project } from "./Project.js"
 import type { ProjectMutationOptions } from "./ProjectMutationOptions.js"
 import type { ProjectUseCaseOptions } from "./ProjectUseCaseOptions.js"
+import { projectCanonicalNormalize } from "./projectCanonicalNormalize.js"
+import type { ProjectCanonical } from "./projectCanonicalSchema.js"
+import { projectCanonicalToLegacy } from "./projectCanonicalToLegacy.js"
 import type { ProjectKey } from "./projectKey.js"
 import { projectKeyEqual } from "./projectKeyEqual.js"
+import { projectMigrate } from "./projectMigrate.js"
 import { projectMutationExpectedRevision } from "./projectMutationExpectedRevision.js"
-import { projectNormalize } from "./projectNormalize.js"
 import { projectOwnerAuthorize } from "./projectOwnerAuthorize.js"
 
 function projectInputIdentityMatches(input: unknown, key: ProjectKey): boolean | undefined {
@@ -51,13 +54,45 @@ function projectEditRecordMerge(
   return merged
 }
 
-function projectEditInputMerge(existing: Project, input: unknown): unknown {
+function projectEditCanonicalPatch(input: Record<string, unknown>): Record<string, unknown> {
+  const patch: Record<string, unknown> = Object.create(null)
+  for (const [key, value] of Object.entries(input)) {
+    if (key !== "expectedRevision") patch[key] = value
+  }
+  return patch
+}
+
+function projectEditCanonicalInput(existing: ProjectCanonical, input: unknown): unknown {
   if (!input || typeof input !== "object" || Array.isArray(input)) return input
-  const patch = input as Record<string, unknown>
-  const merged = projectEditRecordMerge(existing as unknown as Record<string, unknown>, patch)
-  if (patch.owner === undefined) merged.owner = existing.owner
-  if (patch.name === undefined) merged.name = existing.name
-  return merged
+  const rawPatch = input as Record<string, unknown>
+  const patch = projectEditCanonicalPatch(rawPatch)
+  const services = patch.services
+  const isCanonicalPatch =
+    patch.schemaVersion === 2 ||
+    (Array.isArray(services) &&
+      services.every((service) => service && typeof service === "object" && !Array.isArray(service)))
+  if (isCanonicalPatch) return projectEditRecordMerge(existing as unknown as Record<string, unknown>, patch)
+
+  const legacyR = projectCanonicalToLegacy(existing)
+  if (!legacyR.success) return patch
+  const mergedLegacy = projectEditRecordMerge(legacyR.data as unknown as Record<string, unknown>, patch)
+  const migrated = projectMigrate(mergedLegacy)
+  if (!migrated.success) return mergedLegacy
+
+  const defaultService = migrated.data.services.find((service) => service.id === "default")
+  const selectedService = existing.services.find((service) => service.id === "default") ?? existing.services[0]
+  const servicesWithoutSelected =
+    selectedService === undefined
+      ? existing.services
+      : existing.services.filter((service) => service.id !== selectedService.id)
+  const replacement =
+    defaultService === undefined || selectedService === undefined
+      ? defaultService
+      : { ...defaultService, id: selectedService.id }
+  return {
+    ...migrated.data,
+    services: replacement === undefined ? servicesWithoutSelected : [...servicesWithoutSelected, replacement],
+  }
 }
 
 export async function projectEdit(
@@ -83,11 +118,14 @@ export async function projectEdit(
   const existing = snapshotR.data.projects.find((project) => projectKeyEqual(project, key))
   if (!existing) return createResultErrorCode(op, "project not found", "projects.not-found")
 
-  const projectR = projectNormalize(projectEditInputMerge(existing, input), {
+  const existingCanonicalR = projectMigrate(existing)
+  if (!existingCanonicalR.success) return existingCanonicalR
+
+  const projectR = projectCanonicalNormalize(projectEditCanonicalInput(existingCanonicalR.data, input), {
     projects: snapshotR.data.projects,
     portRange: options.portRange,
     excludeKey: key,
-    excludeProject: existing,
+    excludeProject: existingCanonicalR.data,
   })
   if (!projectR.success) return projectR
   if (!projectKeyEqual(projectR.data, key))

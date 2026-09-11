@@ -3,8 +3,8 @@ import type { ProjectRepositoryMutation } from "../project-store/ProjectReposito
 import type { Project } from "./Project.js"
 import type { ProjectMutationOptions } from "./ProjectMutationOptions.js"
 import type { ProjectUseCaseOptions } from "./ProjectUseCaseOptions.js"
+import { projectCanonicalNormalize } from "./projectCanonicalNormalize.js"
 import { projectMutationExpectedRevision } from "./projectMutationExpectedRevision.js"
-import { projectNormalize } from "./projectNormalize.js"
 import { projectOwnerAuthorize } from "./projectOwnerAuthorize.js"
 
 function projectInputOwner(input: unknown): string | undefined {
@@ -17,7 +17,21 @@ function projectInputOwner(input: unknown): string | undefined {
 
 function projectCreateNeedsDefaultDomain(input: unknown): boolean {
   if (!input || typeof input !== "object" || Array.isArray(input)) return false
-  const caddy = (input as Record<string, unknown>).caddy
+  const record = input as Record<string, unknown>
+  if (record.schemaVersion === 2) {
+    if (!Array.isArray(record.services)) return false
+    return record.services.some((service) => {
+      if (!service || typeof service !== "object" || Array.isArray(service)) return false
+      const caddy = (service as Record<string, unknown>).caddy
+      return (
+        caddy !== null &&
+        typeof caddy === "object" &&
+        !Array.isArray(caddy) &&
+        !Array.isArray((caddy as Record<string, unknown>).domains)
+      )
+    })
+  }
+  const caddy = record.caddy
   if (!caddy || typeof caddy !== "object" || Array.isArray(caddy)) return false
   return !Array.isArray((caddy as Record<string, unknown>).domains)
 }
@@ -58,7 +72,7 @@ export async function projectCreate(
   const defaultDomainR = await projectCreateDefaultDomain(options, owner, input)
   if (!defaultDomainR.success) return defaultDomainR
 
-  const projectR = projectNormalize(input, {
+  const projectR = projectCanonicalNormalize(input, {
     projects: snapshotR.data.projects,
     portRange: options.portRange,
     defaultUserDomains: options.defaultUserDomains,
@@ -69,12 +83,10 @@ export async function projectCreate(
   const repositoryOptions = { actor: actorR.data.username, expectedRevision: expectedRevisionR.data }
   const mutationR = await options.repository.create(projectR.data, repositoryOptions)
   if (!mutationR.success) return mutationR
-  if (mutationR.data.changed) {
-    try {
-      afterPersistence?.(projectR.data)
-    } catch {
-      // Background integrations must not turn a successful persistence into a failed creation.
-    }
+  try {
+    afterPersistence?.(projectR.data)
+  } catch {
+    // Background integrations must not turn a successful persistence into a failed creation.
   }
   return mutationR
 }

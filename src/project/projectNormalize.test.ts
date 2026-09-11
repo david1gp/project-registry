@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test"
+import { projectMigrate } from "./projectMigrate.js"
 import { projectNormalize } from "./projectNormalize.js"
 
 describe("projectNormalize", () => {
@@ -64,6 +65,26 @@ describe("projectNormalize", () => {
     expect(result.success).toBe(true)
     if (!result.success) return
     expect(result.data.caddy?.port).toBe(3001)
+  })
+
+  test("allocates after sibling services in canonical projects", () => {
+    const existing = projectMigrate({
+      schemaVersion: 2,
+      owner: "alice",
+      name: "catalog",
+      services: [
+        { id: "api", units: [], caddy: { port: 3000, domains: ["api.example"] } },
+        { id: "assets", units: [], caddy: { port: 3001, domains: ["assets.example"] } },
+      ],
+    })
+    if (!existing.success) throw new Error(existing.errorMessage)
+
+    const result = projectNormalize(
+      { owner: "bob", name: "other", caddy: { domains: ["other.example"] } },
+      { projects: [existing.data], portRange: { from: 3000, to: 3002 } },
+    )
+
+    expect(result).toMatchObject({ success: true, data: { caddy: { port: 3002 } } })
   })
 
   test("generates a project subdomain from the owner's configured default domain", () => {

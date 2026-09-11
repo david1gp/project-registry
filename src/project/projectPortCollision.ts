@@ -1,6 +1,7 @@
+import type { Project } from "./Project.js"
+import { projectCaddyEntries } from "./projectCaddyEntries.js"
 import type { ProjectKey } from "./projectKey.js"
 import { projectKeyEqual } from "./projectKeyEqual.js"
-import type { Project } from "./projectSchema.js"
 
 export function projectPortCollision(
   projects: readonly Project[],
@@ -9,8 +10,10 @@ export function projectPortCollision(
 ): Project | null {
   for (const project of projects) {
     if (excludeKey && projectKeyEqual(project, excludeKey)) continue
-    if (!project.caddy || project.caddy.disabled || project.caddy.port !== port) continue
-    return project
+    for (const entry of projectCaddyEntries(project)) {
+      if (entry.caddy.disabled || entry.caddy.port !== port) continue
+      return project
+    }
   }
   return null
 }

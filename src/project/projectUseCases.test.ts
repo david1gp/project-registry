@@ -248,7 +248,17 @@ describe("project use cases", () => {
     })
     expect(repository.calls.create[0]).toMatchObject({
       options: { actor: "alice", expectedRevision: currentRevision },
-      project: { owner: "bob", services: ["api.service"], caddy: { port: 3001, domains: ["new.example"] } },
+      project: {
+        schemaVersion: 2,
+        owner: "bob",
+        services: [
+          expect.objectContaining({
+            id: "default",
+            units: ["api.service"],
+            caddy: expect.objectContaining({ port: 3001, domains: ["new.example"] }),
+          }),
+        ],
+      },
     })
   })
 
@@ -283,12 +293,18 @@ describe("project use cases", () => {
       key: { owner: "alice", name: "catalog" },
       options: { actor: "alice", expectedRevision: staleRevision },
       project: {
+        schemaVersion: 2,
         owner: "alice",
         name: "catalog",
-        caddy: {
-          port: 3000,
-          headerUp: { "X-Old": "old", "X-Keep": "keep", "X-New": "new" },
-        },
+        services: [
+          expect.objectContaining({
+            id: "default",
+            caddy: expect.objectContaining({
+              port: 3000,
+              headerUp: { "X-Old": "old", "X-Keep": "keep", "X-New": "new" },
+            }),
+          }),
+        ],
       },
     })
   })
@@ -504,7 +520,9 @@ describe("project use cases", () => {
     expect(repository.calls.create[0]?.project).toMatchObject({
       owner: "alice",
       name: "disabled-compatible",
-      caddy: { port: 3001, domains: ["disabled.bob.example"] },
+      services: [
+        expect.objectContaining({ caddy: expect.objectContaining({ port: 3001, domains: ["disabled.bob.example"] }) }),
+      ],
     })
   })
 
@@ -589,7 +607,10 @@ describe("project use cases", () => {
     expect(result.success).toBe(true)
     expect(Object.hasOwn(Object.prototype, "polluted")).toBe(false)
     const edited = repository.calls.edit[0]?.project
-    expect(edited).toMatchObject({ description: "safe", caddy: { domains: ["new.example"] } })
+    expect(edited).toMatchObject({
+      description: "safe",
+      services: [expect.objectContaining({ caddy: expect.objectContaining({ domains: ["new.example"] }) })],
+    })
     expect(edited && typeof edited === "object" ? Object.hasOwn(edited, "__proto__") : false).toBe(false)
     expect(edited && typeof edited === "object" ? Object.hasOwn(edited, "constructor") : false).toBe(false)
     expect(edited && typeof edited === "object" ? Object.hasOwn(edited, "prototype") : false).toBe(false)
@@ -606,7 +627,10 @@ describe("project use cases", () => {
     repository.getResult = createResult(entry)
 
     const success = await projectGetUseCase(useCaseOptions(repository, access), { owner: "alice", name: "catalog" })
-    expect(success).toEqual(createResult(entry))
+    expect(success).toMatchObject({
+      success: true,
+      data: { project: { schemaVersion: 2, owner: "alice", name: "catalog", services: [] }, revision: nextRevision },
+    })
 
     const failure = createResultError("fakeGet", "repository get unavailable")
     repository.getResult = failure

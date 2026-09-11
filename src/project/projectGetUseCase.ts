@@ -1,14 +1,15 @@
 import { createResult, type PromiseResult } from "#result"
-import type { ProjectRepositoryEntry } from "../project-store/ProjectRepositoryEntry.js"
 import type { ProjectUseCaseOptions } from "./ProjectUseCaseOptions.js"
+import type { ProjectCanonical } from "./projectCanonicalSchema.js"
 import type { ProjectKey } from "./projectKey.js"
+import { projectMigrate } from "./projectMigrate.js"
 import { projectOwnerAuthorize } from "./projectOwnerAuthorize.js"
 import { projectRevisionValidate } from "./projectRevisionValidate.js"
 
 export async function projectGetUseCase(
   options: ProjectUseCaseOptions,
   key: ProjectKey,
-): PromiseResult<ProjectRepositoryEntry> {
+): PromiseResult<{ project: ProjectCanonical; revision: string }> {
   const actorR = await options.access.actorResolve()
   if (!actorR.success) return actorR
 
@@ -18,5 +19,7 @@ export async function projectGetUseCase(
   if (!entryR.success) return entryR
   const revisionR = projectRevisionValidate(entryR.data.revision, "projectGetUseCase")
   if (!revisionR.success) return revisionR
-  return createResult({ project: entryR.data.project, revision: revisionR.data })
+  const projectR = projectMigrate(entryR.data.project)
+  if (!projectR.success) return projectR
+  return createResult({ project: projectR.data, revision: revisionR.data })
 }

@@ -1,7 +1,8 @@
 import { createResult, createResultErrorCode, type Result } from "#result"
+import type { Project } from "./Project.js"
+import { projectCaddyEntries } from "./projectCaddyEntries.js"
 import type { ProjectKey } from "./projectKey.js"
 import { projectKeyEqual } from "./projectKeyEqual.js"
-import type { Project } from "./projectSchema.js"
 
 export type ProjectPortRange = {
   from: number
@@ -29,8 +30,10 @@ export function projectPortNext(
   const used = new Set<number>()
   for (const project of projects) {
     if (excludeKey && projectKeyEqual(project, excludeKey)) continue
-    if (!project.caddy || project.caddy.disabled) continue
-    used.add(project.caddy.port)
+    for (const entry of projectCaddyEntries(project)) {
+      if (entry.caddy.disabled) continue
+      used.add(entry.caddy.port)
+    }
   }
 
   for (let port = range.from; port <= range.to; port += 1) {

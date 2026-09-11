@@ -1,4 +1,6 @@
 import { describe, expect, test } from "bun:test"
+import { projectCanonicalNormalize } from "./projectCanonicalNormalize.js"
+import type { ProjectCanonical } from "./projectCanonicalSchema.js"
 import { projectCollisions } from "./projectCollisions.js"
 import { projectNormalize } from "./projectNormalize.js"
 import type { Project } from "./projectSchema.js"
@@ -11,6 +13,43 @@ function project(owner: string, name: string, port: number, domain: string, disa
   })
   if (!result.success) throw new Error(result.errorMessage)
   return result.data
+}
+
+function canonicalProject(owner: string, name: string, services: ProjectCanonical["services"]): ProjectCanonical {
+  return {
+    schemaVersion: 2,
+    owner,
+    name,
+    type: "customer",
+    order: Number.MAX_SAFE_INTEGER,
+    services,
+    labels: {},
+  }
+}
+
+function canonicalService(
+  id: string,
+  port: number,
+  domain: string,
+  disabled = false,
+): ProjectCanonical["services"][number] {
+  return {
+    id,
+    units: [],
+    caddy: {
+      port,
+      domains: [domain],
+      path: "",
+      access: "external",
+      kind: "proxy",
+      docs: true,
+      browse: false,
+      headerUp: {},
+      disabled,
+      denyDotfiles: false,
+      spa: false,
+    },
+  }
 }
 
 describe("projectCollisions", () => {
@@ -92,5 +131,50 @@ describe("projectCollisions", () => {
     const result = projectCollisions([catalogOnly.data, disabled, project("carol", "active", 3000, "active.example")])
 
     expect(result.success).toBe(true)
+  })
+
+  test("rejects active port collisions between sibling canonical services", () => {
+    const result = projectCollisions([
+      canonicalProject("alice", "catalog", [
+        canonicalService("api", 3000, "api.example"),
+        canonicalService("assets", 3000, "assets.example"),
+      ]),
+    ])
+
+    expect(result.success).toBe(false)
+    if (result.success) return
+    expect(result.errorMessage).toContain("active port collision")
+    expect(result.errorMessage).toContain("service api")
+    expect(result.errorMessage).toContain("service assets")
+  })
+
+  test("rejects active domain collisions across canonical projects and ignores disabled services", () => {
+    const result = projectCollisions([
+      canonicalProject("alice", "catalog", [canonicalService("api", 3000, "shared.example")]),
+      canonicalProject("bob", "other", [
+        canonicalService("disabled", 3001, "shared.example", true),
+        canonicalService("web", 3002, "shared.example"),
+      ]),
+    ])
+
+    expect(result.success).toBe(false)
+    if (result.success) return
+    expect(result.errorMessage).toContain("active domain collision")
+    expect(result.errorMessage).not.toContain("disabled")
+  })
+
+  test("validates canonical replacements against all active services", () => {
+    const existing = canonicalProject("alice", "catalog", [
+      canonicalService("api", 3000, "api.example"),
+      canonicalService("assets", 3001, "assets.example"),
+    ])
+    const result = projectCanonicalNormalize(
+      canonicalProject("bob", "other", [canonicalService("web", 3001, "other.example")]),
+      { projects: [existing] },
+    )
+
+    expect(result.success).toBe(false)
+    if (result.success) return
+    expect(result.errorMessage).toContain("active port collision")
   })
 })

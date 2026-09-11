@@ -4,6 +4,8 @@ import type { ProjectKey } from "../project/projectKey.js"
 import type { UserDefaultDomainEntry } from "../user-default-domain/UserDefaultDomainEntry.js"
 import type { UserDefaultDomainMutation } from "../user-default-domain/UserDefaultDomainMutation.js"
 import type { ProjectRepositoryEntry } from "./ProjectRepositoryEntry.js"
+import type { ProjectRepositoryMigration } from "./ProjectRepositoryMigration.js"
+import type { ProjectRepositoryMigrationOptions } from "./ProjectRepositoryMigrationOptions.js"
 import type { ProjectRepositoryMutation } from "./ProjectRepositoryMutation.js"
 import type { ProjectRepositoryMutationOptions } from "./ProjectRepositoryMutationOptions.js"
 import type { ProjectRepositoryReadiness } from "./ProjectRepositoryReadiness.js"
@@ -20,6 +22,7 @@ export interface ProjectRepository {
     options: ProjectRepositoryMutationOptions,
   ): PromiseResult<ProjectRepositoryMutation>
   delete(key: ProjectKey, options: ProjectRepositoryMutationOptions): PromiseResult<ProjectRepositoryMutation>
+  migrate(options: ProjectRepositoryMigrationOptions): PromiseResult<ProjectRepositoryMigration>
   setUserDefaultDomain(
     owner: string,
     domain: string | null,

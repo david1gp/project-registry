@@ -1,4 +1,4 @@
-import type { Project } from "./projectSchema.js"
+import type { Project } from "./Project.js"
 
 const projectTypeOrder: Record<Project["type"], number> = {
   internal: 0,

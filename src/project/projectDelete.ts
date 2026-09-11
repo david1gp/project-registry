@@ -33,12 +33,10 @@ export async function projectDelete(
   const repositoryOptions = { actor: actorR.data.username, expectedRevision: expectedRevisionR.data }
   const mutationR = await options.repository.delete(key, repositoryOptions)
   if (!mutationR.success) return mutationR
-  if (mutationR.data.changed) {
-    try {
-      afterPersistence?.(project)
-    } catch {
-      // Background integrations must not turn a successful persistence into a failed deletion.
-    }
+  try {
+    afterPersistence?.(project)
+  } catch {
+    // Background integrations must not turn a successful persistence into a failed deletion.
   }
   return mutationR
 }

@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test"
+import type { ProjectCanonical } from "./projectCanonicalSchema.js"
 import { projectNormalize } from "./projectNormalize.js"
 import { projectPortNext } from "./projectPortNext.js"
 import type { Project } from "./projectSchema.js"
@@ -11,6 +12,34 @@ function project(owner: string, name: string, port: number, disabled = false): P
   })
   if (!result.success) throw new Error(result.errorMessage)
   return result.data
+}
+
+function canonicalProject(owner: string, name: string, ports: number[]): ProjectCanonical {
+  return {
+    schemaVersion: 2,
+    owner,
+    name,
+    type: "customer",
+    order: Number.MAX_SAFE_INTEGER,
+    labels: {},
+    services: ports.map((port, index) => ({
+      id: `service-${index}`,
+      units: [],
+      caddy: {
+        port,
+        domains: [`${name}-${index}.example`],
+        path: "",
+        access: "external",
+        kind: "proxy",
+        docs: true,
+        browse: false,
+        headerUp: {},
+        disabled: false,
+        denyDotfiles: false,
+        spa: false,
+      },
+    })),
+  }
 }
 
 describe("projectPortNext", () => {
@@ -65,5 +94,14 @@ describe("projectPortNext", () => {
     const result = projectPortNext([catalogOnly.data, project("bob", "disabled", 3000, true)])
 
     expect(result).toMatchObject({ success: true, data: 3000 })
+  })
+
+  test("allocates after every active service across canonical projects", () => {
+    const result = projectPortNext(
+      [canonicalProject("alice", "catalog", [3000, 3001]), canonicalProject("bob", "other", [3002])],
+      { from: 3000, to: 3003 },
+    )
+
+    expect(result).toMatchObject({ success: true, data: 3003 })
   })
 })

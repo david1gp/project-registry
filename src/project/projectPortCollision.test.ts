@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test"
+import type { ProjectCanonical } from "./projectCanonicalSchema.js"
 import { projectNormalize } from "./projectNormalize.js"
 import { projectPortCollision } from "./projectPortCollision.js"
 import type { Project } from "./projectSchema.js"
@@ -11,6 +12,53 @@ function project(owner: string, name: string, port: number, disabled = false): P
   })
   if (!result.success) throw new Error(result.errorMessage)
   return result.data
+}
+
+function canonicalProject(): ProjectCanonical {
+  return {
+    schemaVersion: 2,
+    owner: "alice",
+    name: "catalog",
+    type: "customer",
+    order: Number.MAX_SAFE_INTEGER,
+    labels: {},
+    services: [
+      {
+        id: "api",
+        units: [],
+        caddy: {
+          port: 3000,
+          domains: ["api.example"],
+          path: "",
+          access: "external",
+          kind: "proxy",
+          docs: true,
+          browse: false,
+          headerUp: {},
+          disabled: false,
+          denyDotfiles: false,
+          spa: false,
+        },
+      },
+      {
+        id: "assets",
+        units: [],
+        caddy: {
+          port: 3001,
+          domains: ["assets.example"],
+          path: "",
+          access: "external",
+          kind: "proxy",
+          docs: true,
+          browse: false,
+          headerUp: {},
+          disabled: false,
+          denyDotfiles: false,
+          spa: false,
+        },
+      },
+    ],
+  }
 }
 
 describe("projectPortCollision", () => {
@@ -26,5 +74,10 @@ describe("projectPortCollision", () => {
     if (!catalogOnly.success) throw new Error(catalogOnly.errorMessage)
 
     expect(projectPortCollision([catalogOnly.data, project("bob", "disabled", 3000, true)], 3000)).toBeNull()
+  })
+
+  test("finds a port used by any active canonical service", () => {
+    const canonical = canonicalProject()
+    expect(projectPortCollision([canonical], 3001)).toBe(canonical)
   })
 })

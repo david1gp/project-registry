@@ -1,9 +1,11 @@
-import { createResult, createResultError, type PromiseResult } from "#result"
+import { createResult, createResultError, type PromiseResult, type Result } from "#result"
 import { projectAuthorize } from "../access/projectAuthorize.js"
 import type { Role } from "../access/Role.js"
 import type { Project } from "./Project.js"
 import type { ProjectUseCaseOptions } from "./ProjectUseCaseOptions.js"
+import type { ProjectCanonical } from "./projectCanonicalSchema.js"
 import { projectList } from "./projectList.js"
+import { projectMigrate } from "./projectMigrate.js"
 import { projectOwnerAuthorize } from "./projectOwnerAuthorize.js"
 import { projectRevisionValidate } from "./projectRevisionValidate.js"
 
@@ -11,10 +13,20 @@ type ProjectListInput = {
   owner?: string
 }
 
+function projectListCanonicalize(projects: readonly Project[]): Result<ProjectCanonical[]> {
+  const canonical: ProjectCanonical[] = []
+  for (const project of projects) {
+    const projectR = projectMigrate(project)
+    if (!projectR.success) return projectR
+    canonical.push(projectR.data)
+  }
+  return createResult(canonical)
+}
+
 export async function projectListUseCase(
   options: ProjectUseCaseOptions,
   input: ProjectListInput | string = {},
-): PromiseResult<{ projects: Project[]; revision: string }> {
+): PromiseResult<{ projects: ProjectCanonical[]; revision: string }> {
   const actorR = await options.access.actorResolve()
   if (!actorR.success) return actorR
   const actor = actorR.data
@@ -39,7 +51,9 @@ export async function projectListUseCase(
     if (!revisionR.success) return revisionR
     const listR = projectList(snapshotR.data.projects.filter((project) => project.owner === owner))
     if (!listR.success) return listR
-    return createResult({ projects: listR.data, revision: revisionR.data })
+    const projectsR = projectListCanonicalize(listR.data)
+    if (!projectsR.success) return projectsR
+    return createResult({ projects: projectsR.data, revision: revisionR.data })
   }
 
   const actorOwnerRoleR = await options.access.ownerRoleResolve(actor.username)
@@ -77,5 +91,7 @@ export async function projectListUseCase(
 
   const listR = projectList(visibleProjects)
   if (!listR.success) return listR
-  return createResult({ projects: listR.data, revision: revisionR.data })
+  const projectsR = projectListCanonicalize(listR.data)
+  if (!projectsR.success) return projectsR
+  return createResult({ projects: projectsR.data, revision: revisionR.data })
 }

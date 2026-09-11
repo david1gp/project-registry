@@ -1,5 +1,5 @@
 import { constants, type Dirent } from "node:fs"
-import { lstat, mkdir, open, readdir, realpath } from "node:fs/promises"
+import { lstat, mkdir, mkdtemp, open, readdir, realpath, rename, rm } from "node:fs/promises"
 import { join } from "node:path"
 import * as a from "valibot"
 import {
@@ -12,14 +12,17 @@ import {
   gitStoreRun,
 } from "#git-store"
 import { createResult, createResultError, createResultErrorCode, type PromiseResult, type Result } from "#result"
+import { caddyConfigGenerate } from "../caddy/caddyConfigGenerate.js"
+import { caddyConfigSerialize } from "../caddy/caddyConfigSerialize.js"
 import type { Project } from "../project/Project.js"
+import type { ProjectCanonical } from "../project/projectCanonicalSchema.js"
 import { projectCollisions } from "../project/projectCollisions.js"
 import type { ProjectKey } from "../project/projectKey.js"
 import { projectKeyEqual } from "../project/projectKeyEqual.js"
+import { projectMigrate } from "../project/projectMigrate.js"
 import { projectMutationExpectedRevision } from "../project/projectMutationExpectedRevision.js"
 import { projectRevisionValidate } from "../project/projectRevisionValidate.js"
-import { projectSchema } from "../project/projectSchema.js"
-import { projectValidate } from "../project/projectValidate.js"
+import type { ProjectService } from "../project/projectServiceSchema.js"
 import type { UserDefaultDomain } from "../user-default-domain/UserDefaultDomain.js"
 import type { UserDefaultDomainEntry } from "../user-default-domain/UserDefaultDomainEntry.js"
 import type { UserDefaultDomainMutation } from "../user-default-domain/UserDefaultDomainMutation.js"
@@ -28,10 +31,13 @@ import { userDefaultDomainSchema } from "../user-default-domain/userDefaultDomai
 import { userDefaultDomainValidate } from "../user-default-domain/userDefaultDomainValidate.js"
 import type { ProjectRepository } from "./ProjectRepository.js"
 import type { ProjectRepositoryEntry } from "./ProjectRepositoryEntry.js"
+import type { ProjectRepositoryMigration } from "./ProjectRepositoryMigration.js"
+import type { ProjectRepositoryMigrationOptions } from "./ProjectRepositoryMigrationOptions.js"
 import type { ProjectRepositoryMutation } from "./ProjectRepositoryMutation.js"
 import type { ProjectRepositoryMutationOptions } from "./ProjectRepositoryMutationOptions.js"
 import { projectRepositoryOptionsSchema } from "./ProjectRepositoryOptions.js"
 import type { ProjectRepositoryReadiness } from "./ProjectRepositoryReadiness.js"
+import type { ProjectRepositoryServiceGrouping } from "./ProjectRepositoryServiceGrouping.js"
 import type { ProjectRepositorySnapshot } from "./ProjectRepositorySnapshot.js"
 import { projectRepositoryOwnerPath } from "./projectRepositoryOwnerPath.js"
 import { projectRepositoryPath } from "./projectRepositoryPath.js"
@@ -559,12 +565,12 @@ async function projectRepositoryReadSnapshot(store: GitProjectRepository): Promi
     const keyR = projectRepositoryPathKey(relPath)
     if (!keyR.success) return keyR
 
-    const projectR = await gitStoreRead(store.git, relPath, projectSchema)
+    const projectR = await gitStoreRead(store.git, relPath, a.unknown())
     if (!projectR.success) {
       return createResultError(op, `${relPath}: ${projectR.errorMessage}`, relPath)
     }
 
-    const validatedR = projectValidate(projectR.data)
+    const validatedR = projectMigrate(projectR.data)
     if (!validatedR.success) {
       return createResultError(op, `${relPath}: ${validatedR.errorMessage}`, relPath)
     }
@@ -586,11 +592,510 @@ async function projectRepositoryReadSnapshot(store: GitProjectRepository): Promi
   return createResult({ projects, revision: revisionR.data })
 }
 
-function projectRepositoryContentsEqual(left: Project, right: Project): boolean {
-  return JSON.stringify(left) === JSON.stringify(right)
+function projectRepositoryContentsEqual(left: unknown, right: unknown): boolean {
+  const serialize = (value: unknown): string =>
+    JSON.stringify(value, (_, nested) => {
+      if (!nested || typeof nested !== "object" || Array.isArray(nested)) return nested
+      return Object.fromEntries(Object.entries(nested).sort(([leftKey], [rightKey]) => leftKey.localeCompare(rightKey)))
+    })
+  return serialize(left) === serialize(right)
 }
 
-function projectRepositoryActor(options: ProjectRepositoryMutationOptions, op: string): Result<string> {
+type ProjectRepositoryMigrationRecord = {
+  canonical: boolean
+  path: string
+  project: ProjectCanonical
+}
+
+type ProjectRepositoryMigrationGrouping = ProjectRepositoryServiceGrouping & { serviceId: string }
+
+type ProjectRepositoryMigrationPlan = {
+  records: ProjectRepositoryMigrationRecord[]
+  projects: ProjectCanonical[]
+  writes: Array<{ data: string; path: string }>
+  removals: string[]
+  canonicalized: number
+  grouped: Array<{
+    parent: ProjectKey
+    serviceId: string
+    source: ProjectKey
+  }>
+  removed: ProjectKey[]
+}
+
+const projectRepositoryMigrationServiceIdPattern = /^[a-z0-9][a-z0-9-]*$/
+const projectRepositoryMigrationMetadataKeys = [
+  "description",
+  "type",
+  "order",
+  "github",
+  "previewUrl",
+  "previewPort",
+  "productionUrl",
+  "productionAssetsUrl",
+] as const
+
+function projectRepositoryMigrationKey(key: ProjectKey): string {
+  return `${key.owner}\u0000${key.name}`
+}
+
+function projectRepositoryMigrationKeyEqual(left: ProjectKey, right: ProjectKey): boolean {
+  return left.owner === right.owner && left.name === right.name
+}
+
+function projectRepositoryMigrationMetadataValue(
+  project: ProjectCanonical,
+  key: (typeof projectRepositoryMigrationMetadataKeys)[number],
+): unknown {
+  const value = project[key]
+  if (key === "type" && value === "customer") return undefined
+  if (key === "order" && value === Number.MAX_SAFE_INTEGER) return undefined
+  return value
+}
+
+function projectRepositoryMigrationMetadataMerge(
+  parent: ProjectCanonical,
+  source: ProjectCanonical,
+): Result<ProjectCanonical> {
+  const op = "projectRepositoryMigration"
+  const merged: ProjectCanonical = { ...parent, labels: { ...parent.labels }, services: [...parent.services] }
+
+  for (const key of projectRepositoryMigrationMetadataKeys) {
+    const sourceValue = projectRepositoryMigrationMetadataValue(source, key)
+    if (sourceValue === undefined) continue
+
+    const parentValue = projectRepositoryMigrationMetadataValue(parent, key)
+    if (parentValue === undefined) {
+      Object.assign(merged, { [key]: sourceValue })
+      continue
+    }
+    if (parentValue !== sourceValue) {
+      return createResultErrorCode(
+        op,
+        `cannot group ${source.owner}/${source.name} into ${parent.owner}/${parent.name}: project metadata ${key} conflicts`,
+        "projects.conflict",
+      )
+    }
+  }
+
+  for (const [key, value] of Object.entries(source.labels)) {
+    const parentValue = merged.labels[key]
+    if (parentValue !== undefined && parentValue !== value) {
+      return createResultErrorCode(
+        op,
+        `cannot group ${source.owner}/${source.name} into ${parent.owner}/${parent.name}: label ${key} conflicts`,
+        "projects.conflict",
+      )
+    }
+    Object.defineProperty(merged.labels, key, {
+      configurable: true,
+      enumerable: true,
+      value,
+      writable: true,
+    })
+  }
+
+  return createResult(merged)
+}
+
+function projectRepositoryMigrationServices(source: ProjectCanonical, serviceId: string): Result<ProjectService[]> {
+  const op = "projectRepositoryMigration"
+  const services: ProjectService[] = []
+  const sourceServices = source.services
+  for (let index = 0; index < sourceServices.length; index += 1) {
+    const sourceService = sourceServices[index]
+    if (sourceService === undefined) continue
+    const id = sourceServices.length === 1 ? serviceId : `${serviceId}-${sourceService.id}`
+    if (!projectRepositoryMigrationServiceIdPattern.test(id)) {
+      return createResultErrorCode(op, `invalid grouped service ID: ${id}`, "request.invalid")
+    }
+    if (services.some((service) => service.id === id)) {
+      return createResultErrorCode(op, `duplicate grouped service ID: ${id}`, "projects.conflict")
+    }
+    services.push({ id, units: [...sourceService.units], caddy: sourceService.caddy })
+  }
+  return createResult(services)
+}
+
+function projectRepositoryMigrationGroupingNormalize(input: unknown): Result<ProjectRepositoryMigrationGrouping[]> {
+  const op = "projectRepositoryMigration"
+  if (!Array.isArray(input)) return createResultError(op, "groupings must be an array")
+
+  const normalized: ProjectRepositoryMigrationGrouping[] = []
+  const sources = new Set<string>()
+  for (const value of input) {
+    if (value === null || typeof value !== "object" || Array.isArray(value)) {
+      return createResultError(op, "each grouping must be an object")
+    }
+    const grouping = value as Record<string, unknown>
+    const source = grouping.source
+    const parent = grouping.parent
+    if (
+      source === null ||
+      typeof source !== "object" ||
+      Array.isArray(source) ||
+      parent === null ||
+      typeof parent !== "object" ||
+      Array.isArray(parent)
+    ) {
+      return createResultError(op, "each grouping needs source and parent project keys")
+    }
+
+    const sourceKey = source as Record<string, unknown>
+    const parentKey = parent as Record<string, unknown>
+    if (
+      typeof sourceKey.owner !== "string" ||
+      typeof sourceKey.name !== "string" ||
+      typeof parentKey.owner !== "string" ||
+      typeof parentKey.name !== "string"
+    ) {
+      return createResultError(op, "grouping project keys must contain owner and name strings")
+    }
+
+    const sourceProjectKey = { owner: sourceKey.owner, name: sourceKey.name }
+    const parentProjectKey = { owner: parentKey.owner, name: parentKey.name }
+    const sourcePathR = projectRepositoryPath(sourceProjectKey)
+    if (!sourcePathR.success) return sourcePathR
+    const parentPathR = projectRepositoryPath(parentProjectKey)
+    if (!parentPathR.success) return parentPathR
+    if (projectRepositoryMigrationKeyEqual(sourceProjectKey, parentProjectKey)) {
+      return createResultErrorCode(op, "a grouping source and parent must differ", "request.invalid")
+    }
+
+    const key = projectRepositoryMigrationKey(sourceProjectKey)
+    if (sources.has(key)) return createResultErrorCode(op, `grouping source is repeated: ${key}`, "request.invalid")
+    sources.add(key)
+
+    const requestedServiceId = grouping.serviceId
+    const serviceId = requestedServiceId === undefined ? sourceProjectKey.name : requestedServiceId
+    if (typeof serviceId !== "string" || !projectRepositoryMigrationServiceIdPattern.test(serviceId)) {
+      return createResultErrorCode(op, `invalid grouped service ID: ${String(serviceId)}`, "request.invalid")
+    }
+    normalized.push({ source: sourceProjectKey, parent: parentProjectKey, serviceId })
+  }
+
+  normalized.sort((left, right) => {
+    const parentOrder = projectRepositoryMigrationKey(left.parent).localeCompare(
+      projectRepositoryMigrationKey(right.parent),
+    )
+    if (parentOrder !== 0) return parentOrder
+    return projectRepositoryMigrationKey(left.source).localeCompare(projectRepositoryMigrationKey(right.source))
+  })
+
+  const sourcesAsParents = new Set(normalized.map((grouping) => projectRepositoryMigrationKey(grouping.source)))
+  for (const grouping of normalized) {
+    if (sourcesAsParents.has(projectRepositoryMigrationKey(grouping.parent))) {
+      return createResultErrorCode(
+        op,
+        `grouping parent is also a grouping source: ${projectRepositoryMigrationKey(grouping.parent)}`,
+        "request.invalid",
+      )
+    }
+  }
+
+  return createResult(normalized)
+}
+
+async function projectRepositoryMigrationRecords(
+  store: GitProjectRepository,
+  snapshot: ProjectRepositorySnapshot,
+): PromiseResult<ProjectRepositoryMigrationRecord[]> {
+  const records: ProjectRepositoryMigrationRecord[] = []
+  for (const project of snapshot.projects) {
+    const migratedR = projectMigrate(project)
+    if (!migratedR.success) return createResultError("projectRepositoryMigration", migratedR.errorMessage)
+    const migrated = migratedR.data
+    const pathR = projectRepositoryPath(migrated)
+    if (!pathR.success) return pathR
+    const rawR = await gitStoreRead(store.git, pathR.data, a.unknown())
+    if (!rawR.success) return createResultError("projectRepositoryMigration", rawR.errorMessage, pathR.data)
+    const raw = rawR.data
+    const canonical =
+      typeof raw === "object" &&
+      raw !== null &&
+      !Array.isArray(raw) &&
+      (raw as Record<string, unknown>).schemaVersion === 2
+    records.push({ canonical, path: pathR.data, project: migrated })
+  }
+  return createResult(records)
+}
+
+async function projectRepositoryMigrationPlanBuild(
+  store: GitProjectRepository,
+  snapshot: ProjectRepositorySnapshot,
+  options: ProjectRepositoryMigrationOptions,
+): PromiseResult<ProjectRepositoryMigrationPlan> {
+  const op = "projectRepositoryMigration"
+  const recordsR = await projectRepositoryMigrationRecords(store, snapshot)
+  if (!recordsR.success) return recordsR
+  const groupingsR = projectRepositoryMigrationGroupingNormalize(options.groupings ?? [])
+  if (!groupingsR.success) return groupingsR
+  const groupings = groupingsR.data
+  const byKey = new Map(recordsR.data.map((record) => [projectRepositoryMigrationKey(record.project), record.project]))
+  const working = new Map(byKey)
+  const removals = new Set<string>()
+  const removed = new Map<string, ProjectKey>()
+  const grouped: Array<{ parent: ProjectKey; serviceId: string; source: ProjectKey }> = []
+
+  for (const grouping of groupings) {
+    const sourceKey = projectRepositoryMigrationKey(grouping.source)
+    const parentKey = projectRepositoryMigrationKey(grouping.parent)
+    const source = byKey.get(sourceKey)
+    const parent = working.get(parentKey)
+    if (parent === undefined) {
+      return createResultErrorCode(op, `grouping parent does not exist: ${parentKey}`, "projects.not-found")
+    }
+
+    if (source === undefined) {
+      if (!parent.services.some((service) => service.id === grouping.serviceId)) {
+        return createResultErrorCode(op, `grouping source is missing: ${sourceKey}`, "projects.not-found")
+      }
+      grouped.push({ parent: grouping.parent, serviceId: grouping.serviceId, source: grouping.source })
+      continue
+    }
+
+    const metadataR = projectRepositoryMigrationMetadataMerge(parent, source)
+    if (!metadataR.success) return metadataR
+    const sourceServicesR = projectRepositoryMigrationServices(source, grouping.serviceId)
+    if (!sourceServicesR.success) return sourceServicesR
+    const existingIds = new Set(parent.services.map((service) => service.id))
+    for (const service of sourceServicesR.data) {
+      if (existingIds.has(service.id)) {
+        return createResultErrorCode(
+          op,
+          `cannot group ${sourceKey} into ${parentKey}: service ID ${service.id} already exists`,
+          "projects.conflict",
+        )
+      }
+      existingIds.add(service.id)
+    }
+
+    const merged = metadataR.data
+    merged.services = [...parent.services, ...sourceServicesR.data]
+    working.set(parentKey, merged)
+    removals.add(sourceKey)
+    removed.set(sourceKey, grouping.source)
+    grouped.push({ parent: grouping.parent, serviceId: grouping.serviceId, source: grouping.source })
+  }
+
+  const projects = recordsR.data
+    .map((record) => working.get(projectRepositoryMigrationKey(record.project)))
+    .filter((project): project is ProjectCanonical => project !== undefined)
+    .filter((project) => !removals.has(projectRepositoryMigrationKey(project)))
+
+  const collisionsR = projectCollisions(projects)
+  if (!collisionsR.success) return createResultError(op, collisionsR.errorMessage)
+  const caddyR = caddyConfigGenerate(projects)
+  if (!caddyR.success) return createResultError(op, `generated Caddy configuration is invalid: ${caddyR.errorMessage}`)
+  const caddySerializedR = caddyConfigSerialize(caddyR.data)
+  if (!caddySerializedR.success) {
+    return createResultError(op, `generated Caddy configuration is invalid: ${caddySerializedR.errorMessage}`)
+  }
+
+  const projectByPath = new Map(recordsR.data.map((record) => [record.path, record]))
+  const writes: Array<{ data: string; path: string }> = []
+  for (const record of recordsR.data) {
+    const key = projectRepositoryMigrationKey(record.project)
+    if (removals.has(key)) continue
+    const project = working.get(key)
+    if (project === undefined) return createResultError(op, `migration lost project ${key}`)
+    const groupedParent = grouped.some((entry) => projectRepositoryMigrationKey(entry.parent) === key)
+    if (!record.canonical || groupedParent) {
+      const data = `${JSON.stringify(project, null, 2)}\n`
+      if (!record.canonical || !projectRepositoryContentsEqual(project, projectByPath.get(record.path)?.project)) {
+        writes.push({ data, path: record.path })
+      }
+    }
+  }
+
+  const removalPaths = recordsR.data
+    .filter((record) => removals.has(projectRepositoryMigrationKey(record.project)))
+    .map((record) => record.path)
+    .sort()
+
+  return createResult({
+    canonicalized: recordsR.data.filter((record) => !record.canonical).length,
+    grouped,
+    projects,
+    records: recordsR.data,
+    removed: [...removed.values()],
+    removals: removalPaths,
+    writes,
+  })
+}
+
+function projectRepositoryMigrationNoop(
+  dryRun: boolean,
+  changed: boolean,
+  revision: string,
+  plan: ProjectRepositoryMigrationPlan,
+): Result<ProjectRepositoryMigration> {
+  return createResult({
+    changed,
+    canonicalized: plan.canonicalized,
+    grouped: plan.grouped,
+    removed: plan.removed,
+    revision,
+    dryRun,
+    localCommit: { status: "unchanged", revision },
+    push: { requested: false, status: "not-requested" },
+  })
+}
+
+async function projectRepositoryMigrationStageWrite(
+  directory: string,
+  path: string,
+  data: string,
+): PromiseResult<string> {
+  const op = "projectRepositoryMigration"
+  const stagePath = join(directory, path)
+  const parent = stagePath.slice(0, stagePath.lastIndexOf("/"))
+  try {
+    await mkdir(parent, { recursive: true })
+    const handle = await open(
+      stagePath,
+      constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW,
+      0o666,
+    )
+    try {
+      await handle.writeFile(data, "utf8")
+    } finally {
+      await handle.close()
+    }
+  } catch (error) {
+    return createResultError(op, errorMessage(error), path)
+  }
+  return createResult(stagePath)
+}
+
+async function projectRepositoryMigrationRollback(store: GitProjectRepository): PromiseResult<void> {
+  const resetR = await gitStoreRun(store.git, ["reset", "--hard", "HEAD"])
+  if (!resetR.success) return resetR
+  return createResult(undefined)
+}
+
+async function projectRepositoryMigrationCommit(
+  store: GitProjectRepository,
+  plan: ProjectRepositoryMigrationPlan,
+  actor: string,
+  expectedRevision: string,
+): PromiseResult<ProjectRepositoryMigration> {
+  const op = "projectRepositoryMigration"
+  const branchR = await projectRepositoryRequireConfiguredBranch(store.git, op)
+  if (!branchR.success) return branchR
+  const currentRevisionR = await projectRepositoryRevision(store)
+  if (!currentRevisionR.success) return currentRevisionR
+  if (currentRevisionR.data !== expectedRevision) {
+    return createResultError(
+      op,
+      `revision changed during migration: expected ${expectedRevision}, current ${currentRevisionR.data}`,
+    )
+  }
+  const cleanR = await projectRepositoryRequireClean(store, op)
+  if (!cleanR.success) return cleanR
+
+  const safeR = await projectRepositoryProjectsSafe(store)
+  if (!safeR.success) return safeR
+  let stagingDirectory: string | undefined
+  let committed = false
+  try {
+    stagingDirectory = await mkdtemp(join(store.git.dir, ".project-registry-migration-"))
+    const stagedPaths: string[] = []
+    for (const write of plan.writes) {
+      const stagedR = await projectRepositoryMigrationStageWrite(stagingDirectory, write.path, write.data)
+      if (!stagedR.success) return stagedR
+      stagedPaths.push(write.path)
+    }
+
+    for (const write of plan.writes) {
+      await rename(join(stagingDirectory, write.path), join(store.git.dir, write.path))
+    }
+
+    if (plan.removals.length > 0) {
+      const removeR = await gitStoreRun(store.git, ["rm", "-f", "--", ...plan.removals])
+      if (!removeR.success) return removeR
+    }
+    if (stagedPaths.length > 0) {
+      const addR = await gitStoreRun(store.git, ["add", "--", ...stagedPaths])
+      if (!addR.success) return addR
+    }
+
+    const commitR = await projectRepositoryCommitGit(store, `project-registry migrate multi-service actor=${actor}`)
+    if (!commitR.success) return commitR
+    committed = true
+    const revision = commitR.data.trim()
+    if (revision === "") return createResultError(op, "migration did not produce a local commit")
+
+    const result = {
+      changed: true,
+      canonicalized: plan.canonicalized,
+      grouped: plan.grouped,
+      removed: plan.removed,
+      revision,
+      dryRun: false,
+      localCommit: { status: "committed" as const, revision },
+      push: { requested: false as const, status: "not-requested" as const },
+    }
+    if (!store.autoPush) return createResult(result)
+
+    const pushR = await projectRepositoryPush(store, revision, op)
+    if (!pushR.success) {
+      return createResult({
+        ...result,
+        push: { requested: true, status: "failed", errorMessage: pushR.errorMessage },
+      })
+    }
+    return createResult({ ...result, push: { requested: true, status: "pushed" } })
+  } catch (error) {
+    return createResultError(op, errorMessage(error))
+  } finally {
+    if (!committed) await projectRepositoryMigrationRollback(store)
+    if (stagingDirectory !== undefined) await rm(stagingDirectory, { force: true, recursive: true })
+  }
+}
+
+async function projectRepositoryMigrate(
+  store: GitProjectRepository,
+  options: ProjectRepositoryMigrationOptions,
+): PromiseResult<ProjectRepositoryMigration> {
+  const op = "projectRepositoryMigration"
+  if (options === null || typeof options !== "object" || Array.isArray(options)) {
+    return createResultError(op, "migration options must be an object")
+  }
+  if (typeof options.dryRun !== "undefined" && typeof options.dryRun !== "boolean") {
+    return createResultError(op, "dryRun must be a boolean")
+  }
+  const actorR = projectRepositoryActor(options, op)
+  if (!actorR.success) return actorR
+
+  const snapshotR = await projectRepositoryReadSnapshot(store)
+  if (!snapshotR.success) return snapshotR
+  if (options.expectedRevision !== undefined) {
+    const expectedR = projectRepositoryExpectedRevision(options, snapshotR.data.revision, op)
+    if (!expectedR.success) return expectedR
+  }
+
+  const planR = await projectRepositoryMigrationPlanBuild(store, snapshotR.data, options)
+  if (!planR.success) return planR
+  const plan = planR.data
+  const changed = plan.writes.length > 0 || plan.removals.length > 0
+  const dryRun = options.dryRun ?? false
+  if (!changed || dryRun) return projectRepositoryMigrationNoop(dryRun, changed, snapshotR.data.revision, plan)
+  return projectRepositoryMigrationCommit(store, plan, actorR.data, snapshotR.data.revision)
+}
+
+async function projectRepositoryFileCanonical(store: GitProjectRepository, relPath: string): PromiseResult<boolean> {
+  const projectR = await gitStoreRead(store.git, relPath, a.unknown())
+  if (!projectR.success) return projectR
+  return createResult(
+    typeof projectR.data === "object" &&
+      projectR.data !== null &&
+      !Array.isArray(projectR.data) &&
+      (projectR.data as Record<string, unknown>).schemaVersion === 2,
+  )
+}
+
+function projectRepositoryActor(options: { actor?: unknown }, op: string): Result<string> {
   if (!options || typeof options.actor !== "string") {
     return createResultError(op, "actor is required")
   }
@@ -892,7 +1397,7 @@ async function projectRepositoryCreate(
   const actorR = projectRepositoryActor(options, op)
   if (!actorR.success) return actorR
 
-  const projectR = projectValidate(input)
+  const projectR = projectMigrate(input)
   if (!projectR.success) return { ...projectR, op }
   const project = projectR.data
   const existing = snapshotR.data.projects.find((item) => projectKeyEqual(item, project))
@@ -927,7 +1432,7 @@ async function projectRepositoryEdit(
   const actorR = projectRepositoryActor(options, op)
   if (!actorR.success) return actorR
 
-  const projectR = projectValidate(input)
+  const projectR = projectMigrate(input)
   if (!projectR.success) return { ...projectR, op }
   const project = projectR.data
   if (!projectKeyEqual(project, key))
@@ -935,8 +1440,11 @@ async function projectRepositoryEdit(
 
   const existing = snapshotR.data.projects.find((item) => projectKeyEqual(item, key))
   if (!existing) return createResultErrorCode(op, "project not found", "projects.not-found")
-  if (projectRepositoryContentsEqual(existing, project))
-    return projectRepositoryNoop("edit", project, snapshotR.data.revision)
+  if (projectRepositoryContentsEqual(existing, project)) {
+    const canonicalR = await projectRepositoryFileCanonical(store, pathR.data)
+    if (!canonicalR.success) return canonicalR
+    if (canonicalR.data) return projectRepositoryNoop("edit", project, snapshotR.data.revision)
+  }
 
   const replacement = snapshotR.data.projects.map((item) => (projectKeyEqual(item, key) ? project : item))
   const collisionsR = projectCollisions(replacement)
@@ -1148,6 +1656,10 @@ export async function projectRepositoryOpen(options: unknown): PromiseResult<Pro
     delete: (key, mutationOptions) =>
       projectRepositoryQueue(store, "projectRepositoryDelete", () =>
         projectRepositoryDelete(store, key, mutationOptions),
+      ),
+    migrate: (migrationOptions) =>
+      projectRepositoryQueue(store, "projectRepositoryMigration", () =>
+        projectRepositoryMigrate(store, migrationOptions),
       ),
     setUserDefaultDomain: (owner, domain, mutationOptions) =>
       projectRepositoryQueue(store, "projectRepositorySetUserDefaultDomain", () =>

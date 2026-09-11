@@ -43,6 +43,37 @@ function ownedProject(owner: string, name: string, port: number): Project {
   return { ...project(name, port), owner }
 }
 
+function canonicalProject(name: string, port: number): Project {
+  return {
+    schemaVersion: 2,
+    owner: "alice",
+    name,
+    type: "customer",
+    order: Number.MAX_SAFE_INTEGER,
+    labels: { team: "platform" },
+    services: [
+      {
+        id: "api",
+        units: ["api.service"],
+        caddy: {
+          port,
+          domains: [`${name}.example`],
+          path: "",
+          access: "external",
+          kind: "proxy",
+          docs: true,
+          browse: false,
+          headerUp: {},
+          disabled: false,
+          denyDotfiles: false,
+          spa: false,
+        },
+      },
+      { id: "worker", units: ["worker.service"], caddy: null },
+    ],
+  }
+}
+
 afterEach(() => {
   while (directories.length > 0) {
     const directory = directories.pop()
@@ -51,6 +82,69 @@ afterEach(() => {
 })
 
 describe("projectRepositoryOpen", () => {
+  test("reads legacy records as canonical services and writes canonical CRUD documents", async () => {
+    const directory = temporaryRepository()
+    const gitR = await gitStoreOpen({ dir: directory })
+    expect(gitR.success).toBe(true)
+    if (!gitR.success) return
+
+    const legacy = project("legacy", 3000)
+    const seedR = await gitStoreWrite(gitR.data, "projects/alice/legacy.json", legacy, "legacy seed")
+    expect(seedR.success).toBe(true)
+    if (!seedR.success) return
+
+    const openR = await projectRepositoryOpen({ dir: directory })
+    expect(openR.success).toBe(true)
+    if (!openR.success) return
+
+    const readR = await openR.data.get({ owner: "alice", name: "legacy" })
+    expect(readR).toMatchObject({
+      success: true,
+      data: {
+        project: {
+          schemaVersion: 2,
+          owner: "alice",
+          name: "legacy",
+          services: [{ id: "default", units: [], caddy: { port: 3000 } }],
+        },
+      },
+    })
+    if (!readR.success) return
+
+    const canonicalizeR = await openR.data.edit({ owner: "alice", name: "legacy" }, readR.data.project, {
+      actor: "alice",
+      expectedRevision: readR.data.revision,
+    })
+    expect(canonicalizeR).toMatchObject({ success: true, data: { changed: true } })
+    if (!canonicalizeR.success) return
+
+    const editR = await openR.data.edit(
+      { owner: "alice", name: "legacy" },
+      { ...readR.data.project, description: "canonicalized" },
+      { actor: "alice", expectedRevision: canonicalizeR.data.revision },
+    )
+    expect(editR.success).toBe(true)
+    expect(JSON.parse(readFileSync(join(directory, "projects/alice/legacy.json"), "utf8"))).toMatchObject({
+      schemaVersion: 2,
+      description: "canonicalized",
+      services: [{ id: "default", caddy: { port: 3000 } }],
+    })
+    expect(JSON.parse(readFileSync(join(directory, "projects/alice/legacy.json"), "utf8")).caddy).toBeUndefined()
+  })
+
+  test("round-trips canonical multi-service projects without losing metadata", async () => {
+    const openR = await projectRepositoryOpen({ dir: temporaryRepository() })
+    expect(openR.success).toBe(true)
+    if (!openR.success) return
+
+    const createR = await openR.data.create(canonicalProject("multi", 3000), { actor: "alice", expectedRevision: "" })
+    expect(createR.success).toBe(true)
+    if (!createR.success) return
+
+    const readR = await openR.data.read()
+    expect(readR).toMatchObject({ success: true, data: { projects: [canonicalProject("multi", 3000)] } })
+  })
+
   test("rejects unknown and cyclic runtime options before opening a Git store", async () => {
     const options: Record<string, unknown> = { dir: temporaryRepository() }
     options.cyclic = options
@@ -832,7 +926,10 @@ describe("projectRepositoryOpen", () => {
     const recoveredR = await openR.data.get({ owner: "alice", name: "catalog" })
     expect(recoveredR.success).toBe(true)
     if (!recoveredR.success) return
-    expect(recoveredR.data.project.caddy?.port).toBe(3000)
+    const recoveredService = recoveredR.data.project.services.find(
+      (service): service is Exclude<typeof service, string> => typeof service !== "string",
+    )
+    expect(recoveredService?.caddy?.port).toBe(3000)
   })
 
   test("rejects project divergence hidden by assume-unchanged and skip-worktree, then recovers it", async () => {
@@ -874,7 +971,10 @@ describe("projectRepositoryOpen", () => {
       expect(recoverR.success).toBe(true)
       if (!recoverR.success) return
       expect(recoverR.data.ready).toBe(true)
-      expect(JSON.parse(readFileSync(join(directory, projectPath), "utf8"))).toEqual(project("catalog", 3000))
+      expect(JSON.parse(readFileSync(join(directory, projectPath), "utf8"))).toMatchObject({
+        schemaVersion: 2,
+        services: [{ id: "default", caddy: { port: 3000 } }],
+      })
 
       const flagsR = await gitStoreRun(gitR.data, ["ls-files", "-v", "--", projectPath])
       expect(flagsR.success).toBe(true)
@@ -909,7 +1009,10 @@ describe("projectRepositoryOpen", () => {
       })
       expect(editR.success).toBe(true)
       if (!editR.success) return
-      expect(JSON.parse(readFileSync(join(directory, projectPath), "utf8"))).toEqual(project("catalog", 3001))
+      expect(JSON.parse(readFileSync(join(directory, projectPath), "utf8"))).toMatchObject({
+        schemaVersion: 2,
+        services: [{ id: "default", caddy: { port: 3001 } }],
+      })
 
       const deleteFlagR = await gitStoreRun(gitR.data, ["update-index", flag, "--", projectPath])
       expect(deleteFlagR.success).toBe(true)
