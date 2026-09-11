@@ -522,6 +522,13 @@ describe("projectRegistryDaemonCloudflareDns lifecycle", () => {
     expect(calls.some((call) => call.startsWith("PUT "))).toBe(true)
     expect(stored.state.records).toHaveLength(1)
 
+    const putsBeforeRecurring = calls.filter((call) => call.startsWith("PUT ")).length
+    const restoredRecord = records.get("record-1")
+    if (restoredRecord !== undefined) restoredRecord.content = "198.51.100.21"
+    timer.tick()
+    await settle()
+    expect(calls.filter((call) => call.startsWith("PUT ")).length).toBeGreaterThan(putsBeforeRecurring)
+
     projects = []
     queueR.data.projectDeleteAfterPersistence(restored)
     await settle()
