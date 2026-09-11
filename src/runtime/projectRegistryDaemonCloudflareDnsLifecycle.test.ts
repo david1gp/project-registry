@@ -78,11 +78,13 @@ function trackingCreate(initial: ProjectRegistryDaemonCloudflareDnsTrackingState
 function fetchCreate(
   records: Map<string, { id: string; name: string; type: string; content: string; ttl: number; proxied: boolean }>,
   calls: string[],
+  authorizations: string[] = [],
 ) {
   let nextId = 1
   return async (input: string, init: RequestInit): Promise<Response> => {
     const url = new URL(input)
     calls.push(`${init.method ?? "GET"} ${url.pathname}${url.search}`)
+    authorizations.push(new Headers(init.headers).get("authorization") ?? "")
     if (url.pathname.endsWith("/zones")) {
       return new Response(JSON.stringify({ success: true, result: [{ id: "zone", name: "example.com" }] }), {
         status: 200,
@@ -137,7 +139,7 @@ describe("projectRegistryDaemonCloudflareDns lifecycle", () => {
     let projects: Project[] = []
     const queueR = projectRegistryDaemonCloudflareDnsCreate({
       enabled: true,
-      token: "token",
+      credentialResolve: async () => createResult("token"),
       timeoutMs: 1000,
       serverIpCurrent: () => "203.0.113.10",
       timer: timer.timer,
@@ -198,7 +200,7 @@ describe("projectRegistryDaemonCloudflareDns lifecycle", () => {
     })
     const queueR = projectRegistryDaemonCloudflareDnsCreate({
       enabled: true,
-      token: "token",
+      credentialResolve: async () => createResult("token"),
       timeoutMs: 1000,
       serverIpCurrent: () => undefined,
       timer: timer.timer,
@@ -222,16 +224,17 @@ describe("projectRegistryDaemonCloudflareDns lifecycle", () => {
       { id: string; name: string; type: string; content: string; ttl: number; proxied: boolean }
     >()
     const stored = trackingCreate({ version: 1, records: [] })
+    const authorizations: string[] = []
     let projects: Project[] = []
     const queueR = projectRegistryDaemonCloudflareDnsCreate({
       enabled: true,
-      token: "token",
+      credentialResolve: async (owner) => createResult(`${owner}-token`),
       timeoutMs: 1000,
       serverIpCurrent: () => "203.0.113.10",
       timer: timer.timer,
       tracking: stored.tracking,
       repositoryProjectsCurrent: async () => createResult(projects),
-      fetch: fetchCreate(records, []),
+      fetch: fetchCreate(records, [], authorizations),
     })
     expect(queueR.success).toBe(true)
     if (!queueR.success) return
@@ -262,6 +265,8 @@ describe("projectRegistryDaemonCloudflareDns lifecycle", () => {
     expect(records.size).toBe(0)
     expect(stored.state.records).toEqual([])
     await queueR.data.shutdown()
+    expect(authorizations).toContain("Bearer leo-token")
+    expect(authorizations).toContain("Bearer david-token")
   })
 
   test("does not lose an edit queued during an in-flight reconciliation", async () => {
@@ -291,7 +296,7 @@ describe("projectRegistryDaemonCloudflareDns lifecycle", () => {
     }
     const queueR = projectRegistryDaemonCloudflareDnsCreate({
       enabled: true,
-      token: "token",
+      credentialResolve: async () => createResult("token"),
       timeoutMs: 1000,
       serverIpCurrent: () => "203.0.113.10",
       timer: timer.timer,
@@ -320,12 +325,127 @@ describe("projectRegistryDaemonCloudflareDns lifecycle", () => {
     await queueR.data.shutdown()
   })
 
+  test("retains a persisted pending delete for its original owner until that token appears", async () => {
+    const timer = timerCreate()
+    const records = new Map([
+      [
+        "record-1",
+        { id: "record-1", name: "orphan.example.com", type: "A", content: "203.0.113.10", ttl: 1, proxied: true },
+      ],
+    ])
+    const authorizations: string[] = []
+    const owners: string[] = []
+    const stored = trackingCreate({
+      version: 1,
+      records: [
+        {
+          zoneId: "zone",
+          zoneName: "example.com",
+          id: "record-1",
+          name: "orphan.example.com",
+          type: "A",
+          content: "203.0.113.10",
+          ttl: 1,
+          proxied: true,
+          projectKeys: [{ owner: "leo", name: "removed" }],
+        },
+      ],
+    })
+    let now = 0
+    let token: string | undefined
+    const queueR = projectRegistryDaemonCloudflareDnsCreate({
+      enabled: true,
+      credentialResolve: async (owner) => {
+        owners.push(owner)
+        return createResult(token)
+      },
+      timeoutMs: 1000,
+      serverIpCurrent: () => undefined,
+      timer: timer.timer,
+      tracking: stored.tracking,
+      repositoryProjectsCurrent: async () => createResult([]),
+      fetch: fetchCreate(records, [], authorizations),
+      clock: () => now,
+    })
+    expect(queueR.success).toBe(true)
+    if (!queueR.success) return
+    queueR.data.start()
+    await settle()
+    expect(records.size).toBe(1)
+    expect(stored.state.records).toHaveLength(1)
+    expect(owners).toEqual(["leo"])
+
+    token = "leo-delete-token"
+    now = 2_000
+    timer.tick()
+    await settle()
+    expect(records.size).toBe(0)
+    expect(stored.state.records).toEqual([])
+    expect(owners).toEqual(["leo", "leo"])
+    expect(new Set(authorizations)).toEqual(new Set(["Bearer leo-delete-token"]))
+    await queueR.data.shutdown()
+  })
+
+  test("defers ambiguous persisted ownership without changing tracking or calling Cloudflare", async () => {
+    const timer = timerCreate()
+    const records = new Map([
+      [
+        "record-1",
+        { id: "record-1", name: "shared.example.com", type: "A", content: "203.0.113.10", ttl: 1, proxied: true },
+      ],
+    ])
+    const initial = {
+      version: 1 as const,
+      records: [
+        {
+          zoneId: "zone",
+          zoneName: "example.com",
+          id: "record-1",
+          name: "shared.example.com",
+          type: "A",
+          content: "203.0.113.10",
+          ttl: 1,
+          proxied: true,
+          projectKeys: [
+            { owner: "leo", name: "first" },
+            { owner: "david", name: "second" },
+          ],
+        },
+      ],
+    }
+    const stored = trackingCreate(initial)
+    const owners: string[] = []
+    const calls: string[] = []
+    const queueR = projectRegistryDaemonCloudflareDnsCreate({
+      enabled: true,
+      credentialResolve: async (owner) => {
+        owners.push(owner)
+        return createResult(`${owner}-token`)
+      },
+      timeoutMs: 1000,
+      serverIpCurrent: () => undefined,
+      timer: timer.timer,
+      tracking: stored.tracking,
+      repositoryProjectsCurrent: async () => createResult([]),
+      fetch: fetchCreate(records, calls),
+    })
+    expect(queueR.success).toBe(true)
+    if (!queueR.success) return
+    queueR.data.start()
+    await settle()
+    expect(stored.state).toEqual(initial)
+    expect(records.size).toBe(1)
+    expect(owners).toEqual([])
+    expect(calls).toEqual([])
+    await queueR.data.shutdown()
+  })
+
   test("does not overwrite corrupt ownership state", async () => {
     const timer = timerCreate()
     let writes = 0
     const queueR = projectRegistryDaemonCloudflareDnsCreate({
       enabled: true,
-      token: "token",
+      credentialResolve: async () => createResult("token"),
       timeoutMs: 1000,
       serverIpCurrent: () => "203.0.113.10",
       timer: timer.timer,

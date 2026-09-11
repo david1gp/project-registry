@@ -1,4 +1,5 @@
 import { createResult, createResultError, createResultErrorCode, type Result, type ResultErr } from "#result"
+import type { Actor } from "../access/Actor.js"
 import type { ProjectAccess } from "../access/ProjectAccess.js"
 import type { ProjectAccessLogSource } from "../access-log/ProjectAccessLogSource.js"
 import { projectAccessLogListUseCase } from "../access-log/projectAccessLogListUseCase.js"
@@ -22,10 +23,11 @@ import { projectOwnerAuthorize } from "../project/projectOwnerAuthorize.js"
 import type { ProjectPortRange } from "../project/projectPortNext.js"
 import type { ProjectRepository } from "../project-store/ProjectRepository.js"
 import type { ProjectRepositoryMutation } from "../project-store/ProjectRepositoryMutation.js"
+import { projectRegistryVersion } from "../projectRegistryVersion.js"
+import type { ProjectRegistryDaemonCloudflareCredentials } from "../runtime/ProjectRegistryDaemonCloudflareCredentials.js"
 import type { ProjectRegistryDaemonRequestContext } from "../runtime/ProjectRegistryDaemonRequestContext.js"
 import type { ProjectRegistryDaemonRequestHandler } from "../runtime/ProjectRegistryDaemonRequestHandler.js"
 import type { ProjectRegistryDaemonSocketAccessResolve } from "../runtime/ProjectRegistryDaemonSocketAccessResolve.js"
-import { projectRegistryVersion } from "../projectRegistryVersion.js"
 
 type ApiHandlerOptions = {
   repository: ProjectRepository
@@ -34,6 +36,7 @@ type ApiHandlerOptions = {
   portRange?: ProjectPortRange
   defaultUserDomains?: Readonly<Record<string, string>>
   projectAccessLogSource?: ProjectAccessLogSource
+  cloudflareCredentials?: Pick<ProjectRegistryDaemonCloudflareCredentials, "tokenSet">
   socketAccessResolve?: ProjectRegistryDaemonSocketAccessResolve
   projectCreateAfterPersistence?: (project: Project, options: { noDns: boolean }) => void
   projectEditAfterPersistence?: (previous: Project, project: Project) => void
@@ -53,6 +56,7 @@ type ApiRoute =
   | { kind: "version"; legacy: false }
   | { kind: "regenerate"; legacy: boolean }
   | { kind: "default-domain"; legacy: false; owner: string }
+  | { kind: "cloudflare-token"; legacy: false; owner: string }
 
 type ResultFailure = ResultErr & { hint?: string }
 
@@ -95,6 +99,8 @@ const socketAuthenticationHint =
   "Check your account access, then retry. If the problem persists, contact an administrator."
 const ownerPattern = /^[A-Za-z_][A-Za-z0-9_.-]*\$?$/
 const projectNamePattern = /^[a-z0-9][a-z0-9-]*$/
+const maximumCloudflareTokenLength = 8_192
+const maximumCloudflareTokenRequestBytes = 16_384
 
 function requestAccessCreate(username: string): ProjectAccess {
   return {
@@ -162,6 +168,13 @@ function routeParse(path: string): ApiRoute | undefined {
     const owner = segmentDecode(versionedDefaultDomain[1]!, ownerPattern)
     if (owner === undefined) return undefined
     return { kind: "default-domain", legacy: false, owner }
+  }
+
+  const versionedCloudflareToken = path.match(/^\/api\/v1\/users\/([^/]+)\/cloudflare-token$/)
+  if (versionedCloudflareToken !== null) {
+    const owner = segmentDecode(versionedCloudflareToken[1]!, ownerPattern)
+    if (owner === undefined) return undefined
+    return { kind: "cloudflare-token", legacy: false, owner }
   }
 
   const versionedHistory = path.match(/^\/api\/v1\/users\/([^/]+)\/projects\/([^/]+)\/history$/)
@@ -268,7 +281,8 @@ function routeRequiresProjectAccess(route: ApiRoute): boolean {
     route.kind === "self-access-logs" ||
     route.kind === "history" ||
     route.kind === "config" ||
-    route.kind === "default-domain"
+    route.kind === "default-domain" ||
+    route.kind === "cloudflare-token"
   )
 }
 
@@ -379,6 +393,7 @@ function routeMethods(route: ApiRoute): readonly string[] {
   if (route.kind === "project") return route.legacy ? ["GET", "PUT", "PATCH", "DELETE"] : ["GET", "PATCH", "DELETE"]
   if (route.kind === "project-by-port") return ["DELETE"]
   if (route.kind === "default-domain") return ["GET", "PUT", "DELETE"]
+  if (route.kind === "cloudflare-token") return ["PUT"]
   if (route.kind === "regenerate") return ["POST"]
   return ["GET"]
 }
@@ -412,9 +427,128 @@ function accessLogInputParse(url: URL): Result<{ limit?: number; before?: string
   })
 }
 
-async function requestBodyJson(request: Request, legacy: boolean): Promise<unknown | Response> {
+function cloudflareTokenOwnerAuthorize(actor: Actor, owner: string): Result<void> {
+  const op = "projectRegistryApiCloudflareTokenAuthorize"
+  if (actor.username !== owner) return createResultErrorCode(op, "Access is forbidden.", "projects.forbidden")
+  return createResult(undefined)
+}
+
+function cloudflareTokenIsValid(token: string): boolean {
+  if (token.length === 0 || token.length > maximumCloudflareTokenLength || token.trim() !== token) return false
+  return [...token].every((character) => {
+    const codePoint = character.codePointAt(0)
+    return codePoint !== undefined && codePoint > 0x1f && codePoint !== 0x7f
+  })
+}
+
+async function requestBodyText(request: Request, maximumBytes: number): Promise<string | Response> {
+  const contentLength = request.headers.get("content-length")
+  if (contentLength !== null) {
+    if (!/^\d+$/.test(contentLength)) {
+      return errorResponse(
+        {
+          code: "request.invalid",
+          message: "The request body is invalid.",
+          op: "projectRegistryApiBodyRead",
+          status: 400,
+        },
+        false,
+      )
+    }
+    const declaredBytes = Number(contentLength)
+    if (!Number.isSafeInteger(declaredBytes) || declaredBytes > maximumBytes) {
+      return errorResponse(
+        {
+          code: "request.invalid",
+          message: "The request body is too large.",
+          op: "projectRegistryApiBodyRead",
+          status: 400,
+        },
+        false,
+      )
+    }
+  }
+
+  const body = request.body
+  if (body === null) return ""
+  const reader = body.getReader()
+  const chunks: Uint8Array[] = []
+  let totalBytes = 0
   try {
-    return await request.json()
+    while (true) {
+      const chunkR = await reader.read()
+      if (chunkR.done) break
+      totalBytes += chunkR.value.byteLength
+      if (totalBytes > maximumBytes) {
+        await reader.cancel()
+        return errorResponse(
+          {
+            code: "request.invalid",
+            message: "The request body is too large.",
+            op: "projectRegistryApiBodyRead",
+            status: 400,
+          },
+          false,
+        )
+      }
+      chunks.push(chunkR.value)
+    }
+  } catch {
+    return errorResponse(
+      {
+        code: "request.invalid",
+        message: "The request body is invalid.",
+        op: "projectRegistryApiBodyRead",
+        status: 400,
+      },
+      false,
+    )
+  } finally {
+    reader.releaseLock()
+  }
+
+  const bytes = new Uint8Array(totalBytes)
+  let offset = 0
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset)
+    offset += chunk.byteLength
+  }
+  try {
+    return new TextDecoder("utf-8", { fatal: true }).decode(bytes)
+  } catch {
+    return errorResponse(
+      {
+        code: "request.invalid",
+        message: "The request body must be valid JSON.",
+        op: "projectRegistryApiBodyParse",
+        status: 400,
+      },
+      false,
+    )
+  }
+}
+
+async function requestBodyJson(request: Request, legacy: boolean, maximumBytes?: number): Promise<unknown | Response> {
+  if (maximumBytes === undefined) {
+    try {
+      return await request.json()
+    } catch {
+      return errorResponse(
+        {
+          code: "request.invalid",
+          message: "The request body must be valid JSON.",
+          op: "projectRegistryApiBodyParse",
+          status: 400,
+        },
+        legacy,
+      )
+    }
+  }
+
+  const bodyText = await requestBodyText(request, maximumBytes)
+  if (bodyText instanceof Response) return bodyText
+  try {
+    return JSON.parse(bodyText)
   } catch {
     return errorResponse(
       {
@@ -668,6 +802,75 @@ export function projectRegistryApiHandlerCreate(options: ApiHandlerOptions): Pro
       access: resolvedAccess,
       portRange: options.portRange,
       defaultUserDomains: options.defaultUserDomains,
+    }
+
+    if (route.kind === "cloudflare-token") {
+      const actorR = await resolvedAccess.actorResolve()
+      if (!actorR.success) return resultErrorResponse(actorR, false, "projects")
+      const authorizationR = cloudflareTokenOwnerAuthorize(actorR.data, owner)
+      if (!authorizationR.success) return resultErrorResponse(authorizationR, false, "projects")
+      if (options.cloudflareCredentials === undefined) {
+        return errorResponse(
+          {
+            code: "platform.internal",
+            message: "Cloudflare credentials are unavailable.",
+            op: "projectRegistryApiCloudflareTokenSet",
+            status: 500,
+          },
+          false,
+        )
+      }
+
+      const body = await requestBodyJson(request, false, maximumCloudflareTokenRequestBytes)
+      if (body instanceof Response) return body
+      const bodyRecord = recordValue(body)
+      if (bodyRecord === undefined || typeof bodyRecord.token !== "string") {
+        return errorResponse(
+          {
+            code: "request.invalid",
+            message: "Cloudflare API token is required.",
+            op: "projectRegistryApiCloudflareTokenSet",
+            status: 400,
+          },
+          false,
+        )
+      }
+      if (!cloudflareTokenIsValid(bodyRecord.token)) {
+        return errorResponse(
+          {
+            code: "request.invalid",
+            message: "Cloudflare API token is invalid.",
+            op: "projectRegistryApiCloudflareTokenSet",
+            status: 400,
+          },
+          false,
+        )
+      }
+
+      const updatedR = await options.cloudflareCredentials.tokenSet(owner, bodyRecord.token)
+      if (!updatedR.success) {
+        if (updatedR.code === "request.invalid") {
+          return errorResponse(
+            {
+              code: "request.invalid",
+              message: "Cloudflare API token is invalid.",
+              op: updatedR.op,
+              status: 400,
+            },
+            false,
+          )
+        }
+        return errorResponse(
+          {
+            code: "platform.internal",
+            message: "Cloudflare credentials could not be updated.",
+            op: updatedR.op,
+            status: 500,
+          },
+          false,
+        )
+      }
+      return successResponse({ updated: true })
     }
 
     if (route.kind === "default-domain") {

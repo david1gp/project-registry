@@ -23,6 +23,8 @@ import type { ProjectRegistryDaemonServerIp } from "./ProjectRegistryDaemonServe
 import type { ProjectRegistryDaemonSignals } from "./ProjectRegistryDaemonSignals.js"
 import type { ProjectRegistryDaemonSocketRefresh } from "./ProjectRegistryDaemonSocketRefresh.js"
 import type { ProjectRegistryDaemonState } from "./ProjectRegistryDaemonState.js"
+import { projectRegistryDaemonCloudflareCredentialsCreate } from "./projectRegistryDaemonCloudflareCredentialsCreate.js"
+import { projectRegistryDaemonCloudflareCredentialsFilesystemDefault } from "./projectRegistryDaemonCloudflareCredentialsFilesystemDefault.js"
 import { projectRegistryDaemonCloudflareDnsCreate } from "./projectRegistryDaemonCloudflareDnsCreate.js"
 import { projectRegistryDaemonCloudflareDnsTrackingCreate } from "./projectRegistryDaemonCloudflareDnsTrackingCreate.js"
 import { projectRegistryDaemonCloudflareDnsTrackingFilesystemDefault } from "./projectRegistryDaemonCloudflareDnsTrackingFilesystemDefault.js"
@@ -215,6 +217,7 @@ export function projectRegistryDaemonCreate(options: ProjectRegistryDaemonOption
   let serverIpClockOption: ProjectRegistryDaemonOptions["serverIpClock"]
   let cloudflareDnsFetchOption: ProjectRegistryDaemonOptions["cloudflareDnsFetch"]
   let cloudflareDnsTrackingFilesystemOption: ProjectRegistryDaemonOptions["cloudflareDnsTrackingFilesystem"]
+  let cloudflareDnsCredentialsFilesystemOption: ProjectRegistryDaemonOptions["cloudflareDnsCredentialsFilesystem"]
   let requireRootOption: ProjectRegistryDaemonOptions["requireRoot"]
   try {
     configInput = options.config
@@ -236,6 +239,7 @@ export function projectRegistryDaemonCreate(options: ProjectRegistryDaemonOption
     serverIpClockOption = options.serverIpClock
     cloudflareDnsFetchOption = options.cloudflareDnsFetch
     cloudflareDnsTrackingFilesystemOption = options.cloudflareDnsTrackingFilesystem
+    cloudflareDnsCredentialsFilesystemOption = options.cloudflareDnsCredentialsFilesystem
     requireRootOption = options.requireRoot
   } catch (error) {
     return createResultError(op, error instanceof Error ? error.message : "invalid daemon options")
@@ -275,9 +279,15 @@ export function projectRegistryDaemonCreate(options: ProjectRegistryDaemonOption
     filesystem: cloudflareDnsTrackingFilesystemOption ?? projectRegistryDaemonCloudflareDnsTrackingFilesystemDefault(),
   })
   if (!cloudflareDnsTrackingR.success) return cloudflareDnsTrackingR
+  const cloudflareCredentialsR = projectRegistryDaemonCloudflareCredentialsCreate({
+    directory: config.cloudflareDns.credentialsDirectory,
+    filesystem:
+      cloudflareDnsCredentialsFilesystemOption ?? projectRegistryDaemonCloudflareCredentialsFilesystemDefault(),
+  })
+  if (!cloudflareCredentialsR.success) return cloudflareCredentialsR
   const cloudflareDnsR = projectRegistryDaemonCloudflareDnsCreate({
     enabled: config.cloudflareDns.enabled,
-    token: config.cloudflareDns.token,
+    credentialResolve: cloudflareCredentialsR.data.tokenResolve,
     timeoutMs: config.loadTimeoutMs,
     serverIpCurrent: serverIp.current,
     timer,
@@ -1138,7 +1148,8 @@ export function projectRegistryDaemonCreate(options: ProjectRegistryDaemonOption
       },
       portRange: config.portRange,
       defaultUserDomains: config.defaultUserDomains,
-      ...(config.cloudflareDns.enabled && config.cloudflareDns.token !== undefined
+      cloudflareCredentials: cloudflareCredentialsR.data,
+      ...(config.cloudflareDns.enabled
         ? { projectCreateAfterPersistence: cloudflareDns.projectCreateAfterPersistence }
         : {}),
       projectEditAfterPersistence: cloudflareDns.projectEditAfterPersistence,

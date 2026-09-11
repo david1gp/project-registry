@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test"
+import { readFileSync } from "node:fs"
 import { chmod as fsChmod, chown as fsChown, lstat as fsLstat, mkdtemp, rm, symlink } from "node:fs/promises"
 import { join } from "node:path"
 import { createResult, createResultError, createResultErrorCode } from "#result"
@@ -11,6 +12,7 @@ import type { ProjectRepository } from "../project-store/ProjectRepository.js"
 import { sessionCookieSerialize } from "../session/sessionCookieSerialize.js"
 import { sessionStoreCreate } from "../session/sessionStoreCreate.js"
 import { tokenReferenceStoreCreate } from "../session/tokenReferenceStoreCreate.js"
+import type { ProjectRegistryDaemon } from "./ProjectRegistryDaemon.js"
 import type { ProjectRegistryDaemonBrowserAuth } from "./ProjectRegistryDaemonBrowserAuth.js"
 import type { ProjectRegistryDaemonConfig } from "./ProjectRegistryDaemonConfig.js"
 import type { ProjectRegistryDaemonFileStat } from "./ProjectRegistryDaemonFileStat.js"
@@ -890,6 +892,162 @@ describe("projectRegistryDaemonCreate", () => {
     expect(sourceProjects).toEqual(["leo/leo-app", "bob/bob-app", "root/root-app"])
 
     await daemonR.data.shutdown()
+  })
+
+  test("binds Cloudflare token updates to daemon sockets and authenticated browser sessions", async () => {
+    const credentialsDirectory = await mkdtemp("/tmp/project-registry-daemon-cloudflare-")
+    const users: ProjectRegistryDaemonMappedUser[] = [
+      { username: "alice", uid: 1001, gid: 1002 },
+      { username: "bob", uid: 1003, gid: 1004 },
+      { username: "admin", uid: 1005, gid: 1006 },
+    ]
+    const browser = await browserAuthCreate([
+      { username: "alice", role: "own" },
+      { username: "bob", role: "own" },
+      { username: "admin", role: "admin" },
+      { username: "root", role: "superadmin" },
+    ])
+    const fakeFilesystem = filesystemCreate()
+    const fakeServers = serverFactoryCreate(fakeFilesystem.entries)
+    const ownerRoles: Record<string, Role | undefined> = {
+      alice: "own",
+      bob: "own",
+      admin: "admin",
+      root: "superadmin",
+    }
+    const resolvedUsers: string[] = []
+    let daemon: ProjectRegistryDaemon | undefined
+
+    try {
+      const daemonR = projectRegistryDaemonCreate({
+        config: config({
+          mappedUsers: users.map((user) => user.username),
+          socketDirectory: "/run/project-registry",
+          cloudflareDns: { enabled: false, credentialsDirectory },
+        }),
+        repository: repository(),
+        caddyApplication: caddyApplication(),
+        browserAuth: browser.auth,
+        socketAccessResolve: async (username) => {
+          resolvedUsers.push(username)
+          const role = username === "admin" ? "admin" : "own"
+          return createResult(socketAccessCreate(username, role, ownerRoles))
+        },
+        filesystem: fakeFilesystem.filesystem,
+        serverFactory: fakeServers.factory,
+        posix: {
+          isRoot: () => true,
+          userResolve: async (username) => {
+            const user = users.find((entry) => entry.username === username)
+            return user === undefined ? createResultError("test", "user is missing") : createResult(user)
+          },
+        },
+        requireRoot: false,
+      })
+      expect(daemonR.success).toBe(true)
+      if (!daemonR.success) return
+      daemon = daemonR.data
+      expect((await daemon.start()).success).toBe(true)
+
+      const aliceSocket = fakeServers.requests.find((entry) => entry.context.endsWith("/alice.sock"))
+      const bobSocket = fakeServers.requests.find((entry) => entry.context.endsWith("/bob.sock"))
+      const adminSocket = fakeServers.requests.find((entry) => entry.context.endsWith("/admin.sock"))
+      const http = fakeServers.requests.find((entry) => entry.context === "http")
+      expect(aliceSocket).toBeDefined()
+      expect(bobSocket).toBeDefined()
+      expect(adminSocket).toBeDefined()
+      expect(http).toBeDefined()
+      if (aliceSocket === undefined || bobSocket === undefined || adminSocket === undefined || http === undefined)
+        return
+
+      const ownSocket = await aliceSocket.fetch(
+        new Request("http://localhost/api/v1/users/alice/cloudflare-token", {
+          method: "PUT",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ token: "socket-owner-token" }),
+        }),
+      )
+      expect(ownSocket.status).toBe(200)
+      expect(await ownSocket.json()).toEqual({ success: true, data: { updated: true } })
+      expect(readFileSync(`${credentialsDirectory}/alice.env`, "utf8")).toBe(
+        "CLOUDFLARE_API_TOKEN=socket-owner-token\n",
+      )
+
+      const socketCrossOwner = await bobSocket.fetch(
+        new Request("http://localhost/api/v1/users/alice/cloudflare-token", {
+          method: "PUT",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ token: "bob-cross-owner-token" }),
+        }),
+      )
+      expect(socketCrossOwner.status).toBe(403)
+      expect(JSON.stringify(await socketCrossOwner.json())).not.toContain("bob-cross-owner-token")
+
+      const adminCrossOwner = await adminSocket.fetch(
+        new Request("http://localhost/api/v1/users/alice/cloudflare-token", {
+          method: "PUT",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ token: "admin-shared-token" }),
+        }),
+      )
+      expect(adminCrossOwner.status).toBe(403)
+      expect(JSON.stringify(await adminCrossOwner.json())).not.toContain("admin-shared-token")
+      expect(readFileSync(`${credentialsDirectory}/alice.env`, "utf8")).toBe(
+        "CLOUDFLARE_API_TOKEN=socket-owner-token\n",
+      )
+
+      const ownWeb = await http.fetch(
+        new Request("http://localhost/api/v1/users/alice/cloudflare-token", {
+          method: "PUT",
+          headers: { "content-type": "application/json", cookie: browser.cookies.alice! },
+          body: JSON.stringify({ token: "web-owner-token" }),
+        }),
+      )
+      expect(ownWeb.status).toBe(200)
+      expect(await ownWeb.json()).toEqual({ success: true, data: { updated: true } })
+      expect(readFileSync(`${credentialsDirectory}/alice.env`, "utf8")).toBe("CLOUDFLARE_API_TOKEN=web-owner-token\n")
+
+      for (const [username, token] of [
+        ["admin", "admin-web-token"],
+        ["root", "superadmin-web-token"],
+      ] as const) {
+        const crossOwner = await http.fetch(
+          new Request("http://localhost/api/v1/users/alice/cloudflare-token", {
+            method: "PUT",
+            headers: { "content-type": "application/json", cookie: browser.cookies[username]! },
+            body: JSON.stringify({ token }),
+          }),
+        )
+        expect(crossOwner.status).toBe(403)
+        expect(JSON.stringify(await crossOwner.json())).not.toContain(token)
+      }
+
+      const missingActor = await http.fetch(
+        new Request("http://localhost/api/v1/users/alice/cloudflare-token", {
+          method: "PUT",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ token: "missing-actor-token" }),
+        }),
+      )
+      expect(missingActor.status).toBe(401)
+
+      const invalidSession = await http.fetch(
+        new Request("http://localhost/api/v1/users/alice/cloudflare-token", {
+          method: "PUT",
+          headers: {
+            "content-type": "application/json",
+            cookie: `__Host-project-registry-session=${"a".repeat(32)}`,
+          },
+          body: JSON.stringify({ token: "invalid-session-token" }),
+        }),
+      )
+      expect(invalidSession.status).toBe(401)
+      expect(readFileSync(`${credentialsDirectory}/alice.env`, "utf8")).toBe("CLOUDFLARE_API_TOKEN=web-owner-token\n")
+      expect(resolvedUsers).toEqual(["alice", "bob", "admin"])
+    } finally {
+      await daemon?.shutdown()
+      await rm(credentialsDirectory, { recursive: true, force: true })
+    }
   })
 
   test("keeps readiness false for a dirty repository and missing mapped users", async () => {

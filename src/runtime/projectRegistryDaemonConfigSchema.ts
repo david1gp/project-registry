@@ -110,8 +110,6 @@ const serviceTokenSchema = a.pipe(
   ),
 )
 
-const cloudflareTokenSchema = serviceTokenSchema
-
 const sessionMaxAgeSchema = a.pipe(
   a.number(),
   a.integer("session lifetime must be an integer"),
@@ -146,7 +144,7 @@ const serverIpSchema = a.pipe(
 
 const cloudflareDnsSchema = a.strictObject({
   enabled: a.optional(a.boolean(), true),
-  token: a.optional(cloudflareTokenSchema),
+  credentialsDirectory: a.optional(absolutePathSchema, "/etc/project-registry/cloudflare"),
 })
 
 export const projectRegistryDaemonConfigSchema = a.strictObject({

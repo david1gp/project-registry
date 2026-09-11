@@ -9,6 +9,7 @@ import type { SessionStore } from "../session/SessionStore.js"
 import type { TokenReferenceStore } from "../session/TokenReferenceStore.js"
 import type { ZitadelHttp } from "../zitadel/ZitadelHttp.js"
 import type { ProjectRegistryDaemonBrowserAuth } from "./ProjectRegistryDaemonBrowserAuth.js"
+import type { ProjectRegistryDaemonCloudflareCredentialsFilesystem } from "./ProjectRegistryDaemonCloudflareCredentialsFilesystem.js"
 import type { ProjectRegistryDaemonCloudflareDnsTrackingFilesystem } from "./ProjectRegistryDaemonCloudflareDnsTrackingFilesystem.js"
 import type { ProjectRegistryDaemonFilesystem } from "./ProjectRegistryDaemonFilesystem.js"
 import type { ProjectRegistryDaemonMappedUsersResolve } from "./ProjectRegistryDaemonMappedUsersResolve.js"
@@ -45,5 +46,6 @@ export type ProjectRegistryDaemonOptions = {
   serverIpClock?: () => number
   cloudflareDnsFetch?: CloudflareDnsFetch
   cloudflareDnsTrackingFilesystem?: ProjectRegistryDaemonCloudflareDnsTrackingFilesystem
+  cloudflareDnsCredentialsFilesystem?: ProjectRegistryDaemonCloudflareCredentialsFilesystem
   requireRoot?: boolean
 }

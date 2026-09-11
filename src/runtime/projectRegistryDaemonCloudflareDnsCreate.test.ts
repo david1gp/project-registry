@@ -1,13 +1,14 @@
 import { describe, expect, test } from "bun:test"
+import { createResult } from "#result"
 import type { Project } from "../project/Project.js"
 import { projectRegistryDaemonCloudflareDnsCreate } from "./projectRegistryDaemonCloudflareDnsCreate.js"
 import { projectRegistryDaemonConfigFromEnv } from "./projectRegistryDaemonConfigFromEnv.js"
 
-function project(domains: string[], disabled = false): Project {
+function project(domains: string[], disabled = false, owner = "leo", name = "dns-app"): Project {
   return {
     schemaVersion: 2,
-    owner: "leo",
-    name: "dns-app",
+    owner,
+    name,
     type: "customer",
     order: Number.MAX_SAFE_INTEGER,
     services: [
@@ -63,19 +64,31 @@ function json(value: unknown, status = 200): Response {
   return new Response(JSON.stringify(value), { status, headers: { "content-type": "application/json" } })
 }
 
-function cloudflareFetchCreate(calls: string[]): (input: string, init: RequestInit) => Promise<Response> {
+function cloudflareFetchCreate(
+  calls: string[],
+  authorizations: string[] = [],
+): (input: string, init: RequestInit) => Promise<Response> {
   return async (input, init) => {
     const url = new URL(input)
     calls.push(`${init.method ?? "GET"} ${url.pathname}${url.search}`)
+    authorizations.push(new Headers(init.headers).get("authorization") ?? "")
     if (url.pathname.endsWith("/zones")) {
       return url.searchParams.get("name") === "example.com"
         ? json({ success: true, result: [{ id: "zone", name: "example.com", status: "active" }] })
         : json({ success: true, result: [] })
     }
     if (init.method === "GET") return json({ success: true, result: [] })
+    const body = init.body === undefined ? {} : (JSON.parse(String(init.body)) as Record<string, unknown>)
     return json({
       success: true,
-      result: { id: "record", name: "app.example.com", type: "A", content: "203.0.113.10", ttl: 1, proxied: true },
+      result: {
+        id: "record",
+        name: typeof body.name === "string" ? body.name : "app.example.com",
+        type: typeof body.type === "string" ? body.type : "A",
+        content: typeof body.content === "string" ? body.content : "203.0.113.10",
+        ttl: typeof body.ttl === "number" ? body.ttl : 1,
+        proxied: typeof body.proxied === "boolean" ? body.proxied : true,
+      },
     })
   }
 }
@@ -85,7 +98,7 @@ async function settle(): Promise<void> {
 }
 
 describe("projectRegistryDaemonConfigFromEnv Cloudflare DNS", () => {
-  test("uses the preferred token, falls back, and honors the disable switch", () => {
+  test("uses the owner credentials directory, ignores global tokens, and honors the disable switch", () => {
     const preferred = projectRegistryDaemonConfigFromEnv({
       PROJECT_REGISTRY_REPOSITORY_PATH: "/tmp/repository",
       CLOUDFLARE_API_TOKEN: "preferred-token",
@@ -93,7 +106,11 @@ describe("projectRegistryDaemonConfigFromEnv Cloudflare DNS", () => {
     })
     expect(preferred).toMatchObject({
       success: true,
-      data: { cloudflareDns: { enabled: true, token: "preferred-token" } },
+      data: { cloudflareDns: { enabled: true, credentialsDirectory: "/etc/project-registry/cloudflare" } },
+    })
+    expect(preferred.success ? preferred.data.cloudflareDns : undefined).toEqual({
+      enabled: true,
+      credentialsDirectory: "/etc/project-registry/cloudflare",
     })
 
     const fallback = projectRegistryDaemonConfigFromEnv({
@@ -102,7 +119,11 @@ describe("projectRegistryDaemonConfigFromEnv Cloudflare DNS", () => {
     })
     expect(fallback).toMatchObject({
       success: true,
-      data: { cloudflareDns: { enabled: true, token: "fallback-token" } },
+      data: { cloudflareDns: { enabled: true, credentialsDirectory: "/etc/project-registry/cloudflare" } },
+    })
+    expect(fallback.success ? fallback.data.cloudflareDns : undefined).toEqual({
+      enabled: true,
+      credentialsDirectory: "/etc/project-registry/cloudflare",
     })
 
     const disabled = projectRegistryDaemonConfigFromEnv({
@@ -112,22 +133,123 @@ describe("projectRegistryDaemonConfigFromEnv Cloudflare DNS", () => {
     })
     expect(disabled).toMatchObject({
       success: true,
-      data: { cloudflareDns: { enabled: false, token: "preferred-token" } },
+      data: { cloudflareDns: { enabled: false, credentialsDirectory: "/etc/project-registry/cloudflare" } },
+    })
+    expect(disabled.success ? disabled.data.cloudflareDns : undefined).toEqual({
+      enabled: false,
+      credentialsDirectory: "/etc/project-registry/cloudflare",
     })
 
-    const missing = projectRegistryDaemonConfigFromEnv({ PROJECT_REGISTRY_REPOSITORY_PATH: "/tmp/repository" })
-    expect(missing).toMatchObject({ success: true, data: { cloudflareDns: { enabled: false } } })
+    const missing = projectRegistryDaemonConfigFromEnv({
+      PROJECT_REGISTRY_REPOSITORY_PATH: "/tmp/repository",
+      CLOUDFLARE_API_TOKEN: "global-token",
+      CF_API_TOKEN: "legacy-global-token",
+    })
+    expect(missing).toMatchObject({
+      success: true,
+      data: { cloudflareDns: { enabled: true, credentialsDirectory: "/etc/project-registry/cloudflare" } },
+    })
+    expect(missing.success ? missing.data.cloudflareDns : undefined).toEqual({
+      enabled: true,
+      credentialsDirectory: "/etc/project-registry/cloudflare",
+    })
+
+    const custom = projectRegistryDaemonConfigFromEnv({
+      PROJECT_REGISTRY_REPOSITORY_PATH: "/tmp/repository",
+      PROJECT_REGISTRY_CLOUDFLARE_CREDENTIALS_DIR: "/srv/project-registry/cloudflare",
+    })
+    expect(custom.success ? custom.data.cloudflareDns : undefined).toEqual({
+      enabled: true,
+      credentialsDirectory: "/srv/project-registry/cloudflare",
+    })
   })
 })
 
 describe("projectRegistryDaemonCloudflareDnsCreate", () => {
+  test("uses the current owner credential for create, edit, and each reconciliation", async () => {
+    const timer = timerCreate()
+    const calls: string[] = []
+    const authorizations: string[] = []
+    const owners: string[] = []
+    const tokens = new Map([
+      ["leo", "leo-token-1"],
+      ["david", "david-token-1"],
+    ])
+    const queueR = projectRegistryDaemonCloudflareDnsCreate({
+      enabled: true,
+      credentialResolve: async (owner) => {
+        owners.push(owner)
+        return createResult(tokens.get(owner))
+      },
+      timeoutMs: 1000,
+      serverIpCurrent: () => "203.0.113.10",
+      timer: timer.timer,
+      fetch: cloudflareFetchCreate(calls, authorizations),
+    })
+    expect(queueR.success).toBe(true)
+    if (!queueR.success) return
+    expect(queueR.data.start().success).toBe(true)
+
+    const leo = project(["app.example.com"], false, "leo", "leo-app")
+    queueR.data.projectCreateAfterPersistence(leo, { noDns: false })
+    await settle()
+    tokens.set("leo", "leo-token-2")
+    const edited = project(["edited.example.com"], false, "leo", "leo-app")
+    queueR.data.projectEditAfterPersistence(leo, edited)
+    await settle()
+    const david = project(["david.example.com"], false, "david", "david-app")
+    queueR.data.projectCreateAfterPersistence(david, { noDns: false })
+    await settle()
+
+    expect(owners).toEqual(["leo", "leo", "david"])
+    expect(authorizations).toContain("Bearer leo-token-1")
+    expect(authorizations).toContain("Bearer leo-token-2")
+    expect(authorizations).toContain("Bearer david-token-1")
+    await queueR.data.shutdown()
+  })
+
+  test("retries when an owner credential appears and rereads it after it changes", async () => {
+    const timer = timerCreate()
+    const authorizations: string[] = []
+    let now = 0
+    let token: string | undefined
+    const queueR = projectRegistryDaemonCloudflareDnsCreate({
+      enabled: true,
+      credentialResolve: async () => createResult(token),
+      timeoutMs: 1000,
+      serverIpCurrent: () => "203.0.113.10",
+      timer: timer.timer,
+      fetch: cloudflareFetchCreate([], authorizations),
+      clock: () => now,
+    })
+    expect(queueR.success).toBe(true)
+    if (!queueR.success) return
+    expect(queueR.data.start().success).toBe(true)
+    const first = project(["app.example.com"])
+    queueR.data.projectCreateAfterPersistence(first, { noDns: false })
+    await settle()
+    expect(authorizations).toEqual([])
+
+    token = "appeared-token"
+    now = 1_000
+    timer.tick()
+    await settle()
+    expect(authorizations).toContain("Bearer appeared-token")
+
+    token = "changed-token"
+    queueR.data.projectEditAfterPersistence(first, project(["changed.example.com"]))
+    await settle()
+    expect(authorizations).toContain("Bearer changed-token")
+    await queueR.data.shutdown()
+  })
+
   test("holds work while IP discovery is pending, then reconciles normalized aliases", async () => {
     const timer = timerCreate()
     const calls: string[] = []
     let currentIp: string | undefined
     const queueR = projectRegistryDaemonCloudflareDnsCreate({
       enabled: true,
-      token: "token",
+      credentialResolve: async () => createResult("token"),
       timeoutMs: 1000,
       serverIpCurrent: () => currentIp,
       timer: timer.timer,
@@ -152,10 +274,7 @@ describe("projectRegistryDaemonCloudflareDnsCreate", () => {
   })
 
   test("skips missing credentials, global opt-out, and per-create opt-out without fetches", async () => {
-    const cases = [
-      { enabled: true, token: undefined },
-      { enabled: false, token: "token" },
-    ] as const
+    const cases = [{ enabled: true }, { enabled: false }] as const
     for (const options of cases) {
       const timer = timerCreate()
       let fetches = 0
@@ -185,7 +304,7 @@ describe("projectRegistryDaemonCloudflareDnsCreate", () => {
     let fetches = 0
     const queueR = projectRegistryDaemonCloudflareDnsCreate({
       enabled: true,
-      token: "token",
+      credentialResolve: async () => createResult("token"),
       timeoutMs: 1000,
       serverIpCurrent: () => "203.0.113.10",
       timer: timer.timer,
@@ -209,7 +328,7 @@ describe("projectRegistryDaemonCloudflareDnsCreate", () => {
     const logs: string[] = []
     const queueR = projectRegistryDaemonCloudflareDnsCreate({
       enabled: true,
-      token: "secret-token",
+      credentialResolve: async () => createResult("secret-token"),
       timeoutMs: 1000,
       serverIpCurrent: () => "203.0.113.10",
       timer: timer.timer,
@@ -239,7 +358,7 @@ describe("projectRegistryDaemonCloudflareDnsCreate", () => {
     let aborted = false
     const queueR = projectRegistryDaemonCloudflareDnsCreate({
       enabled: true,
-      token: "token",
+      credentialResolve: async () => createResult("token"),
       timeoutMs: 1000,
       serverIpCurrent: () => "203.0.113.10",
       timer: timer.timer,

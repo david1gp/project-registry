@@ -1,9 +1,9 @@
 import { afterEach, describe, expect, test } from "bun:test"
 import { mkdtempSync, rmSync } from "node:fs"
 import { join } from "node:path"
-import pkg from "../../package.json" with { type: "json" }
 import type { GitStoreCommitInfo } from "#git-store"
 import { createResult, createResultError, createResultErrorCode, type Result } from "#result"
+import pkg from "../../package.json" with { type: "json" }
 import { caddyAccessLogFixture } from "../../test/fixtures/caddyAccessLogFixture.js"
 import { caddyConfigGenerateFixtures } from "../../test/fixtures/caddyConfigGenerateFixtures.js"
 import type { ProjectAccess } from "../access/ProjectAccess.js"
@@ -314,6 +314,24 @@ async function requestJson(
   return { response, body: (await response.json()) as Record<string, unknown> }
 }
 
+async function requestRaw(
+  handler: ReturnType<typeof projectRegistryApiHandlerCreate>,
+  path: string,
+  context: ProjectRegistryDaemonRequestContext,
+  method: string,
+  body: string,
+): Promise<{ response: Response; body: Record<string, unknown> }> {
+  const response = await handler(
+    new Request(`http://localhost${path}`, {
+      method,
+      body,
+      headers: { "content-type": "application/json" },
+    }),
+    context,
+  )
+  return { response, body: (await response.json()) as Record<string, unknown> }
+}
+
 afterEach(() => {
   while (temporaryDirectories.length > 0) {
     const directory = temporaryDirectories.pop()
@@ -579,7 +597,7 @@ describe("projectRegistryApiHandlerCreate", () => {
     expect(notifications).toHaveLength(2)
     expect(lifecycle).toEqual(["edit:true", "delete:false"])
     expect(notifications[0]).toMatchObject({ noDns: false, project: { name: "dns-app" } })
-    expect(notifications[0]?.project.caddy?.domains).toEqual(["alias.example"])
+    expect(notifications[0]?.project.services).toMatchObject([{ caddy: { domains: ["alias.example"] } }])
     expect(notifications[1]).toMatchObject({ noDns: true, project: { name: "no-dns-app" } })
   })
 
@@ -753,6 +771,114 @@ describe("projectRegistryApiHandlerCreate", () => {
     expect(afterUnset.response.status).toBe(400)
     expect(afterUnset.body).toMatchObject({ success: false, error: { code: "request.invalid", status: 400 } })
     expect(repository.projects.some((project) => project.name === "after-unset")).toBe(false)
+  })
+
+  test("updates only the authenticated owner's Cloudflare token and returns no secret", async () => {
+    const repository = repositoryCreate()
+    const calls: { owner: string; token: string }[] = []
+    const handler = projectRegistryApiHandlerCreate({
+      repository,
+      caddyApplication: caddyApplicationCreate(),
+      cloudflareCredentials: {
+        tokenSet: async (owner, token) => {
+          calls.push({ owner, token })
+          return createResult({ updated: true as const })
+        },
+      },
+    })
+    const own = { transport: "unix", username: "leo" } as const
+
+    const updated = await requestJson(handler, "/api/v1/users/leo/cloudflare-token", own, "PUT", {
+      owner: "david",
+      token: "token-value",
+    })
+    expect(updated.response.status).toBe(200)
+    expect(updated.body).toEqual({ success: true, data: { updated: true } })
+    expect(JSON.stringify(updated.body)).not.toContain("token-value")
+    expect(calls).toEqual([{ owner: "leo", token: "token-value" }])
+
+    const webUpdated = await requestJson(
+      handler,
+      "/api/v1/users/leo/cloudflare-token",
+      { transport: "http", access: socketAccessCreate("leo", "own", { leo: "own" }) },
+      "PUT",
+      { token: "web-token-value" },
+    )
+    expect(webUpdated.response.status).toBe(200)
+    expect(webUpdated.body).toEqual({ success: true, data: { updated: true } })
+    expect(calls).toEqual([
+      { owner: "leo", token: "token-value" },
+      { owner: "leo", token: "web-token-value" },
+    ])
+
+    const crossOwner = await requestJson(
+      handler,
+      "/api/v1/users/leo/cloudflare-token",
+      {
+        transport: "unix",
+        username: "david",
+      },
+      "PUT",
+      { token: "cross-owner-token" },
+    )
+    expect(crossOwner.response.status).toBe(403)
+    expect(crossOwner.body).toMatchObject({ success: false, error: { code: "projects.forbidden", status: 403 } })
+    expect(calls).toHaveLength(2)
+
+    const adminCrossOwner = await requestJson(
+      handler,
+      "/api/v1/users/leo/cloudflare-token",
+      { transport: "http", access: socketAccessCreate("david", "admin", { leo: "own" }) },
+      "PUT",
+      { token: "admin-cross-owner-token" },
+    )
+    expect(adminCrossOwner.response.status).toBe(403)
+    expect(adminCrossOwner.body).toMatchObject({ success: false, error: { code: "projects.forbidden", status: 403 } })
+    expect(calls).toHaveLength(2)
+
+    const unauthenticated = await requestJson(
+      handler,
+      "/api/v1/users/leo/cloudflare-token",
+      { transport: "http" },
+      "PUT",
+      { token: "unauthenticated-token" },
+    )
+    expect(unauthenticated.response.status).toBe(401)
+    expect(unauthenticated.body).toMatchObject({ success: false, error: { code: "api.unauthenticated", status: 401 } })
+    expect(calls).toHaveLength(2)
+  })
+
+  test("rejects malformed, injected, and oversized token bodies before the credential writer", async () => {
+    const repository = repositoryCreate()
+    const calls: { owner: string; token: string }[] = []
+    const handler = projectRegistryApiHandlerCreate({
+      repository,
+      caddyApplication: caddyApplicationCreate(),
+      cloudflareCredentials: {
+        tokenSet: async (owner, token) => {
+          calls.push({ owner, token })
+          return createResult({ updated: true as const })
+        },
+      },
+    })
+    const own = { transport: "unix", username: "leo" } as const
+
+    const malformed = await requestRaw(handler, "/api/v1/users/leo/cloudflare-token", own, "PUT", "{")
+    expect(malformed.response.status).toBe(400)
+    expect(malformed.body).toMatchObject({ success: false, error: { code: "request.invalid", status: 400 } })
+
+    const injected = await requestJson(handler, "/api/v1/users/leo/cloudflare-token", own, "PUT", {
+      token: "token\nCLOUDFLARE_API_TOKEN=forged",
+    })
+    expect(injected.response.status).toBe(400)
+    expect(injected.body).toMatchObject({ success: false, error: { code: "request.invalid", status: 400 } })
+
+    const oversized = await requestJson(handler, "/api/v1/users/leo/cloudflare-token", own, "PUT", {
+      token: "x".repeat(16_385),
+    })
+    expect(oversized.response.status).toBe(400)
+    expect(oversized.body).toMatchObject({ success: false, error: { code: "request.invalid", status: 400 } })
+    expect(calls).toHaveLength(0)
   })
 
   test("authorizes default-domain routes before reading or mutating the requested owner", async () => {
