@@ -55,4 +55,5 @@ Options:
   --json           Emit a stable JSON envelope
   -h, --help       Show help
   -V, --version    Show local CLI version without contacting the daemon
+  --verbose        Include local executable and runtime metadata with --version
 `

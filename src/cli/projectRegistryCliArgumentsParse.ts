@@ -79,19 +79,21 @@ export function projectRegistryCliArgumentsParse(args: readonly string[]): Resul
   let json = false
   let help = false
   let version = false
+  let verbose = false
   let hasLabels = false
   let clearLabels = false
   let tokenStdin = false
 
   for (let index = 0; index < args.length; index += 1) {
     const argument = args[index]!
-    if (["--json", "--help", "-h", "--version", "-V"].includes(argument)) {
+    if (["--json", "--help", "-h", "--version", "-V", "--verbose"].includes(argument)) {
       const key = argument === "-h" ? "--help" : argument === "-V" ? "--version" : argument
       if (seen.has(key)) return createResultError(op, `Option ${key} may only be provided once.`)
       seen.add(key)
       if (key === "--json") json = true
       if (key === "--help") help = true
       if (key === "--version") version = true
+      if (key === "--verbose") verbose = true
       continue
     }
 
@@ -282,7 +284,9 @@ export function projectRegistryCliArgumentsParse(args: readonly string[]): Resul
 
   if (help && version) return createResultError(op, "Options --help and --version cannot be combined.")
   if (help) return createResult({ command: { kind: "help" }, json, socket })
-  if (version) return createResult({ command: { kind: "version" }, json, socket })
+  if (version)
+    return createResult({ command: { kind: "version", ...(verbose ? { verbose: true } : {}) }, json, socket })
+  if (verbose) return createResultError(op, "Option --verbose requires --version or -V.")
   if (positionals.length === 0) return createResultError(op, "A command is required.")
 
   const pairValues: Array<[string, string, keyof ProjectRegistryCliCaddyOptions]> = [

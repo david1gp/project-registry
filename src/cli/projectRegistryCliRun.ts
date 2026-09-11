@@ -7,6 +7,7 @@ import { type ProjectCanonical, projectCanonicalSchema } from "../project/projec
 import { projectLabelsSchema } from "../project/projectLabelsSchema.js"
 import { projectMigrate } from "../project/projectMigrate.js"
 import { projectSchema } from "../project/projectSchema.js"
+import { projectRegistryVersionMetadataRender } from "../projectRegistryVersionMetadataRender.js"
 import type { ProjectRegistryCliCaddyOptions } from "./ProjectRegistryCliCaddyOptions.js"
 import type { ProjectRegistryCliFetch } from "./ProjectRegistryCliFetch.js"
 import type { ProjectRegistryCliInvocation } from "./ProjectRegistryCliInvocation.js"
@@ -514,6 +515,10 @@ export async function projectRegistryCliRun(args: readonly string[], options: Cl
     return 0
   }
   if (invocation.command.kind === "version") {
+    if (invocation.command.verbose === true) {
+      writeOut(projectRegistryVersionMetadataRender("project-registry"))
+      return 0
+    }
     writeOut(`project-registry ${projectRegistryCliVersion}\n`)
     return 0
   }

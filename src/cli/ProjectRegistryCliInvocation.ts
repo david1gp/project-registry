@@ -4,7 +4,7 @@ import type { ProjectRegistryCliCaddyOptions } from "./ProjectRegistryCliCaddyOp
 export type ProjectRegistryCliInvocation = {
   command:
     | { kind: "help" }
-    | { kind: "version" }
+    | { kind: "version"; verbose?: true }
     | { kind: "backend-version" }
     | { kind: "user-default-domain-get" }
     | { kind: "user-default-domain-set"; domain: string }

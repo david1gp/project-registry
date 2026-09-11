@@ -446,6 +446,25 @@ describe("projectRegistryCliRun", () => {
     })
   })
 
+  test("emits verbose local metadata without requesting the daemon", async () => {
+    let requests = 0
+    const stdout: string[] = []
+    const exitCode = await projectRegistryCliRun(["--version", "--verbose"], {
+      requestFetch: async () => {
+        requests += 1
+        return Response.json({ success: true, data: {} })
+      },
+      stdout: (text) => stdout.push(text),
+    })
+
+    expect(exitCode).toBe(0)
+    expect(requests).toBe(0)
+    expect(stdout.join("")).toContain(`project-registry ${pkg.version}\nuser agent: ${pkg.name}/${pkg.version}`)
+    expect(stdout.join("")).toContain("installation type: development checkout")
+    expect(stdout.join("")).toContain("runtime: bun ")
+    expect(stdout.join("")).toContain(`platform: ${process.platform} ${process.arch} (OS release `)
+  })
+
   test("includes labels in versioned JSON list and get reads", async () => {
     const versionedProject = {
       schemaVersion: 1,

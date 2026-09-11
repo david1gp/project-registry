@@ -53,6 +53,7 @@ describe("projectRegistryCliArgumentsParse", () => {
     [["user", "cloudflare-token", "set", "--token-stdin"], { kind: "user-cloudflare-token-set", tokenStdin: true }],
     [["--help"], { kind: "help" }],
     [["-V"], { kind: "version" }],
+    [["--version", "--verbose"], { kind: "version", verbose: true }],
   ] as const)("parses %p", (args, command) => {
     const result = projectRegistryCliArgumentsParse(args)
 
@@ -252,6 +253,7 @@ describe("projectRegistryCliArgumentsParse", () => {
     [["status", "--socket"], "Option --socket requires a path."],
     [["status", "--json", "--json"], "Option --json may only be provided once."],
     [["--help", "--version"], "Options --help and --version cannot be combined."],
+    [["version", "--verbose"], "Option --verbose requires --version or -V."],
     [["project", "create", "--no-dns", "--no-dns"], "Option --no-dns may only be provided once."],
     [["project", "access-logs", "site", "--no-dns"], "Unknown command or invalid syntax: project access-logs site."],
     [["project", "edit", "site", "--no-dns"], "Unknown command or invalid syntax: project edit site."],
