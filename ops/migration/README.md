@@ -1,5 +1,31 @@
 # Legacy migration
 
+## Multi-service repository migration
+
+`multi-service-migrate.ts` is the explicit, repository-local task-5 operation. It defaults to a
+read-only plan and uses the reviewed Leo grouping map:
+
+```bash
+bun run ops/migration/multi-service-migrate.ts \
+  --repository /path/to/project-registry-history \
+  --dry-run
+```
+
+After reviewing the plan, apply it explicitly:
+
+```bash
+bun run ops/migration/multi-service-migrate.ts \
+  --repository /path/to/project-registry-history \
+  --apply
+```
+
+The operation validates every resulting project and generated Caddy configuration before changing
+the worktree, writes one Git commit, and removes grouped source records only in that commit. Repeat
+apply is a no-op; use Git history to review or roll back the migration. The map merges
+`emailoutreach-prod` into `emailoutreach` and groups `allgroups-chat-ui`, `allgroups-chat-convex`,
+`allgroups-chat-api`, and `allgroups-chat-dash` under `allgroups-chat`; `sales` and
+`sales-web-prod` are intentionally unmapped. The Leo repository is not invoked by this workspace change.
+
 `legacy-migrate.ts` reads the existing Leo Caddy project repository and converts a separate
 destination repository. It is a dry-run unless `--apply` is supplied. Apply uses copied Git
 objects (no hardlinks or alternates), preserves the source branch/history/remotes, and never
@@ -237,12 +263,12 @@ log files as root and writes its own metadata with the same `0600` mode. Prepara
 directories are readable, traversable, and writable by the effective Caddy user. No custom Caddy service drop-in is
 installed or migrated; the explicit Caddy file-writer `mode: "0600"` and `dir_mode: "0700"` settings remain authoritative.
 
-Capacity is bounded per active project by Caddy's 25 MiB size roll, daily roll, gzip compression, seven-day retention,
-and eight-archive limit: plan for up to 225 MiB before compression for the active file plus eight archives. Multiply
-that by the number of active projects and leave additional disk for recently inactive project directories. The daemon
-marks inactive directories, retains them for seven days, atomically moves expired ones to `quarantine`, and defers
-quarantine cleanup for 24 hours. Quarantine is not Git storage and is cleaned only after its metadata and files pass
-the no-follow checks. Monitor the filesystem; there is no global byte quota.
+Capacity is bounded per active project by Caddy's 25 MiB size roll, daily roll, gzip compression, 14-day retention, and
+one-archive limit. The daemon also prunes recognized archives to a 50 MiB aggregate per project including the active
+file; leave additional disk for recently inactive project directories. The daemon marks inactive directories, retains
+them for 14 days, atomically moves expired ones to `quarantine`, and defers quarantine cleanup for 24 hours. Quarantine
+is not Git storage and is cleaned only after its metadata and files pass the no-follow checks. Monitor the filesystem;
+there is no global byte quota.
 
 #### Enable, disable, and rollback
 
@@ -541,17 +567,16 @@ Authorization values; project/host logger isolation; Caddy-owned `0700`/
 HTTP, and both explicit and owner-inferred Unix reads returning identical
 records; cross-owner HTTP/Unix `404` authorization parity; one-roll rotation
 continuity; and bounded page, filesystem-read, decompression, record, line, and
-disk behavior. Production planning capacity is approximately `225 MiB` per
-project (25 MiB for the active file plus eight 25 MiB archives, before
-compression). Separately, the staging check allows and enforces its explicit
-`226 MiB` apparent-size ceiling per project: `25 MiB × 9 + 1 MiB` observation
-slack. It sends only GETs, with two initial requests, one pre-rotation request,
+disk behavior. Active-project retention is approximately `50 MiB` per project
+including the active file and recognized archives. Separately, the staging check
+allows and enforces its explicit `51 MiB` apparent-size ceiling per project for
+observation slack. It sends only GETs, with two initial requests, one pre-rotation request,
 at most `--rotation-count` rotation requests (batches of at most eight parallel
 requests), and one post-rotation request. `--rotation-count` is a maximum
 traffic budget, not a guaranteed count: a passing run must observe rotation,
 and an insufficient count fails when rotation is not observed. Adjust that
 count only on disposable staging, never on production or a reused target. The
-script bounds each project at the explicit `226 MiB` ceiling, pages at
+script bounds each project at the explicit `51 MiB` ceiling, pages at
 `8 MiB`/`1000` records, and filesystem reads at `64 MiB` scanned/decompressed,
 `128 KiB` per line, and `1000000` records. Temporary response/work files are
 mode `0600` and are removed by the script's exit trap.

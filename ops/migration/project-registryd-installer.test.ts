@@ -67,7 +67,12 @@ describe("project-registryd production staging", () => {
     const run = async (fixture: string, configured: Record<string, string> = {}) =>
       command(
         "bash",
-        ["-c", `. "$1"; caddy_service_identity_load; printf '%s:%s\\n' "$CADDY_USER" "$CADDY_GROUP"`, "bash", identityScript],
+        [
+          "-c",
+          `. "$1"; caddy_service_identity_load; printf '%s:%s\\n' "$CADDY_USER" "$CADDY_GROUP"`,
+          "bash",
+          identityScript,
+        ],
         {
           ...(Bun.env as Record<string, string>),
           CADDY_SERVICE_IDENTITY_FILE: join(identityFixtureDirectory, fixture),
@@ -121,7 +126,7 @@ describe("project-registryd production staging", () => {
     expect(environment).not.toMatch(/CADDY_PROJECTS_OIDC_(CLIENT_SECRET|COOKIE_SECRET)=\S+/)
     expect(environment).not.toMatch(/ZITADEL_MANAGEMENT_TOKEN=\S+/)
     expect(environment).toContain("25 MiB")
-    expect(environment).toContain("225 MiB/project")
+    expect(environment).toContain("50 MiB")
   })
 
   test("references the copied OIDC file and uses a stable absolute Bun entrypoint", async () => {
@@ -145,7 +150,9 @@ describe("project-registryd production staging", () => {
       'PROJECT_REGISTRY_BUN_RUNTIME_PATH="${PROJECT_REGISTRY_BUN_RUNTIME_PATH:-/usr/local/bin/project-registry-bun}"',
     )
     expect(installerSource).toContain('"$INSTALL_BIN" -d -o root -g root -m 0755 "$bun_runtime_directory"')
-    expect(installerSource).toContain('"$INSTALL_BIN" -o root -g root -m 0755 "$BUN_BIN" "$PROJECT_REGISTRY_BUN_RUNTIME_PATH"')
+    expect(installerSource).toContain(
+      '"$INSTALL_BIN" -o root -g root -m 0755 "$BUN_BIN" "$PROJECT_REGISTRY_BUN_RUNTIME_PATH"',
+    )
     expect(installerSource).toContain('chown root:root "$PROJECT_REGISTRY_BUN_RUNTIME_PATH"')
     expect(installerSource).not.toContain(
       'install -o caddy -g caddy -m 0755 "$BUN_BIN" "$PROJECT_REGISTRY_BUN_RUNTIME_PATH"',
@@ -157,7 +164,10 @@ describe("project-registryd production staging", () => {
 
   test("keeps Caddy file-writer modes without installer auditing or a Caddy drop-in", async () => {
     const installerSource = await readFile(installer, "utf8")
-    const caddyConfigSource = await readFile(join(migrationDirectory, "..", "..", "src", "caddy", "caddyConfigGenerate.ts"), "utf8")
+    const caddyConfigSource = await readFile(
+      join(migrationDirectory, "..", "..", "src", "caddy", "caddyConfigGenerate.ts"),
+      "utf8",
+    )
 
     expect(installerSource).not.toContain("caddy_access_log_audit")
     expect(installerSource).not.toContain("UMask drop-in")
@@ -194,10 +204,12 @@ describe("project-registryd production staging", () => {
     expect(installerSource).toContain(":-zitadel}")
     expect(installerSource).toContain("CADDY_PROJECTS_OIDC_CLIENT_SECRET")
     expect(installerSource).toContain('"$INSTALL_BIN" -o root -g root -m 0600 "$oidc_stage" "$OIDC_TARGET"')
-    expect(installerSource).toContain('caddy_access_log_root_prepare "$PROJECT_REGISTRY_CADDY_ACCESS_LOG_ROOT" "$CADDY_USER" "$CADDY_GROUP"')
-    expect(installerSource).toContain('PROJECT_REGISTRY_CADDY_ACCESS_LOG_ROOT')
-    expect(installerSource).toContain('umask 077')
-    expect(installerSource).toContain('must not be inside the Git repository')
+    expect(installerSource).toContain(
+      'caddy_access_log_root_prepare "$PROJECT_REGISTRY_CADDY_ACCESS_LOG_ROOT" "$CADDY_USER" "$CADDY_GROUP"',
+    )
+    expect(installerSource).toContain("PROJECT_REGISTRY_CADDY_ACCESS_LOG_ROOT")
+    expect(installerSource).toContain("umask 077")
+    expect(installerSource).toContain("must not be inside the Git repository")
     expect(installerSource).toContain('chmod 0600 "$output"')
     expect(installerSource).not.toContain('install -o root -g root -m 0640 "$OIDC_SOURCE" "$OIDC_TARGET"')
   })
@@ -233,7 +245,9 @@ describe("project-registryd production staging", () => {
       expect(result.stdout).toContain(`would stage Bun as ${runtime}`)
       expect(result.stdout).toContain(`${runtime} (root:root, mode 0755)`)
       expect(result.stdout).toContain(`would verify and build with ${bun}`)
-      expect(result.stdout).toContain(`would provision Caddy access-log root ${environment.PROJECT_REGISTRY_CADDY_ACCESS_LOG_ROOT}`)
+      expect(result.stdout).toContain(
+        `would provision Caddy access-log root ${environment.PROJECT_REGISTRY_CADDY_ACCESS_LOG_ROOT}`,
+      )
       expect(result.stdout).not.toContain("fixture")
       expect(result.stderr).not.toContain("fixture")
       expect(await Bun.file(runtime).exists()).toBe(false)
@@ -275,7 +289,10 @@ describe("project-registryd production staging", () => {
         '#!/bin/sh\nset -eu\nprintf \'%s\\n\' "$*" >> "$INSTALL_LOG"\nmode=\nif [ "$1" = "-d" ]; then directory=1; shift; else directory=0; fi\nwhile [ "$1" = "-o" ] || [ "$1" = "-g" ] || [ "$1" = "-m" ]; do\n  case "$1" in -m) mode="$2";; esac\n  shift 2\ndone\nif [ "$1" = "--" ]; then shift; fi\nif [ "$directory" -eq 1 ]; then\n  for path do mkdir -p "$path"; [ -z "$mode" ] || chmod "$mode" "$path"; done\nelse\n  cp "$1" "$2"; [ -z "$mode" ] || chmod "$mode" "$2"\nfi\n',
       )
       await Bun.write(join(tools, "chown"), "#!/bin/sh\nexit 0\n")
-      await Bun.write(join(tools, "id"), '#!/bin/sh\nif [ "$#" -eq 1 ] && [ "$1" = "-u" ]; then printf \'0\\n\'; else exec /usr/bin/id "$@"; fi\n')
+      await Bun.write(
+        join(tools, "id"),
+        '#!/bin/sh\nif [ "$#" -eq 1 ] && [ "$1" = "-u" ]; then printf \'0\\n\'; else exec /usr/bin/id "$@"; fi\n',
+      )
       await Bun.write(join(tools, "systemd-analyze"), "#!/bin/sh\nexit 0\n")
       await chmod(bun, 0o755)
       await chmod(install, 0o755)

@@ -15,12 +15,9 @@ Automatically create or update Cloudflare DNS records from project lifecycle cha
 ## Approach
 Implement a tested Cloudflare client, then integrate a daemon-owned background reconciler with creation requests and configuration. Bound network requests and cancel background work on shutdown. Preserve unrelated worktree changes. Deploy only committed intended changes.
 
-Managed record tracking is daemon-local and stored atomically at
+Managed record tracking is daemon-local and is stored atomically at
 `<PROJECT_REGISTRY_SERVER_IP_CACHE_PATH>.cloudflare-dns.json`, beside (not inside)
-the configured server-IP cache and repository. Deletion verifies the tracked record's
-current contents before deleting by its stored Cloudflare ID; changed or unknown records
-are left untouched. Network, tracking, and reconciliation failures remain background
-failures and do not change successful project mutation responses.
+the configured server-IP cache and repository.
 
 ## Tasks
 1. Complete: implement and test Cloudflare record reconciliation module (`cloudflareDnsReconcile`).
