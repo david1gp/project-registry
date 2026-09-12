@@ -344,8 +344,7 @@ describe("projectRepository.migrate", () => {
         services: [{ id: "default", units: [], caddy: crmCaddy }],
         labels: {
           section: "Kunden",
-          "link.assets-service":
-            "https://assets-service.contentoren.de/projects/f79d82cd-7df2-4016-9a9f-caf589722c79/contributor",
+          "link.assets-service": "https://assets-service.contentoren.de/orgs/contentoren/projects/crm/contributor",
         },
       },
       {
@@ -427,8 +426,7 @@ describe("projectRepository.migrate", () => {
     expect("type" in crm).toBe(false)
     expect(crm.labels).toEqual({
       section: "Kunden",
-      "link.assets-service":
-        "https://assets-service.contentoren.de/projects/f79d82cd-7df2-4016-9a9f-caf589722c79/contributor",
+      "link.assets-service": "https://assets-service.contentoren.de/orgs/contentoren/projects/crm/contributor",
     })
     expect(crm.services).toEqual([
       { id: "default", units: [], caddy: crmCaddy, ownership: "registry" },
@@ -466,8 +464,7 @@ describe("projectRepository.migrate", () => {
         services: [{ id: "default", units: ["akademie"], caddy: akademieCaddy }],
         labels: {
           section: "Eigene",
-          "link.assets-service":
-            "https://assets-service.contentoren.de/projects/5b9a584c-492d-4ade-8e70-773dab2dec89/contributor",
+          "link.assets-service": "https://assets-service.contentoren.de/orgs/contentoren/projects/akademie/contributor",
         },
         github: "https://github.com/Contentoren/akademie",
         previewUrl: "https://preview.akademie.contentoren.de",
@@ -543,8 +540,7 @@ describe("projectRepository.migrate", () => {
     expect(akademie).toMatchObject({
       labels: {
         section: "Eigene",
-        "link.assets-service":
-          "https://assets-service.contentoren.de/projects/5b9a584c-492d-4ade-8e70-773dab2dec89/contributor",
+        "link.assets-service": "https://assets-service.contentoren.de/orgs/contentoren/projects/akademie/contributor",
       },
     })
     expect(akademie.services.map((service) => service.id)).toEqual([
