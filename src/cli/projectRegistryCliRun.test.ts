@@ -896,6 +896,47 @@ describe("projectRegistryCliRun", () => {
     expect(stdout.join("")).toBe("https://site.example/docs/guide/intro.md\n")
   })
 
+  test("resolves local documentation from a legacy bare-array project list", async () => {
+    const requests: string[] = []
+    const stdout: string[] = []
+    const exitCode = await projectRegistryCliRun(["docs", "guide/intro.md"], {
+      environment: { USER: "david" },
+      requestFetch: async (input) => {
+        const path = new URL(String(input)).pathname + new URL(String(input)).search
+        requests.push(path)
+        if (path === "/api/v1/users/david/projects") {
+          return Response.json({
+            success: true,
+            data: [
+              {
+                schemaVersion: 1,
+                owner: "david",
+                name: "site",
+                type: "customer",
+                order: Number.MAX_SAFE_INTEGER,
+                services: [],
+                caddy: {
+                  port: 4321,
+                  domains: ["site.example"],
+                  path: process.cwd(),
+                },
+              },
+            ],
+          })
+        }
+        return Response.json({ success: true, data: { urls: ["https://site.example/docs/guide/intro.md"] } })
+      },
+      stdout: (text) => stdout.push(text),
+    })
+
+    expect(exitCode).toBe(0)
+    expect(requests).toEqual([
+      "/api/v1/users/david/projects",
+      "/api/v1/users/david/projects/site/docs?path=guide%2Fintro.md",
+    ])
+    expect(stdout.join("")).toBe("https://site.example/docs/guide/intro.md\n")
+  })
+
   test("reports a clear error and skips the docs request when no local project matches", async () => {
     const requests: string[] = []
     const stderr: string[] = []

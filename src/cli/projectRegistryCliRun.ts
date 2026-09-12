@@ -2,9 +2,9 @@ import { basename, resolve } from "node:path"
 import * as a from "valibot"
 import { createResult, createResultError, type Result, type ResultErr } from "#result"
 import type { Project } from "../project/Project.js"
-import { projectLocalCaddyEntries } from "../project/projectLocalCaddyEntries.js"
 import { type ProjectCanonical, projectCanonicalSchema } from "../project/projectCanonicalSchema.js"
 import { projectLabelsSchema } from "../project/projectLabelsSchema.js"
+import { projectLocalCaddyEntries } from "../project/projectLocalCaddyEntries.js"
 import { projectMigrate } from "../project/projectMigrate.js"
 import { projectSchema } from "../project/projectSchema.js"
 import { projectRegistryVersionMetadataRender } from "../projectRegistryVersionMetadataRender.js"
@@ -192,13 +192,15 @@ function projectLabelSet(labels: Record<string, string>, key: string, value: str
 
 const projectAnySchema = a.union([projectCanonicalSchema, projectSchema])
 const projectListResponseSchema = a.object({ projects: a.array(projectAnySchema) })
+const projectListResponseAnySchema = a.union([projectListResponseSchema, a.array(projectAnySchema)])
 const projectResponseSchema = a.object({ project: projectAnySchema, revision: a.string() })
 
 function projectListResponseParse(data: unknown): Result<readonly Project[]> {
   const op = "projectRegistryCliProjectListResponseParse"
-  const parsed = a.safeParse(projectListResponseSchema, data)
+  const parsed = a.safeParse(projectListResponseAnySchema, data)
   if (!parsed.success) return createResultError(op, "project-registryd returned malformed project list data.")
-  return createResult(parsed.output.projects as unknown as readonly Project[])
+  const projects = Array.isArray(parsed.output) ? parsed.output : parsed.output.projects
+  return createResult(projects as unknown as readonly Project[])
 }
 
 function projectCanonicalParse(project: unknown, op: string): Result<ProjectCanonical> {
@@ -420,6 +422,7 @@ async function commandRequest(
       body: {
         expectedRevision: revisionR.data,
         name: defaults.name,
+        ...(command.type === undefined ? {} : { type: command.type }),
         ...(command.service === undefined
           ? { caddy: defaults.caddy }
           : {
@@ -439,6 +442,7 @@ async function commandRequest(
     }
   } else if (command.kind === "project-edit") {
     const body: Record<string, unknown> = { expectedRevision: revisionR.data }
+    if (command.type !== undefined) body.type = command.type
     if (command.service !== undefined) {
       const projectResponse = recordValue(currentR.data)
       const canonicalR = projectCanonicalParse(projectResponse?.project, "projectRegistryCliProjectResponseParse")

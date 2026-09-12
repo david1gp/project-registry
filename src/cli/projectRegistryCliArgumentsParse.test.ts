@@ -19,6 +19,10 @@ describe("projectRegistryCliArgumentsParse", () => {
       ["project", "create", "--service", "api", "--ownership", "external"],
       { kind: "project-create", name: undefined, service: "api", ownership: "external", caddy: {} },
     ],
+    [
+      ["project", "edit", "site", "--type", "internal", "--label", "section=Interne"],
+      { kind: "project-edit", name: "site", type: "internal", caddy: {}, labels: { section: "Interne" } },
+    ],
     [["project", "edit", "site"], { kind: "project-edit", name: "site", caddy: {} }],
     [
       ["project", "edit", "site", "--service=api", "--ownership=registry"],
@@ -226,8 +230,13 @@ describe("projectRegistryCliArgumentsParse", () => {
     [["project", "access-logs", "site", "--before="], "Option --before requires a bounded cursor."],
     [["project", "create", "--ownership", "external"], "Option --ownership requires --service."],
     [["project", "edit", "site", "--ownership", "registry"], "Option --ownership requires --service."],
+    [["project", "edit", "site", "--type", "private"], "Option --type must be own, internal, or customer."],
     [
       ["project", "edit", "site", "--service", "api", "--ownership", "local"],
+      "Option --ownership must be registry or external.",
+    ],
+    [
+      ["project", "edit", "site", "--service", "api", "--ownership", "internal"],
       "Option --ownership must be registry or external.",
     ],
     [["project", "access-logs", "site", "--follow"], "Unknown option: --follow."],

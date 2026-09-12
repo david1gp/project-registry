@@ -1,6 +1,8 @@
 import type { ProjectServiceOwnership } from "../project/projectServiceOwnershipSchema.js"
 import type { ProjectRegistryCliCaddyOptions } from "./ProjectRegistryCliCaddyOptions.js"
 
+type ProjectRegistryCliProjectType = "own" | "internal" | "customer"
+
 export type ProjectRegistryCliInvocation = {
   command:
     | { kind: "help" }
@@ -15,6 +17,7 @@ export type ProjectRegistryCliInvocation = {
     | {
         kind: "project-create"
         name?: string
+        type?: ProjectRegistryCliProjectType
         service?: string
         ownership?: ProjectServiceOwnership
         noDns?: boolean
@@ -24,6 +27,7 @@ export type ProjectRegistryCliInvocation = {
     | {
         kind: "project-edit"
         name: string
+        type?: ProjectRegistryCliProjectType
         service?: string
         ownership?: ProjectServiceOwnership
         caddy: ProjectRegistryCliCaddyOptions

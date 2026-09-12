@@ -3,8 +3,8 @@ export const projectRegistryCliHelp = `Usage: project-registry [--socket <path>]
 Commands:
   project list
   project get <name>
-  project create [--name <name>] [--service <id>] [--ownership <ownership>] [--domain <hostname>] [options]
-  project edit <name> [--service <id>] [--ownership <ownership>] [options]
+  project create [--name <name>] [--type <type>] [--service <id>] [--ownership <ownership>] [--domain <hostname>] [options]
+  project edit <name> [--type <type>] [--service <id>] [--ownership <ownership>] [options]
   project delete <name>
   delete --port <port>
   project history <name> [--limit <n>]
@@ -26,6 +26,8 @@ Project create/edit options:
   --domain <hostname>        Domain; repeat to provide multiple domains; defaults to the configured user domain
   --path <path>              Static/docs filesystem path (defaults to the current directory)
   --name <name>              Project name (defaults to the path folder name)
+  --type <own|internal|customer>
+                              Project classification; edits preserve all services and Caddy settings
   --service <id>             Service of the project to create or edit (defaults to 'default');
                              sibling services keep their domains, port, and Caddy settings
   --ownership <registry|external>
