@@ -5,9 +5,11 @@ import type { CloudflareDnsTrackedRecord } from "../cloudflare/CloudflareDnsTrac
 import { cloudflareDnsDeleteById } from "../cloudflare/cloudflareDnsDeleteById.js"
 import { cloudflareDnsReconcile } from "../cloudflare/cloudflareDnsReconcile.js"
 import type { Project } from "../project/Project.js"
+import { projectCaddyEntries } from "../project/projectCaddyEntries.js"
+import { projectDomainIsCloudflarePages } from "../project/projectDomainIsCloudflarePages.js"
 import { projectDomainNormalize } from "../project/projectDomainNormalize.js"
-import { projectLocalCaddyEntries } from "../project/projectLocalCaddyEntries.js"
 import type { ProjectKey } from "../project/projectKey.js"
+import { projectLocalCaddyEntries } from "../project/projectLocalCaddyEntries.js"
 import type { ProjectService } from "../project/projectServiceSchema.js"
 import type { ProjectRegistryDaemonCloudflareDnsTracking } from "./ProjectRegistryDaemonCloudflareDnsTracking.js"
 import type { ProjectRegistryDaemonCloudflareDnsTrackingState } from "./ProjectRegistryDaemonCloudflareDnsTrackingState.js"
@@ -59,14 +61,20 @@ function hostnames(project: Project): string[] {
 }
 
 function externalHostnames(project: Project): string[] {
-  if (project.schemaVersion !== 2) return []
-
   const values = new Set<string>()
-  for (const service of project.services as readonly ProjectService[]) {
-    if (service.ownership !== "external" || service.caddy === null) continue
-    for (const domain of service.caddy.domains) {
+  const externalServiceIds =
+    project.schemaVersion === 2
+      ? new Set(
+          (project.services as readonly ProjectService[])
+            .filter((service) => service.ownership === "external")
+            .map((service) => service.id),
+        )
+      : new Set<string>()
+  for (const entry of projectCaddyEntries(project)) {
+    const external = entry.serviceId !== undefined && externalServiceIds.has(entry.serviceId)
+    for (const domain of entry.caddy.domains) {
       const normalized = projectDomainNormalize(domain)
-      if (normalized !== "") values.add(normalized)
+      if (normalized !== "" && (external || projectDomainIsCloudflarePages(normalized))) values.add(normalized)
     }
   }
   return [...values]
@@ -186,6 +194,7 @@ export function projectRegistryDaemonCloudflareDnsCreate(options: {
   const active = options.enabled
   const pendingProjects = new Map<string, RetryState>()
   const desiredProjects = new Map<string, Project>()
+  const protectedHostnames = new Map<string, Set<string>>()
   const pendingDeletions = new Map<string, RetryState>()
   const pendingDeletionOwners = new Map<string, string | undefined>()
   const controller = new AbortController()
@@ -398,6 +407,11 @@ export function projectRegistryDaemonCloudflareDnsCreate(options: {
       const hostname = projectDomainNormalize(record.name)
       const projectKeys = projectKeysForHostname(projects, hostname)
       const externalProjectKeys = projectKeysForExternalHostname(projects, hostname)
+      if (projectDomainIsCloudflarePages(hostname)) {
+        next.records = next.records.filter((entry) => recordKeyValue(entry) !== recordKeyValue(record))
+        changed = true
+        continue
+      }
       if (projectKeys.length === 0 && externalProjectKeys.length > 0) {
         next.records = next.records.filter((entry) => recordKeyValue(entry) !== recordKeyValue(record))
         changed = true
@@ -520,6 +534,9 @@ export function projectRegistryDaemonCloudflareDnsCreate(options: {
       deletionPendingClear(recordKey)
       return "done"
     }
+    if (projectDomainIsCloudflarePages(record.name)) {
+      return (await trackingRecordRelease(record)) ? "done" : "failed"
+    }
     if (record.projectKeys.length > 0 && !pendingDeletionOwners.has(recordKey)) {
       deletionPendingClear(recordKey)
       return "done"
@@ -527,9 +544,14 @@ export function projectRegistryDaemonCloudflareDnsCreate(options: {
     return deletionRun(record)
   }
 
-  async function projectOwnershipReconcile(project: Project, projects: ProjectSnapshot): Promise<QueueOutcome> {
+  async function projectOwnershipReconcile(
+    project: Project,
+    projects: ProjectSnapshot,
+    previousExcludedHostnames: ReadonlySet<string>,
+  ): Promise<QueueOutcome> {
     const key = { owner: project.owner, name: project.name }
     const currentDomains = new Set(hostnames(project))
+    const currentExcludedHostnames = new Set(externalHostnames(project))
     const recordsToRemove = state.records.filter(
       (record) =>
         record.projectKeys.some((projectKey) => projectKeyEqual(projectKey, key)) &&
@@ -537,8 +559,14 @@ export function projectRegistryDaemonCloudflareDnsCreate(options: {
     )
     for (const record of recordsToRemove) {
       if (stopped) return "done"
+      const hostname = projectDomainNormalize(record.name)
       const owners = currentOwners(record, key, projects)
-      if (projectKeysForExternalHostname(projects, projectDomainNormalize(record.name)).length > 0) {
+      if (
+        previousExcludedHostnames.has(hostname) ||
+        currentExcludedHostnames.has(hostname) ||
+        projectDomainIsCloudflarePages(hostname) ||
+        projectKeysForExternalHostname(projects, hostname).length > 0
+      ) {
         if (owners.length === 0) {
           if (!(await trackingRecordRelease(record))) return "failed"
         } else if (!(await trackingRecordOwnersSet(record, owners))) {
@@ -647,7 +675,16 @@ export function projectRegistryDaemonCloudflareDnsCreate(options: {
           record.projectKeys.some((key) => projectKeyEqual(key, projectKey)),
         )
         for (const record of records) {
+          const hostname = projectDomainNormalize(record.name)
           const owners = currentOwners(record, projectKey, projects)
+          if (protectedHostnames.get(keyValue)?.has(hostname) === true || projectDomainIsCloudflarePages(hostname)) {
+            if (owners.length === 0) {
+              if (!(await trackingRecordRelease(record))) return "failed"
+            } else if (!(await trackingRecordOwnersSet(record, owners))) {
+              return "failed"
+            }
+            continue
+          }
           if (owners.length === 0) {
             deletionSchedule(
               recordKeyValue(record),
@@ -669,11 +706,16 @@ export function projectRegistryDaemonCloudflareDnsCreate(options: {
     }
 
     if (options.tracking !== undefined) {
-      const ownershipOutcome = await projectOwnershipReconcile(desired, projects)
+      const ownershipOutcome = await projectOwnershipReconcile(
+        desired,
+        projects,
+        protectedHostnames.get(keyValue) ?? new Set<string>(),
+      )
       if (ownershipOutcome !== "done") return ownershipOutcome
     }
     const remoteOutcome = await projectRemoteReconcile(desired, projects)
     if (remoteOutcome !== "done") return remoteOutcome
+    protectedHostnames.delete(keyValue)
     if (pendingProjects.get(keyValue)?.sequence === sequence) pendingProjects.delete(keyValue)
     return "done"
   }
@@ -745,6 +787,10 @@ export function projectRegistryDaemonCloudflareDnsCreate(options: {
     if (!active || !started || stopped) return
     intervalEnsure()
     const key = projectKeyValue(project)
+    const excludedHostnames = new Set([...externalHostnames(project), ...(protectedHostnames.get(key) ?? [])])
+    for (const record of state.records) {
+      if (excludedHostnames.has(projectDomainNormalize(record.name))) deletionPendingClear(recordKeyValue(record))
+    }
     desiredProjects.set(key, project)
     pendingProjects.set(key, {
       attempts: 0,
@@ -756,10 +802,12 @@ export function projectRegistryDaemonCloudflareDnsCreate(options: {
 
   function projectCreateAfterPersistence(project: Project, createOptions: ProjectCreateOptions): void {
     if (createOptions.noDns) return
+    protectedHostnames.delete(projectKeyValue(project))
     projectQueueSet(project)
   }
 
-  function projectEditAfterPersistence(_previous: Project, project: Project): void {
+  function projectEditAfterPersistence(previous: Project, project: Project): void {
+    protectedHostnames.set(projectKeyValue(project), new Set(externalHostnames(previous)))
     projectQueueSet(project)
   }
 
@@ -767,6 +815,11 @@ export function projectRegistryDaemonCloudflareDnsCreate(options: {
     if (!active || !started || stopped) return
     intervalEnsure()
     const key = projectKeyValue(project)
+    protectedHostnames.set(key, new Set(externalHostnames(project)))
+    for (const record of state.records) {
+      if (protectedHostnames.get(key)?.has(projectDomainNormalize(record.name)))
+        deletionPendingClear(recordKeyValue(record))
+    }
     desiredProjects.delete(key)
     pendingProjects.set(key, {
       attempts: 0,

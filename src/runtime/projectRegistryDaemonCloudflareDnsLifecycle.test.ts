@@ -30,7 +30,12 @@ function project(name: string, domains: string[], owner = "leo"): Project {
   }
 }
 
-function canonicalProject(name: string, ownership: "registry" | "external", owner = "leo"): Project {
+function canonicalProject(
+  name: string,
+  ownership: "registry" | "external",
+  owner = "leo",
+  domains = [`${name}.example.com`],
+): Project {
   return {
     schemaVersion: 2,
     owner,
@@ -44,7 +49,7 @@ function canonicalProject(name: string, ownership: "registry" | "external", owne
         ownership,
         caddy: {
           port: 4300,
-          domains: [`${name}.example.com`],
+          domains,
           path: "/srv/app",
           access: "external",
           kind: "proxy",
@@ -560,6 +565,114 @@ describe("projectRegistryDaemonCloudflareDns lifecycle", () => {
 
     timer.tick()
     await settle()
+    expect(calls).toEqual([])
+    await queueR.data.shutdown()
+  })
+
+  test("leaves an externally owned proxied record untouched through deletion", async () => {
+    const timer = timerCreate()
+    const calls: string[] = []
+    const records = new Map([
+      [
+        "record-1",
+        { id: "record-1", name: "api.allgroups.chat", type: "A", content: "198.51.100.20", ttl: 1, proxied: true },
+      ],
+    ])
+    const external = canonicalProject("api", "external", "leo", ["api.allgroups.chat"])
+    const stored = trackingCreate({
+      version: 1,
+      records: [
+        {
+          zoneId: "zone",
+          zoneName: "allgroups.chat",
+          id: "record-1",
+          name: "api.allgroups.chat",
+          type: "A",
+          content: "198.51.100.20",
+          ttl: 1,
+          proxied: true,
+          projectKeys: [{ owner: "leo", name: "api" }],
+        },
+      ],
+    })
+    const queueR = projectRegistryDaemonCloudflareDnsCreate({
+      enabled: true,
+      credentialResolve: async () => createResult("token"),
+      timeoutMs: 1000,
+      serverIpCurrent: () => "203.0.113.10",
+      timer: timer.timer,
+      tracking: stored.tracking,
+      fetch: fetchCreate(records, calls),
+    })
+    expect(queueR.success).toBe(true)
+    if (!queueR.success) return
+    queueR.data.start()
+    await settle()
+    queueR.data.projectCreateAfterPersistence(external, { noDns: false })
+    await settle()
+    queueR.data.projectDeleteAfterPersistence(external)
+    await settle()
+
+    expect(records.get("record-1")?.proxied).toBe(true)
+    expect(calls).toEqual([])
+    await queueR.data.shutdown()
+  })
+
+  test("does not create, update, or delete pages.dev records, including stale tracking", async () => {
+    const timer = timerCreate()
+    const calls: string[] = []
+    const records = new Map([
+      [
+        "record-1",
+        { id: "record-1", name: "site.pages.dev", type: "A", content: "198.51.100.20", ttl: 1, proxied: true },
+      ],
+    ])
+    const stored = trackingCreate({
+      version: 1,
+      records: [
+        {
+          zoneId: "zone",
+          zoneName: "pages.dev",
+          id: "record-1",
+          name: "site.pages.dev",
+          type: "A",
+          content: "198.51.100.20",
+          ttl: 1,
+          proxied: true,
+          projectKeys: [{ owner: "leo", name: "site" }],
+        },
+      ],
+    })
+    let projects: Project[] = []
+    const queueR = projectRegistryDaemonCloudflareDnsCreate({
+      enabled: true,
+      credentialResolve: async () => createResult("token"),
+      timeoutMs: 1000,
+      serverIpCurrent: () => "203.0.113.10",
+      timer: timer.timer,
+      tracking: stored.tracking,
+      repositoryProjectsCurrent: async () => createResult(projects),
+      fetch: fetchCreate(records, calls),
+    })
+    expect(queueR.success).toBe(true)
+    if (!queueR.success) return
+    queueR.data.start()
+    await settle()
+    expect(stored.state.records).toEqual([])
+
+    const first = canonicalProject("site", "registry", "leo", ["site.pages.dev"])
+    projects = [first]
+    queueR.data.projectCreateAfterPersistence(first, { noDns: false })
+    await settle()
+    const second = canonicalProject("site", "registry", "leo", ["changed.pages.dev"])
+    projects = [second]
+    queueR.data.projectEditAfterPersistence(first, second)
+    await settle()
+    projects = []
+    queueR.data.projectDeleteAfterPersistence(second)
+    await settle()
+
+    expect(records.get("record-1")?.proxied).toBe(true)
     expect(calls).toEqual([])
     await queueR.data.shutdown()
   })

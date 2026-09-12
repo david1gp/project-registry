@@ -274,6 +274,28 @@ describe("projectRegistryDaemonCloudflareDnsCreate", () => {
     expect(timer.cleared).toBe(1)
   })
 
+  test("reconciles a registry host without touching its pages.dev link", async () => {
+    const timer = timerCreate()
+    const calls: string[] = []
+    const queueR = projectRegistryDaemonCloudflareDnsCreate({
+      enabled: true,
+      credentialResolve: async () => createResult("token"),
+      timeoutMs: 1000,
+      serverIpCurrent: () => "203.0.113.10",
+      timer: timer.timer,
+      fetch: cloudflareFetchCreate(calls),
+    })
+    expect(queueR.success).toBe(true)
+    if (!queueR.success) return
+    queueR.data.start()
+    queueR.data.projectCreateAfterPersistence(project(["site.pages.dev", "app.example.com"]), { noDns: false })
+    await settle()
+
+    expect(calls.some((call) => call.includes("name=app.example.com"))).toBe(true)
+    expect(calls.some((call) => call.includes("pages.dev"))).toBe(false)
+    await queueR.data.shutdown()
+  })
+
   test("skips missing credentials, global opt-out, and per-create opt-out without fetches", async () => {
     const cases = [{ enabled: true }, { enabled: false }] as const
     for (const options of cases) {

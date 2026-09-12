@@ -100,6 +100,27 @@ describe("caddyConfigGenerate", () => {
     expect(JSON.stringify(result.data)).not.toContain("api.example")
   })
 
+  test("omits pages.dev domains from Caddy routes while retaining registry links", () => {
+    const project = {
+      schemaVersion: 2,
+      owner: "leo",
+      name: "pages-service",
+      services: [
+        {
+          id: "web",
+          ownership: "registry" as const,
+          caddy: { port: 4100, domains: ["site.pages.dev", "site.example"], docs: false },
+        },
+      ],
+    }
+    const result = caddyConfigGenerate([project])
+
+    expect(result.success).toBe(true)
+    if (!result.success) return
+    expect(routesOf(result.data).map(hostOf)).toEqual([["site.example"]])
+    expect(project.services[0]?.caddy?.domains).toEqual(["site.pages.dev", "site.example"])
+  })
+
   test("rejects active domain collisions between canonical sibling services", () => {
     const result = caddyConfigGenerate([
       {
