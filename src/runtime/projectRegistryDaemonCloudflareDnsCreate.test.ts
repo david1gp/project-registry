@@ -9,7 +9,6 @@ function project(domains: string[], disabled = false, owner = "leo", name = "dns
     schemaVersion: 2,
     owner,
     name,
-    type: "customer",
     order: Number.MAX_SAFE_INTEGER,
     services: [
       {

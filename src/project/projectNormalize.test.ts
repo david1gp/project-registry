@@ -7,7 +7,6 @@ describe("projectNormalize", () => {
     const result = projectNormalize({
       owner: " alice ",
       name: "catalog",
-      type: " INTERNAL ",
       order: "12 items",
       services: [" api.service ", "api.service", "bad/unit", "worker@preview"],
       preview_port: 3100,
@@ -19,7 +18,6 @@ describe("projectNormalize", () => {
     expect(result.data).toMatchObject({
       schemaVersion: 1,
       owner: "alice",
-      type: "internal",
       order: 12,
       services: ["api.service", "worker@preview"],
       previewPort: "3100",
@@ -40,7 +38,6 @@ describe("projectNormalize", () => {
             schemaVersion: 1,
             owner: "bob",
             name: "first",
-            type: "customer",
             order: 1,
             services: [],
             labels: {},

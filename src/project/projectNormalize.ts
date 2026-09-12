@@ -50,12 +50,6 @@ function orderValue(value: unknown): number {
   return Number.MAX_SAFE_INTEGER
 }
 
-function typeValue(value: unknown): "own" | "internal" | "customer" {
-  const text = typeof value === "string" ? value.trim().toLowerCase() : ""
-  if (text === "own" || text === "internal" || text === "customer") return text
-  return "customer"
-}
-
 function serviceValues(value: unknown): string[] {
   if (!Array.isArray(value)) return []
   return [...new Set(value.map(serviceValue).filter((service): service is string => service !== undefined))]
@@ -152,7 +146,6 @@ function projectInputNormalize(input: unknown, options: ProjectNormalizeOptions)
     schemaVersion: numberValue(record.schemaVersion ?? 1),
     owner: stringValue(record.owner),
     name: stringValue(record.name),
-    type: typeValue(record.type),
     order: orderValue(record.order),
     services: serviceValues(record.services),
     labels: record.labels,

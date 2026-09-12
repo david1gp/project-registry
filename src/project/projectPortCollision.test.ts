@@ -19,7 +19,6 @@ function canonicalProject(): ProjectCanonical {
     schemaVersion: 2,
     owner: "alice",
     name: "catalog",
-    type: "customer",
     order: Number.MAX_SAFE_INTEGER,
     labels: {},
     services: [

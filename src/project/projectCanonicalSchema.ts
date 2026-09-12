@@ -17,7 +17,6 @@ export const projectCanonicalSchema = a.strictObject({
   owner: nonEmptyTextSchema,
   name: a.pipe(a.string(), a.regex(/^[a-z0-9][a-z0-9-]*$/)),
   description: a.optional(a.string()),
-  type: a.optional(a.picklist(["own", "internal", "customer"]), "customer"),
   order: a.optional(finiteNumberSchema, Number.MAX_SAFE_INTEGER),
   services: a.optional(projectServicesSchema, []),
   labels: a.optional(projectLabelsSchema, {}),

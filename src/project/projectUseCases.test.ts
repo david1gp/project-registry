@@ -43,7 +43,6 @@ function project(owner: string, name: string, port?: number, disabled = false): 
     schemaVersion: 1,
     owner,
     name,
-    type: "customer",
     order: Number.MAX_SAFE_INTEGER,
     services: [],
     labels: {},
@@ -233,7 +232,6 @@ describe("project use cases", () => {
       {
         owner: " bob ",
         name: "new-project",
-        type: " CUSTOMER ",
         services: [" api.service ", "api.service"],
         caddy: { domains: [" New.Example. "] },
       },
@@ -327,7 +325,7 @@ describe("project use cases", () => {
 
     for (const patch of [
       { description: "edited" },
-      { type: "internal" },
+      { labels: { section: "Interne" } },
       { labels: { team: "platform" } },
       { caddy: { domains: ["catalog-new.example"] } },
     ]) {

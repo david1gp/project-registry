@@ -25,6 +25,19 @@ describe("projectCanonicalNormalize", () => {
     })
   })
 
+  test("reads a type-bearing canonical record and emits only its normalized section", () => {
+    const result = projectCanonicalNormalize({
+      schemaVersion: 2,
+      owner: "alice",
+      name: "catalog",
+      type: "internal",
+      services: [],
+    })
+
+    expect(result).toMatchObject({ success: true, data: { labels: { section: "Interne" } } })
+    if (result.success) expect(Object.hasOwn(result.data, "type")).toBe(false)
+  })
+
   test("allocates a persisted port for a portless external Caddy service without reserving it locally", () => {
     const result = projectCanonicalNormalize(
       {

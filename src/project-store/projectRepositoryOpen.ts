@@ -626,7 +626,6 @@ type ProjectRepositoryMigrationPlan = {
 const projectRepositoryMigrationServiceIdPattern = /^[a-z0-9][a-z0-9-]*$/
 const projectRepositoryMigrationMetadataKeys = [
   "description",
-  "type",
   "order",
   "github",
   "previewUrl",
@@ -648,7 +647,6 @@ function projectRepositoryMigrationMetadataValue(
   key: (typeof projectRepositoryMigrationMetadataKeys)[number],
 ): unknown {
   const value = project[key]
-  if (key === "type" && value === "customer") return undefined
   if (key === "order" && value === Number.MAX_SAFE_INTEGER) return undefined
   return value
 }
@@ -819,7 +817,8 @@ async function projectRepositoryMigrationRecords(
       typeof raw === "object" &&
       raw !== null &&
       !Array.isArray(raw) &&
-      (raw as Record<string, unknown>).schemaVersion === 2
+      (raw as Record<string, unknown>).schemaVersion === 2 &&
+      !Object.hasOwn(raw, "type")
     records.push({ canonical, path: pathR.data, project: migrated })
   }
   return createResult(records)

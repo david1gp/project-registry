@@ -133,7 +133,6 @@ describe("projectRepository.migrate", () => {
       docs: true,
     }
     const billingPreviewProject = legacyProject("billing-preview", 3146, {
-      type: "internal",
       labels: { section: "Interne" },
     })
     billingPreviewProject.caddy = {
@@ -243,11 +242,11 @@ describe("projectRepository.migrate", () => {
     expect(salesCanonical.services[3]?.caddy).toMatchObject({ domains: ["sales.contentoren.de"], disabled: false })
     const billingCanonical = JSON.parse(await readFile(join(directory, "projects/leo/billing.json"), "utf8")) as {
       schemaVersion: number
-      type: string
       labels: Record<string, string>
       services: Array<{ id: string; caddy: ProjectCaddy | null }>
     }
-    expect(billingCanonical).toMatchObject({ schemaVersion: 2, type: "internal", labels: { section: "Interne" } })
+    expect(billingCanonical).toMatchObject({ schemaVersion: 2, labels: { section: "Interne" } })
+    expect("type" in billingCanonical).toBe(false)
     expect(billingCanonical.services.map((service) => service.id)).toEqual(["default", "billing-preview"])
     expect(billingCanonical.services[0]?.caddy).toMatchObject({
       port: 3135,
@@ -321,7 +320,6 @@ describe("projectRepository.migrate", () => {
         schemaVersion: 2,
         owner: "leo",
         name: "coachingcompany",
-        type: "customer",
         order: 29,
         services: [{ id: "default", units: ["coachingcompany"], caddy: coachingCaddy }],
         labels: { section: "Kunden" },
@@ -334,7 +332,6 @@ describe("projectRepository.migrate", () => {
         schemaVersion: 2,
         owner: "leo",
         name: "coachingcompany-api",
-        type: "customer",
         order: Number.MAX_SAFE_INTEGER,
         services: [{ id: "default", units: [], caddy: coachingApiCaddy }],
         labels: { section: "Kunden" },
@@ -343,7 +340,6 @@ describe("projectRepository.migrate", () => {
         schemaVersion: 2,
         owner: "leo",
         name: "crm",
-        type: "customer",
         order: Number.MAX_SAFE_INTEGER,
         services: [{ id: "default", units: [], caddy: crmCaddy }],
         labels: {
@@ -356,7 +352,6 @@ describe("projectRepository.migrate", () => {
         schemaVersion: 2,
         owner: "leo",
         name: "crm-api-preview",
-        type: "customer",
         order: Number.MAX_SAFE_INTEGER,
         services: [{ id: "default", units: [], caddy: crmApiPreviewCaddy }],
         labels: { section: "Kunden" },
@@ -365,7 +360,6 @@ describe("projectRepository.migrate", () => {
         schemaVersion: 2,
         owner: "leo",
         name: "crm-convex-preview",
-        type: "customer",
         order: Number.MAX_SAFE_INTEGER,
         services: [{ id: "default", units: [], caddy: crmConvexPreviewCaddy }],
         labels: { section: "Kunden" },
@@ -409,7 +403,6 @@ describe("projectRepository.migrate", () => {
     })
 
     const coaching = JSON.parse(await readFile(join(directory, "projects/leo/coachingcompany.json"), "utf8")) as {
-      type: string
       github: string
       previewUrl: string
       previewPort: string
@@ -417,7 +410,6 @@ describe("projectRepository.migrate", () => {
       services: Array<{ id: string; units: string[]; caddy: ProjectCaddy; ownership?: string }>
     }
     expect(coaching).toMatchObject({
-      type: "customer",
       github: "https://github.com/Contentoren/coachingcompany",
       previewUrl: "https://coachingcompany.leonardomora.de",
       previewPort: "3134",
@@ -429,11 +421,10 @@ describe("projectRepository.migrate", () => {
     ])
 
     const crm = JSON.parse(await readFile(join(directory, "projects/leo/crm.json"), "utf8")) as {
-      type: string
       labels: Record<string, string>
       services: Array<{ id: string; units: string[]; caddy: ProjectCaddy; ownership?: string }>
     }
-    expect(crm.type).toBe("customer")
+    expect("type" in crm).toBe(false)
     expect(crm.labels).toEqual({
       section: "Kunden",
       "link.assets-service":
@@ -471,7 +462,6 @@ describe("projectRepository.migrate", () => {
         schemaVersion: 2,
         owner: "leo",
         name: "akademie",
-        type: "customer",
         order: 5,
         services: [{ id: "default", units: ["akademie"], caddy: akademieCaddy }],
         labels: {
@@ -487,7 +477,6 @@ describe("projectRepository.migrate", () => {
         schemaVersion: 2,
         owner: "leo",
         name: "akademie-api",
-        type: "own",
         services: [{ id: "default", units: [], caddy: akademieApiCaddy, ownership: "external" }],
         labels: { section: "Eigene" },
       },
@@ -495,7 +484,6 @@ describe("projectRepository.migrate", () => {
         schemaVersion: 2,
         owner: "leo",
         name: "akademie-dev-api",
-        type: "own",
         services: [{ id: "default", units: [], caddy: akademieDevApiCaddy }],
         labels: { section: "Eigene" },
       },
@@ -503,7 +491,6 @@ describe("projectRepository.migrate", () => {
         schemaVersion: 2,
         owner: "leo",
         name: "akademie-prod",
-        type: "own",
         services: [{ id: "default", units: [], caddy: akademieProdCaddy }],
         labels: { section: "Eigene" },
       },
@@ -545,7 +532,6 @@ describe("projectRepository.migrate", () => {
     if (!migrationR.success) return
 
     const akademie = JSON.parse(await readFile(join(directory, "projects/leo/akademie.json"), "utf8")) as {
-      type: string
       labels: Record<string, string>
       services: Array<{
         id: string
@@ -555,7 +541,6 @@ describe("projectRepository.migrate", () => {
       }>
     }
     expect(akademie).toMatchObject({
-      type: "own",
       labels: {
         section: "Eigene",
         "link.assets-service":
@@ -584,7 +569,6 @@ describe("projectRepository.migrate", () => {
       schemaVersion: 2 as const,
       owner: "leo",
       name: "parent",
-      type: "customer" as const,
       order: Number.MAX_SAFE_INTEGER,
       services: [{ id: "api", units: ["parent.service"], caddy: caddy(3100, "parent.example") }],
       labels: {},

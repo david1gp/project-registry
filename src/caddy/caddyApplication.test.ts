@@ -544,7 +544,6 @@ describe("caddyApplication", () => {
       schemaVersion: 2,
       owner: "leo",
       name: "multi-service",
-      type: "customer",
       order: 0,
       labels: {},
       services: [

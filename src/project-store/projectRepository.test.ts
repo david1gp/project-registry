@@ -19,7 +19,6 @@ function project(name: string, port: number): Project {
     schemaVersion: 1,
     owner: "alice",
     name,
-    type: "customer",
     order: Number.MAX_SAFE_INTEGER,
     services: [],
     labels: {},
@@ -48,7 +47,6 @@ function canonicalProject(name: string, port: number): Project {
     schemaVersion: 2,
     owner: "alice",
     name,
-    type: "customer",
     order: Number.MAX_SAFE_INTEGER,
     labels: { team: "platform" },
     services: [

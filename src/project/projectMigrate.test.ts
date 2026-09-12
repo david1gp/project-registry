@@ -48,9 +48,8 @@ describe("projectMigrate", () => {
       owner: "alice",
       name: "catalog",
       description: "Catalog project",
-      type: "internal",
       order: 12,
-      labels: { team: "platform" },
+      labels: { team: "platform", section: "Interne" },
       github: "https://github.com/example/catalog",
       previewUrl: "https://preview.catalog.example",
       previewPort: "3100",
@@ -65,6 +64,7 @@ describe("projectMigrate", () => {
       ownership: "registry",
     })
     expect(Object.hasOwn(result.data, "caddy")).toBe(false)
+    expect(Object.hasOwn(result.data, "type")).toBe(false)
   })
 
   test("keeps a unit-only legacy project in the deterministic service boundary", () => {
@@ -81,6 +81,27 @@ describe("projectMigrate", () => {
         services: [{ id: "default", units: ["worker.service"], caddy: null }],
       },
     })
+  })
+
+  test("normalizes legacy classifications without overwriting non-empty sections", () => {
+    for (const [type, section] of [
+      ["customer", "Kunden"],
+      ["internal", "Interne"],
+      ["own", "Eigene"],
+    ] as const) {
+      const result = projectMigrate({ schemaVersion: 1, owner: "alice", name: type, type })
+      expect(result).toMatchObject({ success: true, data: { labels: { section } } })
+      if (result.success) expect(Object.hasOwn(result.data, "type")).toBe(false)
+    }
+
+    const preserved = projectMigrate({
+      schemaVersion: 1,
+      owner: "alice",
+      name: "custom",
+      type: "customer",
+      labels: { section: "Entwicklung Infrastruktur" },
+    })
+    expect(preserved).toMatchObject({ success: true, data: { labels: { section: "Entwicklung Infrastruktur" } } })
   })
 
   test("does not invent a service for a legacy project without Caddy or units", () => {
@@ -146,6 +167,7 @@ describe("projectMigrate", () => {
     if (!result.success) return
     const serialized = JSON.parse(result.data) as Record<string, unknown>
     expect(serialized.caddy).toBeUndefined()
+    expect(serialized.type).toBeUndefined()
     expect(serialized.services).toEqual([{ id: "default", units: [], caddy: legacyCaddy, ownership: "registry" }])
   })
 })

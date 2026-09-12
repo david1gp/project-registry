@@ -16,7 +16,6 @@ function project(owner: string, name: string, disabled = false): Project {
     schemaVersion: 1,
     owner,
     name,
-    type: "customer",
     order: 0,
     services: [],
     labels: {},

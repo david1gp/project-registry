@@ -24,7 +24,6 @@ function canonicalProject(
     schemaVersion: 2,
     owner,
     name,
-    type: "customer",
     order: Number.MAX_SAFE_INTEGER,
     labels: {},
     services: ports.map((port, index) => ({

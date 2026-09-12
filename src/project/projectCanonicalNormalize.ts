@@ -1,8 +1,6 @@
-import * as a from "valibot"
 import { createResult, createResultErrorCode, type Result } from "#result"
 import type { ProjectCanonicalNormalizeOptions } from "./ProjectCanonicalNormalizeOptions.js"
 import type { ProjectCanonical } from "./projectCanonicalSchema.js"
-import { projectCanonicalSchema } from "./projectCanonicalSchema.js"
 import { projectCollisions } from "./projectCollisions.js"
 import { projectMigrate } from "./projectMigrate.js"
 import { projectNormalize } from "./projectNormalize.js"
@@ -67,9 +65,7 @@ export function projectCanonicalNormalize(
   if (record?.schemaVersion === 2) {
     const portlessExternalR = canonicalExternalPortlessNormalize(input, options)
     if (!portlessExternalR.success) return { ...portlessExternalR, op }
-    const parsed = a.safeParse(projectCanonicalSchema, portlessExternalR.data)
-    if (!parsed.success) return createResultErrorCode(op, a.summarize(parsed.issues), "request.invalid")
-    const migrated = projectMigrate(parsed.output)
+    const migrated = projectMigrate(portlessExternalR.data)
     if (!migrated.success) return { ...migrated, op }
     const collisions = projectCollisions(options.projects ?? [], {
       excludeKey: options.excludeKey,

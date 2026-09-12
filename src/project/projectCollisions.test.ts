@@ -20,7 +20,6 @@ function canonicalProject(owner: string, name: string, services: ProjectCanonica
     schemaVersion: 2,
     owner,
     name,
-    type: "customer",
     order: Number.MAX_SAFE_INTEGER,
     services,
     labels: {},

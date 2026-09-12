@@ -13,7 +13,6 @@ describe("projectSchema", () => {
 
     expect(result.success).toBe(true)
     if (!result.success) return
-    expect(result.output.type).toBe("customer")
     expect(result.output.order).toBe(Number.MAX_SAFE_INTEGER)
     expect(result.output.services).toEqual([])
     expect(result.output.labels).toEqual({})
@@ -23,6 +22,15 @@ describe("projectSchema", () => {
     expect(input.success).toBe(true)
     if (!input.success) return
     expect(input.output.labels).toEqual({})
+  })
+
+  test("does not expose project type in public schemas", () => {
+    const persisted = a.safeParse(projectSchema, { schemaVersion: 1, owner: "alice", name: "catalog", type: "own" })
+    const input = a.safeParse(projectInputSchema, { owner: "alice", name: "catalog", type: "own" })
+
+    expect(persisted.success).toBe(false)
+    expect(input.success).toBe(true)
+    if (input.success) expect("type" in input.output).toBe(false)
   })
 
   test("keeps caddy settings nested and rejects invalid service units", () => {

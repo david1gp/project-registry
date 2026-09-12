@@ -10,7 +10,6 @@ function project(name: string, domains: string[], owner = "leo"): Project {
     schemaVersion: 1,
     owner,
     name,
-    type: "customer",
     order: 0,
     services: [],
     labels: {},
@@ -40,7 +39,6 @@ function canonicalProject(
     schemaVersion: 2,
     owner,
     name,
-    type: "customer",
     order: 0,
     services: [
       {
