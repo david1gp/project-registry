@@ -102,7 +102,6 @@ function docsProjectCreate(
     schemaVersion: 1,
     owner,
     name,
-    type: "customer",
     order: 0,
     services: [],
     labels: {},
@@ -766,7 +765,6 @@ describe("projectRegistryApiHandlerCreate", () => {
 
     for (const patch of [
       { description: "edited" },
-      { type: "internal" },
       { labels: { team: "platform" } },
       {
         schemaVersion: 2,
@@ -781,15 +779,9 @@ describe("projectRegistryApiHandlerCreate", () => {
       expectedRevision = nextRevision
     }
 
-    expect(events).toEqual([
-      "true:external,registry",
-      "true:external,registry",
-      "true:external,registry",
-      "true:external,registry",
-    ])
+    expect(events).toEqual(["true:external,registry", "true:external,registry", "true:external,registry"])
     expect(repository.projects.find((project) => project.name === "ownership-app")).toMatchObject({
       description: "edited",
-      type: "internal",
       labels: { team: "platform" },
       services: [
         { id: "api", ownership: "external", caddy: { port: 4201, domains: ["api-new.example"] } },
@@ -1092,6 +1084,7 @@ describe("projectRegistryApiHandlerCreate", () => {
     const handler = projectRegistryApiHandlerCreate({ repository, caddyApplication: caddyApplicationCreate() })
     const leo = { transport: "unix", username: "leo" } as const
     const initialLabels = { team: "platform", tier: "gold", constructor: "safe", ["__proto__"]: "reserved" }
+    const normalizedInitialLabels = initialLabels
 
     const created = await requestJson(handler, "/api/v1/users/leo/projects", leo, "POST", {
       expectedRevision: revision,
@@ -1100,32 +1093,40 @@ describe("projectRegistryApiHandlerCreate", () => {
       caddy: { domains: ["labels.example"] },
     })
     expect(created.response.status).toBe(201)
-    expect(repository.projects).toContainEqual(expect.objectContaining({ name: "labels-app", labels: initialLabels }))
+    expect(repository.projects).toContainEqual(
+      expect.objectContaining({ name: "labels-app", labels: normalizedInitialLabels }),
+    )
 
     const read = await requestJson(handler, "/api/v1/users/leo/projects/labels-app", leo)
     expect(read.response.status).toBe(200)
-    expect(read.body).toMatchObject({ success: true, data: { project: { labels: initialLabels } } })
+    expect(read.body).toMatchObject({ success: true, data: { project: { labels: normalizedInitialLabels } } })
 
     const listed = await requestJson(handler, "/api/v1/users/leo/projects", leo)
     expect(listed.response.status).toBe(200)
     expect(listed.body.success).toBe(true)
     const listedProjects = (listed.body.data as { projects: Project[] }).projects
     expect(Array.isArray(listedProjects)).toBe(true)
-    expect(listedProjects).toContainEqual(expect.objectContaining({ name: "labels-app", labels: initialLabels }))
+    expect(listedProjects).toContainEqual(
+      expect.objectContaining({ name: "labels-app", labels: normalizedInitialLabels }),
+    )
 
     const replacement = await requestJson(handler, "/api/v1/users/leo/projects/labels-app", leo, "PATCH", {
       expectedRevision: nextRevision,
       labels: { team: "core" },
     })
     expect(replacement.response.status).toBe(200)
-    expect(repository.projects.find((project) => project.name === "labels-app")?.labels).toEqual({ team: "core" })
+    expect(repository.projects.find((project) => project.name === "labels-app")?.labels).toEqual({
+      team: "core",
+    })
 
     const preserved = await requestJson(handler, "/api/v1/users/leo/projects/labels-app", leo, "PATCH", {
       expectedRevision: nextRevision,
       description: "keeps labels",
     })
     expect(preserved.response.status).toBe(200)
-    expect(repository.projects.find((project) => project.name === "labels-app")?.labels).toEqual({ team: "core" })
+    expect(repository.projects.find((project) => project.name === "labels-app")?.labels).toEqual({
+      team: "core",
+    })
 
     const cleared = await requestJson(handler, "/api/v1/users/leo/projects/labels-app", leo, "PATCH", {
       expectedRevision: nextRevision,
@@ -1760,7 +1761,6 @@ describe("projectRegistryApiHandlerCreate", () => {
       schemaVersion: 1,
       owner: "leo",
       name: "catalog",
-      type: "customer",
       order: 0,
       services: [],
       labels: {},

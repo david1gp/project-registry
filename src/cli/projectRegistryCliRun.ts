@@ -422,7 +422,6 @@ async function commandRequest(
       body: {
         expectedRevision: revisionR.data,
         name: defaults.name,
-        ...(command.type === undefined ? {} : { type: command.type }),
         ...(command.service === undefined
           ? { caddy: defaults.caddy }
           : {
@@ -442,7 +441,6 @@ async function commandRequest(
     }
   } else if (command.kind === "project-edit") {
     const body: Record<string, unknown> = { expectedRevision: revisionR.data }
-    if (command.type !== undefined) body.type = command.type
     if (command.service !== undefined) {
       const projectResponse = recordValue(currentR.data)
       const canonicalR = projectCanonicalParse(projectResponse?.project, "projectRegistryCliProjectResponseParse")

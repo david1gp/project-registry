@@ -7,7 +7,6 @@ function project(name: string, path: string): Project {
     schemaVersion: 1,
     owner: "david",
     name,
-    type: "customer",
     order: Number.MAX_SAFE_INTEGER,
     services: [],
     labels: {},

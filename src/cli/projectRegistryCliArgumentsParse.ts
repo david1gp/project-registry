@@ -66,7 +66,6 @@ export function projectRegistryCliArgumentsParse(args: readonly string[]): Resul
   let socket: string | undefined
   let limit: number | undefined
   let flagName: string | undefined
-  let projectType: "own" | "internal" | "customer" | undefined
   let service: string | undefined
   let ownership: ProjectServiceOwnership | undefined
   let noDns = false
@@ -125,7 +124,6 @@ export function projectRegistryCliArgumentsParse(args: readonly string[]): Resul
       "--socket",
       "--limit",
       "--name",
-      "--type",
       "--service",
       "--ownership",
       "--port",
@@ -166,13 +164,6 @@ export function projectRegistryCliArgumentsParse(args: readonly string[]): Resul
           return projectNameOptionError(op)
         }
         flagName = value
-        continue
-      }
-      if (option === "--type") {
-        if (value !== "own" && value !== "internal" && value !== "customer") {
-          return createResultError(op, "Option --type must be own, internal, or customer.")
-        }
-        projectType = value
         continue
       }
       if (option === "--service") {
@@ -337,7 +328,6 @@ export function projectRegistryCliArgumentsParse(args: readonly string[]): Resul
   const hasMutationOptions =
     hasCaddyOptions ||
     flagName !== undefined ||
-    projectType !== undefined ||
     service !== undefined ||
     ownership !== undefined ||
     noDns ||
@@ -472,7 +462,6 @@ export function projectRegistryCliArgumentsParse(args: readonly string[]): Resul
       command: {
         kind: "project-create",
         name: flagName,
-        ...(projectType === undefined ? {} : { type: projectType }),
         ...(service === undefined ? {} : { service }),
         ...(ownership === undefined ? {} : { ownership }),
         ...(noDns ? { noDns: true } : {}),
@@ -502,7 +491,6 @@ export function projectRegistryCliArgumentsParse(args: readonly string[]): Resul
       command: {
         kind: "project-edit",
         name: value,
-        ...(projectType === undefined ? {} : { type: projectType }),
         ...(service === undefined ? {} : { service }),
         ...(ownership === undefined ? {} : { ownership }),
         caddy,

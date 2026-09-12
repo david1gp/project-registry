@@ -8,7 +8,6 @@ function project(services: ProjectCanonical["services"]): ProjectCanonical {
     schemaVersion: 2,
     owner: "leo",
     name: "app",
-    type: "customer",
     order: Number.MAX_SAFE_INTEGER,
     services,
     labels: { team: "platform" },

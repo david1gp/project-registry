@@ -501,8 +501,14 @@ describe("projectRegistryCliRun", () => {
     ).toBe(0)
 
     expect(paths).toEqual(["/api/v1/users/david/projects", "/api/v1/users/david/projects/site"])
-    expect(JSON.parse(listOutput.join("")).data[0].labels).toEqual({ team: "platform", ["__proto__"]: "safe" })
-    expect(JSON.parse(getOutput.join("")).data.labels).toEqual({ team: "platform", ["__proto__"]: "safe" })
+    expect(JSON.parse(listOutput.join("")).data[0].labels).toEqual({
+      team: "platform",
+      ["__proto__"]: "safe",
+    })
+    expect(JSON.parse(getOutput.join("")).data.labels).toEqual({
+      team: "platform",
+      ["__proto__"]: "safe",
+    })
   })
 
   test("creates with the current revision and exact nested Caddy payload", async () => {
@@ -869,7 +875,6 @@ describe("projectRegistryCliRun", () => {
                   schemaVersion: 1,
                   owner: "david",
                   name: "site",
-                  type: "customer",
                   order: Number.MAX_SAFE_INTEGER,
                   services: [],
                   caddy: {
@@ -912,7 +917,6 @@ describe("projectRegistryCliRun", () => {
                 schemaVersion: 1,
                 owner: "david",
                 name: "site",
-                type: "customer",
                 order: Number.MAX_SAFE_INTEGER,
                 services: [],
                 caddy: {
@@ -952,7 +956,6 @@ describe("projectRegistryCliRun", () => {
                 schemaVersion: 1,
                 owner: "david",
                 name: "other",
-                type: "customer",
                 order: Number.MAX_SAFE_INTEGER,
                 services: [],
                 caddy: { port: 4321, domains: ["other.example"], path: "/tmp/other" },

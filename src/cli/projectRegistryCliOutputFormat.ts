@@ -15,6 +15,11 @@ const projectSchema = a.looseObject({
   kind: a.picklist(["proxy", "static"]),
   labels: a.optional(projectLabelsSchema, {}),
 })
+
+function projectOutputNormalize(project: a.InferOutput<typeof projectSchema>): a.InferOutput<typeof projectSchema> {
+  const { type: _type, ...withoutLegacyType } = project as typeof project & { type?: unknown }
+  return withoutLegacyType
+}
 const historyEntrySchema = a.looseObject({
   sha: a.string(),
   date: a.string(),
@@ -118,12 +123,14 @@ export function projectRegistryCliOutputFormat(
   if (command.kind === "project-list") {
     const parsedR = dataParse(a.array(projectSchema), data, "project list")
     if (!parsedR.success) return parsedR
-    parsedData = parsedR.data
+    parsedData = parsedR.data.map(projectOutputNormalize)
   }
   if (command.kind === "project-get") {
     const parsedR = dataParse(a.union([projectSchema, a.array(projectSchema)]), data, "project")
     if (!parsedR.success) return parsedR
-    parsedData = parsedR.data
+    parsedData = Array.isArray(parsedR.data)
+      ? parsedR.data.map(projectOutputNormalize)
+      : projectOutputNormalize(parsedR.data)
   }
   if (command.kind === "project-history" || command.kind === "history") {
     const parsedR = dataParse(a.array(historyEntrySchema), data, "history")

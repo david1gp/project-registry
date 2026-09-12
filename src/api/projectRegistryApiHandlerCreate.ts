@@ -567,6 +567,15 @@ function recordValue(input: unknown): Record<string, unknown> | undefined {
   return input as Record<string, unknown>
 }
 
+function projectTypeInputReject(input: unknown): Result<void> {
+  const op = "projectRegistryApiProjectTypeInputReject"
+  const record = recordValue(input)
+  if (record !== undefined && Object.hasOwn(record, "type")) {
+    return createResultErrorCode(op, "project type is no longer accepted; use labels.section", "request.invalid")
+  }
+  return createResult(undefined)
+}
+
 function expectedRevision(input: unknown): ProjectMutationOptions {
   return { expectedRevision: recordValue(input)?.expectedRevision as string }
 }
@@ -1018,6 +1027,8 @@ export function projectRegistryApiHandlerCreate(options: ApiHandlerOptions): Pro
       if (!noDnsR.success) return resultErrorResponse(noDnsR, route.legacy, "projects")
       let input: unknown = body
       if (bodyRecord !== undefined) {
+        const typeR = projectTypeInputReject(bodyRecord)
+        if (!typeR.success) return resultErrorResponse(typeR, route.legacy, "projects")
         const inputRecord = { ...bodyRecord }
         delete inputRecord.noDns
         input = { ...inputRecord, owner }
@@ -1081,6 +1092,8 @@ export function projectRegistryApiHandlerCreate(options: ApiHandlerOptions): Pro
           mutationOptions = revisionR
         } else {
           const bodyRecord = recordValue(body)
+          const typeR = projectTypeInputReject(bodyRecord)
+          if (!typeR.success) return resultErrorResponse(typeR, false, "projects")
           if (bodyRecord !== undefined && typeof bodyRecord.owner === "string" && bodyRecord.owner.trim() !== owner) {
             return errorResponse(
               {
