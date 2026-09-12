@@ -7,7 +7,7 @@ const projectServiceCaddySchema = v.object({
   path: v.optional(v.string(), ""),
   access: v.optional(v.picklist(["internal", "external"]), "external"),
   kind: v.optional(v.picklist(["proxy", "static"]), "proxy"),
-  docs: v.optional(v.boolean(), true),
+  docs: v.optional(v.boolean(), false),
   browse: v.optional(v.boolean(), false),
   disabled: v.optional(v.boolean(), false),
   spa: v.optional(v.boolean(), false),

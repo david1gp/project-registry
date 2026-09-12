@@ -16,7 +16,7 @@ export function projectServiceDraftFrom(
     kind: caddy?.kind ?? "proxy",
     access: caddy?.access ?? "external",
     disabled: caddy?.disabled ?? false,
-    docs: caddy?.docs ?? true,
+    docs: caddy?.docs ?? false,
     browse: caddy?.browse ?? false,
     spa: caddy?.spa ?? false,
   }

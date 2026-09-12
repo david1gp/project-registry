@@ -1,7 +1,9 @@
 import { describe, expect, test } from "bun:test"
+import * as v from "valibot"
 import { projectServiceDraftApply } from "./projectServiceDraftApply.js"
 import { projectServiceDraftFrom } from "./projectServiceDraftFrom.js"
 import type { ProjectServicesService } from "./projectServicesSchema.js"
+import { projectServicesSchema } from "./projectServicesSchema.js"
 
 const caddy: NonNullable<ProjectServicesService["caddy"]> = {
   port: 3000,
@@ -56,6 +58,20 @@ describe("projectServiceDraftApply", () => {
     expect(result.data).toHaveLength(3)
     expect(result.data[2]).toMatchObject({ id: "docs", units: [], caddy: { port: 3010, domains: ["docs.example"] } })
     expect(result.data[2]?.ownership).toBe("registry")
+  })
+
+  test("defaults docs to disabled for new service schemas and drafts", () => {
+    const parsed = v.safeParse(projectServicesSchema, {
+      schemaVersion: 2,
+      owner: "alice",
+      name: "catalog",
+      services: [{ id: "docs", caddy: { port: 3010, domains: ["docs.example"] } }],
+    })
+
+    expect(parsed.success).toBe(true)
+    if (!parsed.success) return
+    expect(parsed.output.services[0]?.caddy?.docs).toBe(false)
+    expect(projectServiceDraftFrom(undefined, "docs").docs).toBe(false)
   })
 
   test("preserves an existing external ownership when a legacy draft omits it", () => {

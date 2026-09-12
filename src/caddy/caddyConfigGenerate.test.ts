@@ -592,7 +592,7 @@ describe("caddyConfigGenerate", () => {
     expect(markdownHandlers[3]!.body).toContain("markdown (readFile $doc)")
   })
 
-  test("applies the legacy proxy and docs defaults before route generation", () => {
+  test("applies the legacy proxy and disabled docs defaults before route generation", () => {
     const result = caddyConfigGenerate([
       {
         schemaVersion: 1,
@@ -610,7 +610,7 @@ describe("caddyConfigGenerate", () => {
     if (!result.success) return
 
     const inner = innerRoutesOf(routesOf(result.data)[0]!)
-    expect(inner.filter((route) => route.group === "docs")).toHaveLength(2)
+    expect(inner.filter((route) => route.group === "docs")).toHaveLength(0)
     expect(inner.at(-1)!.handle).toEqual([
       {
         handler: "reverse_proxy",

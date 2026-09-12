@@ -12,7 +12,7 @@ export const projectCaddySchema = a.strictObject({
   path: a.optional(a.string(), ""),
   access: a.optional(a.picklist(["internal", "external"]), "external"),
   kind: a.optional(a.picklist(["proxy", "static"]), "proxy"),
-  docs: a.optional(a.boolean(), true),
+  docs: a.optional(a.boolean(), false),
   browse: a.optional(a.boolean(), false),
   headerUp: a.optional(projectHeaderUpSchema, {}),
   disabled: a.optional(a.boolean(), false),

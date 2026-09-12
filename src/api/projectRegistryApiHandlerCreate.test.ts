@@ -529,7 +529,7 @@ describe("projectRegistryApiHandlerCreate", () => {
           expect.objectContaining({
             id: "default",
             ownership: "registry",
-            caddy: expect.objectContaining({ port: 4101 }),
+            caddy: expect.objectContaining({ port: 4101, docs: false }),
           }),
         ],
       }),
@@ -1259,7 +1259,6 @@ describe("projectRegistryApiHandlerCreate", () => {
       port: 4200,
       domains: ["replaced.example"],
       path: "",
-      docs: false,
     })
     expect(replaced.response.status).toBe(200)
     expect(replaced.body).toMatchObject({

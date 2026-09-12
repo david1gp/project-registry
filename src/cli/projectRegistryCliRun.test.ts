@@ -599,7 +599,7 @@ describe("projectRegistryCliRun", () => {
             id: "api",
             units: [],
             ownership: "external",
-            caddy: { domains: ["api.example"], docs: true, path: process.cwd() },
+            caddy: { domains: ["api.example"], docs: false, path: process.cwd() },
           },
         ],
       },
@@ -680,7 +680,7 @@ describe("projectRegistryCliRun", () => {
       body: {
         expectedRevision: "current-revision",
         name: "site",
-        caddy: { docs: true, path: process.cwd() },
+        caddy: { docs: false, path: process.cwd() },
         noDns: true,
       },
     })
@@ -995,7 +995,7 @@ describe("projectRegistryCliRun", () => {
     expect(stdout.join("")).toBe("regenerated\n")
   })
 
-  test("derives project name and path and enables docs by default for project create", async () => {
+  test("derives project name and path and disables docs by default for project create", async () => {
     const requests: Array<{ path: string; method: string; body?: unknown }> = []
     const stdout: string[] = []
     const exitCode = await projectRegistryCliRun(["project", "create"], {
@@ -1021,7 +1021,7 @@ describe("projectRegistryCliRun", () => {
         body: {
           expectedRevision: "current",
           name: basename(process.cwd()),
-          caddy: { docs: true, path: process.cwd() },
+          caddy: { docs: false, path: process.cwd() },
         },
       },
     ])

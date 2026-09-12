@@ -627,7 +627,7 @@ function legacyPutPatch(input: unknown): Record<string, unknown> | undefined {
       path: "",
       access: "external",
       kind: "proxy",
-      docs: true,
+      docs: false,
       browse: false,
       headerUp: {},
       disabled: false,

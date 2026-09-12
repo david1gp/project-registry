@@ -83,6 +83,26 @@ describe("projectSchema", () => {
     expect(document.success).toBe(false)
   })
 
+  test("defaults docs to disabled in runtime Caddy schemas", () => {
+    const input = a.safeParse(projectInputSchema, {
+      owner: "alice",
+      name: "catalog",
+      caddy: { domains: ["catalog.example"] },
+    })
+    const persisted = a.safeParse(projectSchema, {
+      schemaVersion: 1,
+      owner: "alice",
+      name: "catalog",
+      caddy: { port: 3000, domains: ["catalog.example"] },
+    })
+
+    expect(input.success).toBe(true)
+    expect(persisted.success).toBe(true)
+    if (!input.success || !persisted.success) return
+    expect(input.output.caddy?.docs).toBe(false)
+    expect(persisted.output.caddy?.docs).toBe(false)
+  })
+
   test("keeps legacy empty and whitespace Caddy optionals valid in both schemas", () => {
     const fields = ["routed", "docsPath", "browseTemplate"] as const
 
