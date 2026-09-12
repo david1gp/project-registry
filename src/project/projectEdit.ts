@@ -62,31 +62,40 @@ function projectEditCanonicalPatch(input: Record<string, unknown>): Record<strin
   return patch
 }
 
-function projectEditCanonicalServiceOwnershipPreserve(
+function projectEditCanonicalServicesMerge(
   existing: ProjectCanonical,
   patch: Record<string, unknown>,
 ): Record<string, unknown> {
-  if (!Array.isArray(patch.services)) return patch
-  const existingServices = new Map(existing.services.map((service) => [service.id, service]))
-  patch.services = patch.services.map((service) => {
-    if (service === null || typeof service !== "object" || Array.isArray(service)) return service
-    const serviceRecord = service as Record<string, unknown>
-    if (Object.hasOwn(serviceRecord, "ownership") || typeof serviceRecord.id !== "string") return service
-    const existingService = existingServices.get(serviceRecord.id)
-    return existingService === undefined ? service : { ...serviceRecord, ownership: existingService.ownership }
+  if (!Array.isArray(patch.services) || patch.services.length === 0) return patch
+  if (!patch.services.every((service) => service !== null && typeof service === "object" && !Array.isArray(service)))
+    return patch
+
+  const patchServices = patch.services as Record<string, unknown>[]
+  if (patchServices.some((service) => typeof service.id !== "string")) return patch
+  if (new Set(patchServices.map((service) => service.id)).size !== patchServices.length) return patch
+
+  const patchesById = new Map(patchServices.map((service) => [service.id as string, service]))
+  const services = existing.services.map((service) => {
+    const servicePatch = patchesById.get(service.id)
+    if (servicePatch === undefined) return service
+    patchesById.delete(service.id)
+    return projectEditRecordMerge(service as unknown as Record<string, unknown>, servicePatch)
   })
-  return patch
+  for (const service of patchServices) {
+    if (patchesById.has(service.id as string)) services.push(service)
+  }
+  return { ...patch, services }
 }
 
 function projectEditCanonicalInput(existing: ProjectCanonical, input: unknown): unknown {
   if (!input || typeof input !== "object" || Array.isArray(input)) return input
   const rawPatch = input as Record<string, unknown>
-  const patch = projectEditCanonicalServiceOwnershipPreserve(existing, projectEditCanonicalPatch(rawPatch))
-  const services = patch.services
+  const patch = projectEditCanonicalServicesMerge(existing, projectEditCanonicalPatch(rawPatch))
+  const patchServices = patch.services
   const isCanonicalPatch =
     patch.schemaVersion === 2 ||
-    (Array.isArray(services) &&
-      services.every((service) => service && typeof service === "object" && !Array.isArray(service)))
+    (Array.isArray(patchServices) &&
+      patchServices.every((service) => service && typeof service === "object" && !Array.isArray(service)))
   if (isCanonicalPatch) return projectEditRecordMerge(existing as unknown as Record<string, unknown>, patch)
 
   const legacyR = projectCanonicalToLegacy(existing)
@@ -97,17 +106,18 @@ function projectEditCanonicalInput(existing: ProjectCanonical, input: unknown): 
 
   const defaultService = migrated.data.services.find((service) => service.id === "default")
   const selectedService = existing.services.find((service) => service.id === "default") ?? existing.services[0]
-  const servicesWithoutSelected =
-    selectedService === undefined
-      ? existing.services
-      : existing.services.filter((service) => service.id !== selectedService.id)
-  const replacement =
-    defaultService === undefined || selectedService === undefined
-      ? defaultService
-      : { ...defaultService, id: selectedService.id }
+  const selectedIndex = selectedService === undefined ? -1 : existing.services.indexOf(selectedService)
+  const services = [...existing.services]
+  if (defaultService !== undefined && selectedIndex >= 0 && selectedService !== undefined) {
+    services[selectedIndex] = { ...defaultService, id: selectedService.id, ownership: selectedService.ownership }
+  } else if (defaultService !== undefined && selectedIndex < 0) {
+    services.push(defaultService)
+  }
+  const { services: _migratedServices, ...metadata } = migrated.data
   return {
-    ...migrated.data,
-    services: replacement === undefined ? servicesWithoutSelected : [...servicesWithoutSelected, replacement],
+    ...existing,
+    ...metadata,
+    services,
   }
 }
 

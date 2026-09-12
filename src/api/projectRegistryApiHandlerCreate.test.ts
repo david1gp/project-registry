@@ -693,6 +693,111 @@ describe("projectRegistryApiHandlerCreate", () => {
     })
   })
 
+  test("atomically persists a portless external service before the creation callback", async () => {
+    const repository = repositoryCreate()
+    const persisted: Project[] = []
+    const handler = projectRegistryApiHandlerCreate({
+      repository,
+      caddyApplication: caddyApplicationCreate(),
+      portRange: { from: 3100, to: 3100 },
+      projectCreateAfterPersistence: (project) => persisted.push(project),
+    })
+
+    const created = await requestJson(
+      handler,
+      "/api/v1/users/leo/projects",
+      { transport: "unix", username: "leo" },
+      "POST",
+      {
+        expectedRevision: revision,
+        schemaVersion: 2,
+        name: "pages-app",
+        services: [
+          {
+            id: "pages",
+            units: [],
+            ownership: "external",
+            caddy: { domains: ["pages.example"] },
+          },
+        ],
+      },
+    )
+
+    expect(created.response.status).toBe(201)
+    expect(persisted).toHaveLength(1)
+    const saved = repository.projects.find((project) => project.name === "pages-app")
+    expect(saved).toBe(persisted[0])
+    expect(saved).toMatchObject({
+      schemaVersion: 2,
+      services: [{ id: "pages", ownership: "external", caddy: { port: 3100, domains: ["pages.example"] } }],
+    })
+    if (saved?.schemaVersion !== 2) return
+    expect(saved.services.map((service) => (typeof service === "string" ? service : service.ownership))).toEqual([
+      "external",
+    ])
+  })
+
+  test("preserves sibling ownership across API partial edits and post-persistence lifecycle callbacks", async () => {
+    const repository = repositoryCreate()
+    const canonicalR = projectMigrate({
+      schemaVersion: 2,
+      owner: "leo",
+      name: "ownership-app",
+      services: [
+        { id: "api", units: [], ownership: "external", caddy: { port: 4201, domains: ["api.example"] } },
+        { id: "default", units: [], ownership: "registry", caddy: { port: 4202, domains: ["app.example"] } },
+      ],
+    })
+    if (!canonicalR.success) throw new Error(canonicalR.errorMessage)
+    repository.projects.push(canonicalR.data)
+    const events: string[] = []
+    const handler = projectRegistryApiHandlerCreate({
+      repository,
+      caddyApplication: caddyApplicationCreate(),
+      projectEditAfterPersistence: (_previous, project) => {
+        const ownerships = project.services.map((service) =>
+          typeof service === "string" ? service : service.ownership,
+        )
+        events.push(`${repository.projects.includes(project)}:${ownerships.join(",")}`)
+      },
+    })
+    const leo = { transport: "unix", username: "leo" } as const
+    let expectedRevision = revision
+
+    for (const patch of [
+      { description: "edited" },
+      { type: "internal" },
+      { labels: { team: "platform" } },
+      {
+        schemaVersion: 2,
+        services: [{ id: "api", caddy: { domains: ["api-new.example"] } }],
+      },
+    ]) {
+      const updated = await requestJson(handler, "/api/v1/users/leo/projects/ownership-app", leo, "PATCH", {
+        expectedRevision,
+        ...patch,
+      })
+      expect(updated.response.status).toBe(200)
+      expectedRevision = nextRevision
+    }
+
+    expect(events).toEqual([
+      "true:external,registry",
+      "true:external,registry",
+      "true:external,registry",
+      "true:external,registry",
+    ])
+    expect(repository.projects.find((project) => project.name === "ownership-app")).toMatchObject({
+      description: "edited",
+      type: "internal",
+      labels: { team: "platform" },
+      services: [
+        { id: "api", ownership: "external", caddy: { port: 4201, domains: ["api-new.example"] } },
+        { id: "default", ownership: "registry" },
+      ],
+    })
+  })
+
   test("generates a default project subdomain when the request omits domains", async () => {
     const repository = repositoryCreate()
     const handler = projectRegistryApiHandlerCreate({

@@ -16,6 +16,7 @@ import { projectGetUseCase } from "./projectGetUseCase.js"
 import { projectHistory } from "./projectHistory.js"
 import type { ProjectKey } from "./projectKey.js"
 import { projectListUseCase } from "./projectListUseCase.js"
+import { projectMigrate } from "./projectMigrate.js"
 
 const currentRevision = "a".repeat(40)
 const staleRevision = "b".repeat(40)
@@ -306,6 +307,88 @@ describe("project use cases", () => {
           }),
         ],
       },
+    })
+  })
+
+  test("preserves canonical services through metadata and legacy Caddy partial edits", async () => {
+    const canonicalR = projectMigrate({
+      schemaVersion: 2,
+      owner: "alice",
+      name: "catalog",
+      services: [
+        { id: "api", units: [], ownership: "external", caddy: { port: 3001, domains: ["api.example"] } },
+        { id: "default", units: [], ownership: "registry", caddy: { port: 3000, domains: ["catalog.example"] } },
+      ],
+    })
+    if (!canonicalR.success) throw new Error(canonicalR.errorMessage)
+    const repository = repositoryCreate([canonicalR.data])
+    const access = accessCreate({ subject: "alice-subject", username: "alice", role: "own" }, { alice: "own" })
+    const persisted: Project[] = []
+
+    for (const patch of [
+      { description: "edited" },
+      { type: "internal" },
+      { labels: { team: "platform" } },
+      { caddy: { domains: ["catalog-new.example"] } },
+    ]) {
+      const result = await projectEdit(
+        useCaseOptions(repository, access, { from: 3000, to: 3002 }),
+        { owner: "alice", name: "catalog" },
+        patch,
+        { expectedRevision: currentRevision },
+        (_previous, project) => persisted.push(project),
+      )
+      expect(result.success).toBe(true)
+    }
+
+    expect(repository.calls.edit).toHaveLength(4)
+    expect(persisted).toHaveLength(4)
+    for (const project of persisted) {
+      expect(project.services).toMatchObject([
+        { id: "api", ownership: "external" },
+        { id: "default", ownership: "registry" },
+      ])
+    }
+    expect(
+      (persisted[3] as Project & { services: Array<{ id: string; caddy?: { domains?: string[] } }> }).services,
+    ).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: "default",
+          caddy: expect.objectContaining({ domains: ["catalog-new.example"] }),
+        }),
+      ]),
+    )
+    expect(repository.projects[0]).toBe(persisted[3])
+  })
+
+  test("merges an explicit canonical service edit without dropping sibling ownership", async () => {
+    const canonicalR = projectMigrate({
+      schemaVersion: 2,
+      owner: "alice",
+      name: "catalog",
+      services: [
+        { id: "api", units: [], ownership: "external", caddy: { port: 3001, domains: ["api.example"] } },
+        { id: "default", units: [], ownership: "registry", caddy: { port: 3000, domains: ["catalog.example"] } },
+      ],
+    })
+    if (!canonicalR.success) throw new Error(canonicalR.errorMessage)
+    const repository = repositoryCreate([canonicalR.data])
+    const access = accessCreate({ subject: "alice-subject", username: "alice", role: "own" }, { alice: "own" })
+
+    const result = await projectEdit(
+      useCaseOptions(repository, access),
+      { owner: "alice", name: "catalog" },
+      { schemaVersion: 2, services: [{ id: "api", caddy: { domains: ["api-new.example"] } }] },
+      { expectedRevision: currentRevision },
+    )
+
+    expect(result.success).toBe(true)
+    expect(repository.calls.edit[0]?.project).toMatchObject({
+      services: [
+        { id: "api", ownership: "external", caddy: { port: 3001, domains: ["api-new.example"] } },
+        { id: "default", ownership: "registry", caddy: { port: 3000, domains: ["catalog.example"] } },
+      ],
     })
   })
 

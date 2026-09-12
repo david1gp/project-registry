@@ -6,12 +6,55 @@ import { projectCanonicalSchema } from "./projectCanonicalSchema.js"
 import { projectCollisions } from "./projectCollisions.js"
 import { projectMigrate } from "./projectMigrate.js"
 import { projectNormalize } from "./projectNormalize.js"
+import { projectPortNext } from "./projectPortNext.js"
 
 function canonicalInput(input: unknown): unknown {
   if (!input || typeof input !== "object" || Array.isArray(input)) return input
   const record = { ...(input as Record<string, unknown>) }
   delete record.expectedRevision
   return record
+}
+
+function canonicalExternalPortlessNormalize(
+  input: unknown,
+  options: ProjectCanonicalNormalizeOptions,
+): Result<unknown> {
+  const record = canonicalInput(input)
+  if (!record || typeof record !== "object" || Array.isArray(record)) return createResult(record)
+  const services = (record as Record<string, unknown>).services
+  if (!Array.isArray(services)) return createResult(record)
+
+  const portlessExternal = services.some((service) => {
+    if (!service || typeof service !== "object" || Array.isArray(service)) return false
+    const serviceRecord = service as Record<string, unknown>
+    const caddy = serviceRecord.caddy
+    return (
+      serviceRecord.ownership === "external" &&
+      caddy !== null &&
+      typeof caddy === "object" &&
+      !Array.isArray(caddy) &&
+      (caddy as Record<string, unknown>).port === undefined
+    )
+  })
+  if (!portlessExternal) return createResult(record)
+
+  const portR = projectPortNext(options.projects ?? [], options.portRange, options.excludeKey)
+  if (!portR.success) return portR
+  const servicesWithPorts = services.map((service) => {
+    if (!service || typeof service !== "object" || Array.isArray(service)) return service
+    const serviceRecord = service as Record<string, unknown>
+    const caddy = serviceRecord.caddy
+    if (
+      serviceRecord.ownership !== "external" ||
+      caddy === null ||
+      typeof caddy !== "object" ||
+      Array.isArray(caddy) ||
+      (caddy as Record<string, unknown>).port !== undefined
+    )
+      return service
+    return { ...serviceRecord, caddy: { ...(caddy as Record<string, unknown>), port: portR.data } }
+  })
+  return createResult({ ...record, services: servicesWithPorts })
 }
 
 export function projectCanonicalNormalize(
@@ -22,7 +65,9 @@ export function projectCanonicalNormalize(
   const record =
     input && typeof input === "object" && !Array.isArray(input) ? (input as Record<string, unknown>) : undefined
   if (record?.schemaVersion === 2) {
-    const parsed = a.safeParse(projectCanonicalSchema, canonicalInput(input))
+    const portlessExternalR = canonicalExternalPortlessNormalize(input, options)
+    if (!portlessExternalR.success) return { ...portlessExternalR, op }
+    const parsed = a.safeParse(projectCanonicalSchema, portlessExternalR.data)
     if (!parsed.success) return createResultErrorCode(op, a.summarize(parsed.issues), "request.invalid")
     const migrated = projectMigrate(parsed.output)
     if (!migrated.success) return { ...migrated, op }
