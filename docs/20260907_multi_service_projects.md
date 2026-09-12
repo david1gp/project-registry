@@ -12,7 +12,10 @@ Allow one owner/project identity to contain multiple independently routed servic
 - Enforce domain and port uniqueness across active services, including services in the same project.
 - Read and migrate existing project files losslessly; write only the new canonical structure.
 - Group only explicitly mapped Leo records; group `sales-api`, `sales-web-preview`, and `sales-web-prod`
-  under `sales` while preserving their service IDs and existing disabled/active Caddy settings.
+  under `sales`, `billing-preview` under `billing`, `coachingcompany-api` under `coachingcompany`, and
+  `crm-api-preview` and `crm-convex-preview` under `crm`, plus `akademie-api`, `akademie-dev-api`, and
+  `akademie-prod` under the own project `akademie`, while preserving their service IDs and existing Caddy
+  settings. CRM's external preview routing remains external while the parent retains its internal Caddy access.
 - Keep Git history as rollback; migration changes are validated before activation.
 
 ## Approach
@@ -21,7 +24,7 @@ Allow one owner/project identity to contain multiple independently routed servic
 - Adapt collision checks, port allocation, persistence, and Caddy generation to iterate services.
 - Add a deterministic repository migration for legacy records and explicit Leo grouping mappings.
 - Update CLI/UI consumers and tests to display and edit services under one project.
-- Current context: implementation and verification are complete. Canonical version 2 services are `{ id, units, caddy }`; legacy records parse compatibly and canonical writes preserve metadata. CRUD, persistence, collision/allocation, per-service Caddy routes, CLI, and UI support multiple services. The atomic migration maps Leo's emailoutreach, allgroups-chat, and sales service records, and has not been applied to external data.
+- Current context: implementation and verification are complete. Canonical version 2 services are `{ id, units, caddy }`; legacy records parse compatibly and canonical writes preserve metadata. CRUD, persistence, collision/allocation, per-service Caddy routes, CLI, and UI support multiple services. The atomic migration maps Leo's emailoutreach, allgroups-chat, coachingcompany, CRM, sales, and billing service records, and has not been applied to external data.
 
 ## Tasks
 

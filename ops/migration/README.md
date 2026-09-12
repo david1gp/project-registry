@@ -24,8 +24,50 @@ the worktree, writes one Git commit, and removes grouped source records only in 
 apply is a no-op; use Git history to review or roll back the migration. The map merges
 `emailoutreach-prod` into `emailoutreach` and groups `allgroups-chat-ui`, `allgroups-chat-convex`,
 `allgroups-chat-api`, and `allgroups-chat-dash` under `allgroups-chat`; it also groups
-`sales-api`, `sales-web-preview`, and `sales-web-prod` under `sales`, preserving their service IDs.
+`coachingcompany-api` under `coachingcompany`, `crm-api-preview` and `crm-convex-preview` under
+`crm`, `sales-api`, `sales-web-preview`, and `sales-web-prod` under `sales`, and `billing-preview`
+under `billing`, and `akademie-api`, `akademie-dev-api`, and `akademie-prod` under the own project
+`akademie`, preserving their service IDs.
 Existing disabled/active Caddy settings are preserved. The Leo repository is not invoked by this workspace change.
+
+### Sales, billing, and Akademie normalization
+
+The deployed CLI's `--ownership` option is **not** a project classification: its accepted values are
+`registry` and `external`, and it requires `--service`. The project classification is `--type` and the
+human grouping label is `--label section=Interne` for Sales and Billing. Akademie and each of its
+three grouped source records use the project classification `--type own` and `--label section=Eigene`.
+The source records are removed by grouping, so no customer project remains; service-level ownership is
+unrelated and is preserved. `--access internal` changes Caddy access and must not be used for this
+correction; the normalization below does not send any Caddy options.
+
+Preview the normalization edits (the default is read-only):
+
+```bash
+bash ops/migration/normalize-sales-billing.bash \
+  --cli /usr/local/bin/project-registry \
+  --socket /run/project-registry/leo.sock \
+  --dry-run
+```
+
+After reviewing the commands, apply them as the `leo` owner:
+
+```bash
+bash ops/migration/normalize-sales-billing.bash \
+  --cli /usr/local/bin/project-registry \
+  --socket /run/project-registry/leo.sock \
+  --apply
+```
+
+The edit API merges `type` and the complete label map while retaining every service, unit, domain,
+port, access, kind, docs, browse, disabled, SPA, header, and other Caddy field. Missing projects are
+reported and skipped, so the script is safe to rerun after grouped source records have been removed.
+Run this before the grouping migration when the source records still exist. Review the repository plan first:
+
+```bash
+bun run ops/migration/multi-service-migrate.ts \
+  --repository /home/caddy/project-registry-history \
+  --dry-run
+```
 
 `legacy-migrate.ts` reads the existing Leo Caddy project repository and converts a separate
 destination repository. It is a dry-run unless `--apply` is supplied. Apply uses copied Git
