@@ -14,7 +14,7 @@ Allow one owner/project identity to contain multiple independently routed servic
 - Group only explicitly mapped Leo records; group `sales-api`, `sales-web-preview`, and `sales-web-prod`
   under `sales`, `billing-preview` under `billing`, `coachingcompany-api` under `coachingcompany`, and
   `crm-api-preview` and `crm-convex-preview` under `crm`, plus `akademie-api`, `akademie-dev-api`, and
-  `akademie-prod` under the own project `akademie`, while preserving their service IDs and existing Caddy
+  `akademie-prod` under the `Eigene`-section project `akademie`, while preserving their service IDs and existing Caddy
   settings. CRM's external preview routing remains external while the parent retains its internal Caddy access.
 - Keep Git history as rollback; migration changes are validated before activation.
 

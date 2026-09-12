@@ -7,7 +7,7 @@ apply=false
 
 usage() {
   printf '%s\n' "Usage: $0 [--apply] [--dry-run] [--cli PATH] [--socket PATH]"
-  printf '%s\n' "Defaults to a read-only plan. --apply edits only project type and section label."
+  printf '%s\n' "Defaults to a read-only plan. --apply edits only the section label."
 }
 
 while (($# > 0)); do
@@ -42,16 +42,16 @@ while (($# > 0)); do
 done
 
 normalizations=(
-  'sales|internal|Interne'
-  'sales-api|internal|Interne'
-  'sales-web-preview|internal|Interne'
-  'sales-web-prod|internal|Interne'
-  'billing|internal|Interne'
-  'billing-preview|internal|Interne'
-  'akademie|own|Eigene'
-  'akademie-api|own|Eigene'
-  'akademie-dev-api|own|Eigene'
-  'akademie-prod|own|Eigene'
+  'sales|Interne'
+  'sales-api|Interne'
+  'sales-web-preview|Interne'
+  'sales-web-prod|Interne'
+  'billing|Interne'
+  'billing-preview|Interne'
+  'akademie|Eigene'
+  'akademie-api|Eigene'
+  'akademie-dev-api|Eigene'
+  'akademie-prod|Eigene'
 )
 
 project_exists() {
@@ -75,7 +75,7 @@ project_exists() {
 }
 
 for normalization in "${normalizations[@]}"; do
-  IFS='|' read -r project type section <<<"$normalization"
+  IFS='|' read -r project section <<<"$normalization"
   if project_exists "$project"; then
     :
   else
@@ -84,7 +84,7 @@ for normalization in "${normalizations[@]}"; do
     exit "$status"
   fi
 
-  command=("$cli" project edit "$project" --type "$type" --label "section=$section")
+  command=("$cli" project edit "$project" --label "section=$section")
   if [[ -n "$socket" ]]; then command+=(--socket "$socket"); fi
   if [[ "$apply" == true ]]; then
     "${command[@]}"

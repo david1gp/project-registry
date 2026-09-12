@@ -33,9 +33,9 @@ Existing disabled/active Caddy settings are preserved. The Leo repository is not
 ### Sales, billing, and Akademie normalization
 
 The deployed CLI's `--ownership` option is **not** a project classification: its accepted values are
-`registry` and `external`, and it requires `--service`. The project classification is `--type` and the
-human grouping label is `--label section=Interne` for Sales and Billing. Akademie and each of its
-three grouped source records use the project classification `--type own` and `--label section=Eigene`.
+`registry` and `external`, and it requires `--service`. Project classification is the `section` label:
+Sales and Billing use `--label section=Interne`; Akademie and each of its three grouped source records
+use `--label section=Eigene`.
 The source records are removed by grouping, so no customer project remains; service-level ownership is
 unrelated and is preserved. `--access internal` changes Caddy access and must not be used for this
 correction; the normalization below does not send any Caddy options.
@@ -58,8 +58,8 @@ bash ops/migration/normalize-sales-billing.bash \
   --apply
 ```
 
-The edit API merges `type` and the complete label map while retaining every service, unit, domain,
-port, access, kind, docs, browse, disabled, SPA, header, and other Caddy field. Missing projects are
+The edit API merges the complete label map while retaining every service, unit, domain, port, access, kind,
+docs, browse, disabled, SPA, header, and other Caddy field. Missing projects are
 reported and skipped, so the script is safe to rerun after grouped source records have been removed.
 Run this before the grouping migration when the source records still exist. Review the repository plan first:
 

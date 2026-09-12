@@ -145,7 +145,7 @@ describe("legacy migration fixtures", () => {
         github: "https://github.com/example/proxy",
         owner: "leo",
         services: ["proxy.service"],
-        type: "own",
+        labels: { section: "Eigene" },
       })
       expect(proxy.caddy).toMatchObject({
         access: "internal",
@@ -184,7 +184,7 @@ describe("legacy migration fixtures", () => {
         order: 12,
         owner: "leo",
         services: ["project-name.service"],
-        type: "internal",
+        labels: { section: "Interne" },
       })
       expect(await readFile(join(repository, "projects", "leo", "proxy.json"), "utf8")).toBe(before)
       expect(await readdir(repository)).not.toContain("migrations")

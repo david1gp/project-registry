@@ -1,4 +1,4 @@
 order: "12"
 services:
   - project-name.service
-type: internal
+labels: {"section":"Interne"}

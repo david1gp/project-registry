@@ -43,7 +43,7 @@ const softwareFields = new Set([
   "production_url",
   "production_assets_url",
   "services",
-  "type",
+  "labels",
 ])
 
 type MigrationOptions = {
@@ -561,6 +561,13 @@ function migrationYamlScalar(value: string): Result<unknown> {
     }
     return createResult(values)
   }
+  if (text.startsWith("{") && text.endsWith("}")) {
+    try {
+      return createResult(JSON.parse(text))
+    } catch (error) {
+      return createResultError("migrationYamlScalar", migrationErrorMessage(error))
+    }
+  }
   if (text.startsWith('"') && text.endsWith('"')) {
     try {
       return createResult(JSON.parse(text))
@@ -718,8 +725,8 @@ function migrationLegacyProjectConvert(
       order: Number.MAX_SAFE_INTEGER,
       owner,
       schemaVersion: 1,
+      labels: { section: "Kunden" },
       services: [],
-      type: "customer",
     },
     path,
   )
@@ -838,12 +845,6 @@ function migrationSoftwareOrder(value: unknown): number {
   return Number.MAX_SAFE_INTEGER
 }
 
-function migrationSoftwareType(value: unknown): "own" | "internal" | "customer" {
-  const type = migrationText(value)?.toLowerCase()
-  if (type === "own" || type === "internal" || type === "customer") return type
-  return "customer"
-}
-
 function migrationSoftwareServices(value: unknown): string[] {
   if (!Array.isArray(value)) return []
   return [
@@ -881,7 +882,7 @@ function migrationSoftwareProjectConvert(
     owner,
     schemaVersion: 1,
     services: migrationSoftwareServices(record.services),
-    type: migrationSoftwareType(record.type),
+    labels: record.labels ?? {},
   }
   const fields: [string, string][] = [
     ["github", "github"],
@@ -966,8 +967,8 @@ function migrationProjectMerge(project: Project, software: Project, path: string
     productionAssetsUrl: software.productionAssetsUrl,
     productionUrl: software.productionUrl,
     services: software.services,
-    type: software.type,
   }
+  if (Object.keys(software.labels).length > 0) input.labels = software.labels
   for (const key of ["github", "previewPort", "previewUrl", "productionAssetsUrl", "productionUrl"]) {
     if (input[key] === undefined) delete input[key]
   }

@@ -69,21 +69,21 @@ fi
     const calls = (await Bun.file(log).text()).split("\n").filter((line) => line !== "")
     expect(calls).toEqual([
       "project get sales --json --socket /run/test.sock",
-      "project edit sales --type internal --label section=Interne --socket /run/test.sock",
+      "project edit sales --label section=Interne --socket /run/test.sock",
       "project get sales-api --json --socket /run/test.sock",
       "project get sales-web-preview --json --socket /run/test.sock",
       "project get sales-web-prod --json --socket /run/test.sock",
       "project get billing --json --socket /run/test.sock",
-      "project edit billing --type internal --label section=Interne --socket /run/test.sock",
+      "project edit billing --label section=Interne --socket /run/test.sock",
       "project get billing-preview --json --socket /run/test.sock",
       "project get akademie --json --socket /run/test.sock",
-      "project edit akademie --type own --label section=Eigene --socket /run/test.sock",
+      "project edit akademie --label section=Eigene --socket /run/test.sock",
       "project get akademie-api --json --socket /run/test.sock",
-      "project edit akademie-api --type own --label section=Eigene --socket /run/test.sock",
+      "project edit akademie-api --label section=Eigene --socket /run/test.sock",
       "project get akademie-dev-api --json --socket /run/test.sock",
-      "project edit akademie-dev-api --type own --label section=Eigene --socket /run/test.sock",
+      "project edit akademie-dev-api --label section=Eigene --socket /run/test.sock",
       "project get akademie-prod --json --socket /run/test.sock",
-      "project edit akademie-prod --type own --label section=Eigene --socket /run/test.sock",
+      "project edit akademie-prod --label section=Eigene --socket /run/test.sock",
     ])
   })
 })
