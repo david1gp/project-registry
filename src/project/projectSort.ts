@@ -5,6 +5,8 @@ const projectSectionOrder: Record<string, number> = {
   Kunden: 1,
   Eigene: 2,
 }
+const projectSectionFallbackOrder = Object.keys(projectSectionOrder).length
+const projectSectionLastOrder = projectSectionFallbackOrder + 1
 
 function stringCompare(left: string, right: string): number {
   if (left === right) return 0
@@ -15,8 +17,14 @@ export function projectSort(projects: readonly Project[]): Project[] {
   return [...projects].sort((left, right) => {
     const leftSection = left.labels.section ?? ""
     const rightSection = right.labels.section ?? ""
-    const leftSectionOrder = projectSectionOrder[leftSection] ?? Object.keys(projectSectionOrder).length
-    const rightSectionOrder = projectSectionOrder[rightSection] ?? Object.keys(projectSectionOrder).length
+    const leftSectionOrder =
+      leftSection === "Intern"
+        ? projectSectionLastOrder
+        : (projectSectionOrder[leftSection] ?? projectSectionFallbackOrder)
+    const rightSectionOrder =
+      rightSection === "Intern"
+        ? projectSectionLastOrder
+        : (projectSectionOrder[rightSection] ?? projectSectionFallbackOrder)
     if (leftSectionOrder !== rightSectionOrder) return leftSectionOrder - rightSectionOrder
     const sectionOrder = stringCompare(leftSection, rightSection)
     if (sectionOrder !== 0) return sectionOrder

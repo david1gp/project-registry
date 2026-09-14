@@ -52,4 +52,14 @@ describe("projectSort", () => {
       "Produktion Infrastruktur",
     ])
   })
+
+  test("sorts Intern after arbitrary sections", () => {
+    const projects = [
+      project({ owner: "alice", name: "web", order: 1, labels: { section: "Web" } }),
+      project({ owner: "alice", name: "intern", order: 1, labels: { section: "Intern" } }),
+      project({ owner: "alice", name: "future", order: 1, labels: { section: "Zukunft" } }),
+    ]
+
+    expect(projectSort(projects).map((item) => item.labels.section)).toEqual(["Web", "Zukunft", "Intern"])
+  })
 })
