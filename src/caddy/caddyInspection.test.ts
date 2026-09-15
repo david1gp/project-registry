@@ -165,6 +165,31 @@ describe("visibility-scoped Caddy inspection", () => {
     expect(JSON.stringify(result.data.config)).toContain("localhost:3016")
   })
 
+  test("resolves documentation URLs from the enabled canonical service", () => {
+    const canonical = {
+      schemaVersion: 2,
+      owner: "alice",
+      name: "preview-docs",
+      services: [
+        {
+          id: "default",
+          ownership: "external",
+          caddy: { port: 3017, domains: ["production.example"], docs: false },
+        },
+        {
+          id: "preview",
+          ownership: "registry",
+          caddy: { port: 3018, domains: ["preview.example"], docs: true },
+        },
+      ],
+    }
+
+    expect(projectDocsUrls(canonical, "guide.md")).toEqual({
+      success: true,
+      data: { urls: ["https://preview.example/docs/guide.md"] },
+    })
+  })
+
   test("requires an unambiguous visible project for legacy and canonical selectors", () => {
     const aliceShared = project("alice", "shared-name", 3011, "alice-shared.example")
     const bobShared = project("bob", "shared-name", 3012, "bob-shared.example")

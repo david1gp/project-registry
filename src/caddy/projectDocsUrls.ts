@@ -1,5 +1,5 @@
 import { createResult, createResultErrorCode, type Result } from "#result"
-import { projectCanonicalToLegacy } from "../project/projectCanonicalToLegacy.js"
+import { projectCaddyEntries } from "../project/projectCaddyEntries.js"
 import { projectMigrate } from "../project/projectMigrate.js"
 
 const docsRelativePattern = /^(?:[A-Za-z0-9][A-Za-z0-9._-]*\/)*[A-Za-z0-9][A-Za-z0-9._-]*\.md$/
@@ -22,34 +22,36 @@ function projectDocsEnablementHint(name: string, projectDisabled: boolean): stri
 
 export function projectDocsUrls(project: unknown, relativePath: unknown, options?: unknown): Result<ProjectDocsUrls> {
   const op = "projectDocsUrls"
-  const parsed = (() => {
+  const projectR = (() => {
     try {
-      const migrated = projectMigrate(project)
-      if (!migrated.success) return undefined
-      return projectCanonicalToLegacy(migrated.data)
+      return projectMigrate(project)
     } catch {
       return undefined
     }
   })()
-  if (parsed === undefined || !parsed.success) {
+  if (projectR === undefined || !projectR.success) {
     return createResultErrorCode(op, "documentation configuration is invalid", "documentation.invalid-configuration")
   }
 
-  const projectValue = parsed.data
-  const caddy = projectValue.caddy
-  if (caddy === undefined || caddy === null) {
+  const caddyEntries = projectCaddyEntries(projectR.data)
+  if (caddyEntries.length === 0) {
     return createResultErrorCode(op, "documentation configuration is invalid", "documentation.invalid-configuration")
   }
-  if (caddy.disabled) {
-    return Object.assign(createResultErrorCode(op, "documentation project is disabled", "projects.disabled"), {
-      hint: projectDocsEnablementHint(projectValue.name, true),
-    })
-  }
-  if (caddy.docs !== true) {
+
+  const docsEntries = caddyEntries.filter((entry) => entry.caddy.docs)
+  if (docsEntries.length === 0) {
     return Object.assign(createResultErrorCode(op, "documentation is disabled", "documentation.disabled"), {
-      hint: projectDocsEnablementHint(projectValue.name, false),
+      hint: projectDocsEnablementHint(projectR.data.name, false),
     })
   }
+
+  const activeDocsEntries = docsEntries.filter((entry) => !entry.caddy.disabled)
+  if (activeDocsEntries.length === 0) {
+    return Object.assign(createResultErrorCode(op, "documentation project is disabled", "projects.disabled"), {
+      hint: projectDocsEnablementHint(projectR.data.name, true),
+    })
+  }
+
   if (typeof relativePath !== "string")
     return createResultErrorCode(op, "documentation path is invalid", "documentation.invalid-path")
 
@@ -68,10 +70,12 @@ export function projectDocsUrls(project: unknown, relativePath: unknown, options
     return createResultErrorCode(op, "documentation URL options are invalid", "documentation.invalid-options")
 
   try {
-    const urls = caddy.domains.map((domain) => {
-      new URL(`${scheme}://${domain}/docs/${path}`)
-      return `${scheme}://${domain}/docs/${path}`
-    })
+    const urls = activeDocsEntries.flatMap(({ caddy }) =>
+      caddy.domains.map((domain) => {
+        new URL(`${scheme}://${domain}/docs/${path}`)
+        return `${scheme}://${domain}/docs/${path}`
+      }),
+    )
     return createResult({ urls })
   } catch {
     return createResultErrorCode(op, "documentation URL could not be generated", "documentation.url-generation-failed")
