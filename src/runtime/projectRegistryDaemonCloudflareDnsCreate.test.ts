@@ -166,6 +166,34 @@ describe("projectRegistryDaemonConfigFromEnv Cloudflare DNS", () => {
 })
 
 describe("projectRegistryDaemonCloudflareDnsCreate", () => {
+  test("retries startup reconciliation after the server IP becomes available", async () => {
+    const timer = timerCreate()
+    const calls: string[] = []
+    let currentIp: string | undefined
+    const startupProject = project(["new.example.com"])
+    const queueR = projectRegistryDaemonCloudflareDnsCreate({
+      enabled: true,
+      credentialResolve: async () => createResult("token"),
+      timeoutMs: 1000,
+      serverIpCurrent: () => currentIp,
+      timer: timer.timer,
+      repositoryProjectsCurrent: async () => createResult([startupProject]),
+      fetch: cloudflareFetchCreate(calls),
+    })
+    expect(queueR.success).toBe(true)
+    if (!queueR.success) return
+
+    expect(queueR.data.start().success).toBe(true)
+    await settle()
+    expect(calls).toEqual([])
+
+    currentIp = "203.0.113.10"
+    timer.tick()
+    await settle()
+    expect(calls.some((call) => call.includes("name=new.example.com"))).toBe(true)
+    await queueR.data.shutdown()
+  })
+
   test("uses the current owner credential for create, edit, and each reconciliation", async () => {
     const timer = timerCreate()
     const calls: string[] = []

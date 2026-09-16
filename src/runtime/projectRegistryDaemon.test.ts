@@ -541,7 +541,7 @@ describe("projectRegistryDaemonCreate", () => {
   test("starts live but not ready after failed generated-config validation and retries", async () => {
     const fakeFilesystem = filesystemCreate()
     const fakeServers = serverFactoryCreate(fakeFilesystem.entries)
-    const intervals: Array<() => void> = []
+    const intervals: Array<{ callback: () => void; delayMs: number }> = []
     let validations = 0
     let loads = 0
     const daemonR = await projectRegistryDaemonOpen({
@@ -555,8 +555,8 @@ describe("projectRegistryDaemonCreate", () => {
       },
       timer: {
         wait: async () => undefined,
-        setInterval: (callback) => {
-          intervals.push(callback)
+        setInterval: (callback, delayMs) => {
+          intervals.push({ callback, delayMs })
           return callback
         },
         clearInterval: () => undefined,
@@ -599,7 +599,7 @@ describe("projectRegistryDaemonCreate", () => {
     })
     expect(statusBody.data?.appliedRevision).toBeUndefined()
 
-    intervals[0]?.()
+    intervals.find((entry) => entry.delayMs === 60_000)?.callback()
     await new Promise((resolve) => setTimeout(resolve, 0))
     expect(validations).toBe(4)
     expect(loads).toBe(1)

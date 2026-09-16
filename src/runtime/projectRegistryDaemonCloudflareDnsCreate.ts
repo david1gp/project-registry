@@ -833,6 +833,7 @@ export function projectRegistryDaemonCloudflareDnsCreate(options: {
     if (started) return createResult(undefined)
     if (stopped) return createResultError(op, "Cloudflare DNS queue has stopped")
     started = true
+    intervalEnsure()
     startupPromise = Promise.resolve()
       .then(trackingStateInitialize)
       .then(async () => {
