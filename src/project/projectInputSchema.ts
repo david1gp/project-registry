@@ -32,6 +32,7 @@ export const projectInputSchema = a.object({
   schemaVersion: a.optional(a.literal(1), 1),
   owner: nonEmptyTextSchema,
   name: a.pipe(a.string(), a.regex(/^[a-z0-9][a-z0-9-]*$/)),
+  displayName: a.optional(a.pipe(a.string(), a.regex(/\S/))),
   description: a.optional(a.string()),
   order: a.optional(finiteNumberSchema, Number.MAX_SAFE_INTEGER),
   services: a.optional(a.array(serviceUnitSchema), []),

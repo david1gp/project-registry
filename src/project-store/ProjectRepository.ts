@@ -10,6 +10,8 @@ import type { ProjectRepositoryMutation } from "./ProjectRepositoryMutation.js"
 import type { ProjectRepositoryMutationOptions } from "./ProjectRepositoryMutationOptions.js"
 import type { ProjectRepositoryReadiness } from "./ProjectRepositoryReadiness.js"
 import type { ProjectRepositorySnapshot } from "./ProjectRepositorySnapshot.js"
+import type { ProjectRepositoryTransaction } from "./ProjectRepositoryTransaction.js"
+import type { ProjectRepositoryTransactionOptions } from "./ProjectRepositoryTransactionOptions.js"
 
 export interface ProjectRepository {
   read(): PromiseResult<ProjectRepositorySnapshot>
@@ -22,6 +24,7 @@ export interface ProjectRepository {
     options: ProjectRepositoryMutationOptions,
   ): PromiseResult<ProjectRepositoryMutation>
   delete(key: ProjectKey, options: ProjectRepositoryMutationOptions): PromiseResult<ProjectRepositoryMutation>
+  transact(options: ProjectRepositoryTransactionOptions): PromiseResult<ProjectRepositoryTransaction>
   migrate(options: ProjectRepositoryMigrationOptions): PromiseResult<ProjectRepositoryMigration>
   setUserDefaultDomain(
     owner: string,

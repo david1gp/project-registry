@@ -39,6 +39,8 @@ import { projectRepositoryOptionsSchema } from "./ProjectRepositoryOptions.js"
 import type { ProjectRepositoryReadiness } from "./ProjectRepositoryReadiness.js"
 import type { ProjectRepositoryServiceGrouping } from "./ProjectRepositoryServiceGrouping.js"
 import type { ProjectRepositorySnapshot } from "./ProjectRepositorySnapshot.js"
+import type { ProjectRepositoryTransaction } from "./ProjectRepositoryTransaction.js"
+import type { ProjectRepositoryTransactionOptions } from "./ProjectRepositoryTransactionOptions.js"
 import { projectRepositoryOwnerPath } from "./projectRepositoryOwnerPath.js"
 import { projectRepositoryPath } from "./projectRepositoryPath.js"
 
@@ -972,8 +974,18 @@ async function projectRepositoryMigrationStageWrite(
   return createResult(stagePath)
 }
 
-async function projectRepositoryMigrationRollback(store: GitProjectRepository): PromiseResult<void> {
+async function projectRepositoryMigrationRollback(
+  store: GitProjectRepository,
+  newlyCreatedPaths: string[] = [],
+): PromiseResult<void> {
   const resetR = await gitStoreRun(store.git, ["reset", "--hard", "HEAD"])
+  for (const path of newlyCreatedPaths) {
+    try {
+      await rm(join(store.git.dir, path), { force: true })
+    } catch (error) {
+      if (resetR.success) return createResultError("projectRepositoryMigrationRollback", errorMessage(error), path)
+    }
+  }
   if (!resetR.success) return resetR
   return createResult(undefined)
 }
@@ -1381,7 +1393,7 @@ function projectRepositoryExpectedRevision(options: unknown, currentRevision: un
     return createResultErrorCode(
       op,
       `revision mismatch: expected ${expectedR.data}, current ${currentRevision}`,
-      "projects.conflict",
+      "projects.revision-conflict",
     )
   }
   return createResult(undefined)
@@ -1514,6 +1526,160 @@ async function projectRepositorySetUserDefaultDomain(
     existingR.data !== undefined,
     snapshotR.data.revision,
   )
+}
+
+async function projectRepositoryTransact(
+  store: GitProjectRepository,
+  options: ProjectRepositoryTransactionOptions,
+): PromiseResult<ProjectRepositoryTransaction> {
+  const op = "projectRepositoryTransact"
+  if (!Array.isArray(options.writes) || !Array.isArray(options.removals)) {
+    return createResultError(op, "writes and removals must be arrays")
+  }
+  const actorR = projectRepositoryActor(options, op)
+  if (!actorR.success) return actorR
+  const snapshotR = await projectRepositoryReadSnapshot(store)
+  if (!snapshotR.success) return snapshotR
+  const expectedR = projectRepositoryExpectedRevision(options, snapshotR.data.revision, op)
+  if (!expectedR.success) return expectedR
+
+  const writes: Array<{ project: ProjectCanonical; path: string; data: string }> = []
+  const writeKeys = new Set<string>()
+  for (const input of options.writes) {
+    const projectR = projectMigrate(input)
+    if (!projectR.success) return projectR
+    const pathR = projectRepositoryPath(projectR.data)
+    if (!pathR.success) return pathR
+    const key = projectRepositoryMigrationKey(projectR.data)
+    if (writeKeys.has(key)) return createResultErrorCode(op, `project written twice: ${key}`, "request.invalid")
+    writeKeys.add(key)
+    writes.push({ project: projectR.data, path: pathR.data, data: `${JSON.stringify(projectR.data, null, 2)}\n` })
+  }
+
+  const removals = new Map<string, { key: ProjectKey; path: string }>()
+  for (const key of options.removals) {
+    const pathR = projectRepositoryPath(key)
+    if (!pathR.success) return pathR
+    const identity = projectRepositoryMigrationKey(key)
+    if (removals.has(identity) || writeKeys.has(identity)) {
+      return createResultErrorCode(op, `project appears more than once in transaction: ${identity}`, "request.invalid")
+    }
+    removals.set(identity, { key, path: pathR.data })
+  }
+
+  const existingByKey = new Map(
+    snapshotR.data.projects.map((project) => [projectRepositoryMigrationKey(project), project]),
+  )
+  for (const [identity, { key }] of removals) {
+    if (!existingByKey.has(identity)) {
+      return createResultErrorCode(op, `project not found: ${key.owner}/${key.name}`, "projects.not-found")
+    }
+  }
+  const writesToCommit = writes.filter(({ project }) => {
+    const existing = existingByKey.get(projectRepositoryMigrationKey(project))
+    return existing === undefined || !projectRepositoryContentsEqual(existing, project)
+  })
+
+  const changedProjects = new Map(
+    writesToCommit.map(({ project }) => [projectRepositoryMigrationKey(project), project]),
+  )
+  const resultingProjects = snapshotR.data.projects
+    .filter((project) => !removals.has(projectRepositoryMigrationKey(project)))
+    .map((project) => changedProjects.get(projectRepositoryMigrationKey(project)) ?? project)
+  for (const { project } of writesToCommit) {
+    if (!existingByKey.has(projectRepositoryMigrationKey(project))) resultingProjects.push(project)
+  }
+  const collisionsR = projectCollisions(resultingProjects)
+  if (!collisionsR.success) {
+    const code = "code" in collisionsR && typeof collisionsR.code === "string" ? collisionsR.code : undefined
+    return code === undefined
+      ? createResultError(op, collisionsR.errorMessage)
+      : createResultErrorCode(op, collisionsR.errorMessage, code)
+  }
+  const caddyR = caddyConfigGenerate(resultingProjects)
+  if (!caddyR.success) return createResultError(op, `generated Caddy configuration is invalid: ${caddyR.errorMessage}`)
+  const caddySerializedR = caddyConfigSerialize(caddyR.data)
+  if (!caddySerializedR.success) return createResultError(op, caddySerializedR.errorMessage)
+  if (writesToCommit.length === 0 && removals.size === 0) {
+    return createResult({
+      action: "transaction",
+      changed: false,
+      revision: snapshotR.data.revision,
+      localCommit: { status: "unchanged", revision: snapshotR.data.revision },
+      push: { requested: false, status: "not-requested" },
+      written: [],
+      removed: [],
+    })
+  }
+
+  const branchR = await projectRepositoryRequireConfiguredBranch(store.git, op)
+  if (!branchR.success) return branchR
+  const currentRevisionR = await projectRepositoryRevision(store)
+  if (!currentRevisionR.success) return currentRevisionR
+  if (currentRevisionR.data !== options.expectedRevision) {
+    return createResultErrorCode(op, "revision changed during transaction", "projects.revision-conflict")
+  }
+  const cleanR = await projectRepositoryRequireClean(store, op)
+  if (!cleanR.success) return cleanR
+  const safeR = await projectRepositoryProjectsSafe(store)
+  if (!safeR.success) return safeR
+
+  const existingPaths = new Set<string>()
+  for (const write of writesToCommit) {
+    if (!existingByKey.has(projectRepositoryMigrationKey(write.project))) continue
+    existingPaths.add(write.path)
+  }
+  for (const { path } of removals.values()) existingPaths.add(path)
+  let stagingDirectory: string | undefined
+  let committed = false
+  const newlyCreatedPaths = writesToCommit
+    .filter(({ project }) => !existingByKey.has(projectRepositoryMigrationKey(project)))
+    .map(({ path }) => path)
+  try {
+    for (const path of existingPaths) {
+      const clearFlagsR = await projectRepositoryClearTrackedFlags(store, path)
+      if (!clearFlagsR.success) return clearFlagsR
+    }
+    stagingDirectory = await mkdtemp(join(store.git.dir, ".project-registry-transaction-"))
+    for (const write of writesToCommit) {
+      const stagedR = await projectRepositoryMigrationStageWrite(stagingDirectory, write.path, write.data)
+      if (!stagedR.success) return stagedR
+    }
+    for (const write of writesToCommit)
+      await rename(join(stagingDirectory, write.path), join(store.git.dir, write.path))
+    const removalPaths = [...removals.values()].map(({ path }) => path)
+    if (removalPaths.length > 0) {
+      const removeR = await gitStoreRun(store.git, ["rm", "-f", "--", ...removalPaths])
+      if (!removeR.success) return removeR
+    }
+    if (writesToCommit.length > 0) {
+      const addR = await gitStoreRun(store.git, ["add", "--", ...writesToCommit.map(({ path }) => path)])
+      if (!addR.success) return addR
+    }
+    const commitR = await projectRepositoryCommitGit(store, `project-registry transaction actor=${actorR.data}`)
+    if (!commitR.success) return commitR
+    committed = true
+    const revision = commitR.data
+    const result: ProjectRepositoryTransaction = {
+      action: "transaction",
+      changed: true,
+      revision,
+      localCommit: { status: "committed", revision },
+      push: { requested: false, status: "not-requested" },
+      written: writesToCommit.map(({ project }) => ({ owner: project.owner, name: project.name })),
+      removed: [...removals.values()].map(({ key }) => key),
+    }
+    if (!store.autoPush) return createResult(result)
+    const pushR = await projectRepositoryPush(store, revision, op)
+    if (!pushR.success)
+      return createResult({ ...result, push: { requested: true, status: "failed", errorMessage: pushR.errorMessage } })
+    return createResult({ ...result, push: { requested: true, status: "pushed" } })
+  } catch (error) {
+    return createResultError(op, errorMessage(error))
+  } finally {
+    if (!committed) await projectRepositoryMigrationRollback(store, newlyCreatedPaths)
+    if (stagingDirectory !== undefined) await rm(stagingDirectory, { force: true, recursive: true })
+  }
 }
 
 function projectRepositoryQueue<T>(
@@ -1660,6 +1826,10 @@ export async function projectRepositoryOpen(options: unknown): PromiseResult<Pro
     delete: (key, mutationOptions) =>
       projectRepositoryQueue(store, "projectRepositoryDelete", () =>
         projectRepositoryDelete(store, key, mutationOptions),
+      ),
+    transact: (transactionOptions) =>
+      projectRepositoryQueue(store, "projectRepositoryTransact", () =>
+        projectRepositoryTransact(store, transactionOptions),
       ),
     migrate: (migrationOptions) =>
       projectRepositoryQueue(store, "projectRepositoryMigration", () =>

@@ -151,6 +151,9 @@ function projectInputNormalize(input: unknown, options: ProjectNormalizeOptions)
     labels: record.labels,
   }
 
+  const displayName = stringValue(record.displayName)
+  if (displayName !== undefined) normalized.displayName = displayName
+
   const description = stringValue(record.description)
   if (description !== undefined) normalized.description = description
 

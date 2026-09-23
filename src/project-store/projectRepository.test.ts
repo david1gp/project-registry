@@ -1,8 +1,19 @@
 import { afterEach, describe, expect, test } from "bun:test"
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs"
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs"
 import { join } from "node:path"
 import { gitStoreOpen, gitStoreRun, gitStoreWrite } from "#git-store"
+import { createResult } from "#result"
 import type { Project } from "../project/Project.js"
+import { projectOrganize } from "../project/projectOrganize.js"
 import type { ProjectRepositoryMutationOptions } from "./ProjectRepositoryMutationOptions.js"
 import { projectRepositoryOpen } from "./projectRepositoryOpen.js"
 
@@ -129,6 +140,209 @@ describe("projectRepositoryOpen", () => {
       services: [{ id: "default", caddy: { port: 3000 } }],
     })
     expect(JSON.parse(readFileSync(join(directory, "projects/alice/legacy.json"), "utf8")).caddy).toBeUndefined()
+  })
+
+  test("commits multi-project writes and removals once and preserves canonical display fields", async () => {
+    const openR = await projectRepositoryOpen({ dir: temporaryRepository() })
+    expect(openR.success).toBe(true)
+    if (!openR.success) return
+    const target = {
+      schemaVersion: 2 as const,
+      owner: "alice",
+      name: "target",
+      displayName: "Combined",
+      order: 2,
+      services: [{ id: "api", displayName: "API", order: 0, units: ["api.service"], caddy: null }],
+    }
+    const source = {
+      schemaVersion: 2 as const,
+      owner: "alice",
+      name: "source",
+      services: [{ id: "worker", units: ["worker.service"], caddy: null }],
+    }
+    const created = await openR.data.create(target, { actor: "alice", expectedRevision: "" })
+    expect(created.success).toBe(true)
+    if (!created.success) return
+    const sourceCreated = await openR.data.create(source, { actor: "alice", expectedRevision: created.data.revision })
+    expect(sourceCreated.success).toBe(true)
+    if (!sourceCreated.success) return
+    const merged = {
+      ...target,
+      services: [
+        ...target.services,
+        { id: "source-worker", displayName: "Worker", order: 1, units: ["worker.service"], caddy: null },
+      ],
+    }
+    const transaction = await openR.data.transact({
+      actor: "alice",
+      expectedRevision: sourceCreated.data.revision,
+      writes: [merged],
+      removals: [{ owner: "alice", name: "source" }],
+    })
+    expect(transaction).toMatchObject({
+      success: true,
+      data: { action: "transaction", changed: true, removed: [{ owner: "alice", name: "source" }] },
+    })
+    if (!transaction.success) return
+    const persisted = await openR.data.get({ owner: "alice", name: "target" })
+    expect(persisted).toMatchObject({
+      success: true,
+      data: {
+        project: {
+          displayName: "Combined",
+          services: [
+            { id: "api", displayName: "API", order: 0 },
+            { id: "source-worker", displayName: "Worker", order: 1 },
+          ],
+        },
+      },
+    })
+    const stale = await openR.data.transact({
+      actor: "alice",
+      expectedRevision: sourceCreated.data.revision,
+      writes: [{ ...merged, displayName: "Stale" }],
+      removals: [],
+    })
+    expect(stale.success).toBe(false)
+    const unchanged = await openR.data.get({ owner: "alice", name: "target" })
+    expect(unchanged).toMatchObject({
+      success: true,
+      data: { project: { displayName: "Combined" }, revision: transaction.data.revision },
+    })
+  })
+
+  test("merges then splits to a new project while retaining service configuration", async () => {
+    const openR = await projectRepositoryOpen({ dir: temporaryRepository() })
+    expect(openR.success).toBe(true)
+    if (!openR.success) return
+    const repository = openR.data
+    const access = {
+      actorResolve: async () => createResult({ subject: "alice-subject", username: "alice", role: "own" as const }),
+      ownerRoleResolve: async () => createResult("own" as const),
+    }
+    const target = canonicalProject("target", 3100)
+    const source = canonicalProject("source", 3200)
+    const targetCreatedR = await repository.create(target, { actor: "alice", expectedRevision: "" })
+    expect(targetCreatedR.success).toBe(true)
+    if (!targetCreatedR.success) return
+    const sourceCreatedR = await repository.create(source, {
+      actor: "alice",
+      expectedRevision: targetCreatedR.data.revision,
+    })
+    expect(sourceCreatedR.success).toBe(true)
+    if (!sourceCreatedR.success) return
+
+    const mergedR = await projectOrganize(
+      { repository, access },
+      {
+        action: "merge",
+        target: { owner: "alice", name: "target" },
+        sources: [{ owner: "alice", name: "source" }],
+        entries: [
+          { project: { owner: "alice", name: "target" }, serviceId: "api", order: 0 },
+          { project: { owner: "alice", name: "target" }, serviceId: "worker", order: 1 },
+          { project: { owner: "alice", name: "source" }, serviceId: "api", order: 2 },
+          { project: { owner: "alice", name: "source" }, serviceId: "worker", order: 3 },
+        ],
+      },
+      { expectedRevision: sourceCreatedR.data.revision },
+    )
+    expect(mergedR.success).toBe(true)
+    if (!mergedR.success) return
+
+    const splitR = await projectOrganize(
+      { repository, access },
+      {
+        action: "split",
+        source: { owner: "alice", name: "target" },
+        serviceId: "source-api",
+        target: { owner: "alice", name: "split-worker-task5-unique-20260923-c2e6" },
+      },
+      { expectedRevision: mergedR.data.revision },
+    )
+    expect(splitR.success).toBe(true)
+    if (!splitR.success) return
+    expect(splitR.data.written).toContainEqual({ owner: "alice", name: "split-worker-task5-unique-20260923-c2e6" })
+
+    const splitProjectR = await repository.get({ owner: "alice", name: "split-worker-task5-unique-20260923-c2e6" })
+    expect(splitProjectR).toMatchObject({
+      success: true,
+      data: { project: { services: [{ id: "source-api", units: ["api.service"], caddy: { port: 3200 } }] } },
+    })
+    const retainedTargetR = await repository.get({ owner: "alice", name: "target" })
+    expect(retainedTargetR.success).toBe(true)
+    if (!retainedTargetR.success) return
+    expect(
+      retainedTargetR.data.project.services.map((service) => (typeof service === "string" ? service : service.id)),
+    ).toEqual(["api", "worker", "source-worker"])
+    expect(retainedTargetR.data.project.services[0]).toMatchObject({
+      id: "api",
+      units: ["api.service"],
+      caddy: { port: 3100 },
+    })
+  })
+
+  test("preserves resource-conflict codes from validated transactions", async () => {
+    const openR = await projectRepositoryOpen({ dir: temporaryRepository() })
+    expect(openR.success).toBe(true)
+    if (!openR.success) return
+    const firstR = await openR.data.create(project("first", 3000), { actor: "alice", expectedRevision: "" })
+    expect(firstR.success).toBe(true)
+    if (!firstR.success) return
+    const secondR = await openR.data.create(project("second", 3001), {
+      actor: "alice",
+      expectedRevision: firstR.data.revision,
+    })
+    expect(secondR.success).toBe(true)
+    if (!secondR.success) return
+
+    const conflicting = project("second", 3001)
+    if (conflicting.caddy) conflicting.caddy.domains = ["first.example"]
+    const transactionR = await openR.data.transact({
+      actor: "alice",
+      expectedRevision: secondR.data.revision,
+      writes: [conflicting],
+      removals: [],
+    })
+
+    expect(transactionR).toMatchObject({ success: false, code: "projects.conflict" })
+    const snapshotR = await openR.data.read()
+    expect(snapshotR).toMatchObject({ success: true, data: { revision: secondR.data.revision } })
+  })
+
+  test("removes newly created project files when staging fails", async () => {
+    const directory = temporaryRepository()
+    const openR = await projectRepositoryOpen({ dir: directory })
+    expect(openR.success).toBe(true)
+    if (!openR.success) return
+    const initialR = await openR.data.read()
+    expect(initialR.success).toBe(true)
+    if (!initialR.success) return
+
+    const binDirectory = join(temporaryRepository(), "bin")
+    mkdirSync(binDirectory)
+    const gitWrapper = join(binDirectory, "git")
+    writeFileSync(gitWrapper, '#!/bin/sh\nif [ "$1" = "add" ]; then exit 73; fi\nexec /usr/bin/git "$@"\n')
+    chmodSync(gitWrapper, 0o755)
+    const originalPath = process.env.PATH
+    process.env.PATH = `${binDirectory}:${originalPath ?? ""}`
+    let transaction
+    try {
+      transaction = await openR.data.transact({
+        actor: "alice",
+        expectedRevision: initialR.data.revision,
+        writes: [project("new-project", 3020)],
+        removals: [],
+      })
+    } finally {
+      if (originalPath === undefined) delete process.env.PATH
+      else process.env.PATH = originalPath
+    }
+
+    expect(transaction?.success).toBe(false)
+    expect(existsSync(join(directory, "projects/alice/new-project.json"))).toBe(false)
+    const afterR = await openR.data.read()
+    expect(afterR).toMatchObject({ success: true, data: { projects: [], revision: initialR.data.revision } })
   })
 
   test("round-trips canonical multi-service projects without losing metadata", async () => {

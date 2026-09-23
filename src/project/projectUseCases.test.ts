@@ -6,6 +6,7 @@ import type { ProjectAccess } from "../access/ProjectAccess.js"
 import type { Role } from "../access/Role.js"
 import type { ProjectRepository } from "../project-store/ProjectRepository.js"
 import type { ProjectRepositoryMutation } from "../project-store/ProjectRepositoryMutation.js"
+import type { ProjectRepositoryTransaction } from "../project-store/ProjectRepositoryTransaction.js"
 import type { Project } from "./Project.js"
 import type { ProjectMutationOptions } from "./ProjectMutationOptions.js"
 import type { ProjectUseCaseOptions } from "./ProjectUseCaseOptions.js"
@@ -17,6 +18,7 @@ import { projectHistory } from "./projectHistory.js"
 import type { ProjectKey } from "./projectKey.js"
 import { projectListUseCase } from "./projectListUseCase.js"
 import { projectMigrate } from "./projectMigrate.js"
+import { projectOrganize } from "./projectOrganize.js"
 
 const currentRevision = "a".repeat(40)
 const staleRevision = "b".repeat(40)
@@ -27,6 +29,7 @@ type RepositoryFake = ProjectRepository & {
     create: { project: unknown; options: ProjectMutationOptions & { actor: string } }[]
     edit: { key: ProjectKey; project: unknown; options: ProjectMutationOptions & { actor: string } }[]
     delete: { key: ProjectKey; options: ProjectMutationOptions & { actor: string } }[]
+    transact: { options: { actor: string; expectedRevision: string; writes: unknown[]; removals: ProjectKey[] } }[]
     history: { key: ProjectKey | undefined; limit: number | undefined }[]
     ownerHistory: { owner: string; limit: number | undefined }[]
   }
@@ -35,6 +38,7 @@ type RepositoryFake = ProjectRepository & {
   readResult?: Result<{ projects: Project[]; revision: string }>
   getResult?: Result<{ project: Project; revision: string }>
   mutationResult?: Result<ProjectRepositoryMutation>
+  transactionResult?: Result<ProjectRepositoryTransaction>
   historyResult?: Result<GitStoreCommitInfo[]>
 }
 
@@ -81,7 +85,7 @@ function repositoryCreate(initialProjects: Project[] = []): RepositoryFake {
   const repository = {} as RepositoryFake
   repository.projects = [...initialProjects]
   repository.revision = currentRevision
-  repository.calls = { create: [], edit: [], delete: [], history: [], ownerHistory: [] }
+  repository.calls = { create: [], edit: [], delete: [], transact: [], history: [], ownerHistory: [] }
   repository.read = async () => {
     if (repository.readResult !== undefined) return repository.readResult
     return createResult({ projects: repository.projects, revision: repository.revision })
@@ -115,6 +119,23 @@ function repositoryCreate(initialProjects: Project[] = []): RepositoryFake {
     if (index < 0) return createResultError("fakeDelete", "project not found")
     repository.projects.splice(index, 1)
     return createResult(mutation("delete", key))
+  }
+  repository.transact = async (options) => {
+    repository.calls.transact.push({ options })
+    if (repository.transactionResult !== undefined) return repository.transactionResult
+    const removals = new Set(options.removals.map((key) => `${key.owner}/${key.name}`))
+    repository.projects = repository.projects.filter((item) => !removals.has(`${item.owner}/${item.name}`))
+    repository.projects.push(...(options.writes as Project[]))
+    return createResult({
+      action: "transaction",
+      key: { owner: "alice", name: "transaction" },
+      changed: true,
+      revision: nextRevision,
+      localCommit: { status: "committed", revision: nextRevision },
+      push: { requested: false, status: "not-requested" },
+      written: [],
+      removed: [],
+    })
   }
   repository.setUserDefaultDomain = async () => createResultError("fakeUserDefaultDomainSet", "not implemented")
   repository.history = async (key, limit) => {
@@ -717,6 +738,216 @@ describe("project use cases", () => {
     repository.getResult = failure
     const failed = await projectGetUseCase(useCaseOptions(repository, access), { owner: "alice", name: "catalog" })
     expect(failed).toEqual(failure)
+  })
+
+  test("merges named and ordered service entries atomically while preserving target configuration", async () => {
+    const projects = [
+      projectMigrate({
+        schemaVersion: 2,
+        owner: "alice",
+        name: "target",
+        displayName: "Before",
+        labels: { section: "Interne" },
+        github: "https://github.com/target",
+        services: [{ id: "web", units: ["web.service"], caddy: { port: 3000, domains: ["target.example"] } }],
+      }),
+      projectMigrate({
+        schemaVersion: 2,
+        owner: "alice",
+        name: "source",
+        description: "source-only",
+        previewUrl: "https://preview.example",
+        github: "https://github.com/source",
+        labels: { section: "Source", group: "source-group" },
+        services: [
+          { id: "web", displayName: "Old", units: ["api.service"], caddy: { port: 3001, domains: ["source.example"] } },
+        ],
+      }),
+    ]
+    if (!projects[0]?.success || !projects[1]?.success) return
+    const target = projects[0].data
+    const source = projects[1].data
+    const repository = repositoryCreate([target, source])
+    const original = [...repository.projects]
+    const access = accessCreate({ subject: "alice-subject", username: "alice", role: "own" }, { alice: "own" })
+    repository.transactionResult = createResultError("fakeTransaction", "commit failed")
+    const failed = await projectOrganize(
+      useCaseOptions(repository, access),
+      {
+        action: "merge",
+        target: { owner: "alice", name: "target" },
+        sources: [{ owner: "alice", name: "source" }],
+        targetDisplayName: "Combined",
+        entries: [
+          { project: { owner: "alice", name: "source" }, serviceId: "web", displayName: "API", order: 0 },
+          { project: { owner: "alice", name: "target" }, serviceId: "web", displayName: "Website", order: 1 },
+        ],
+      },
+      { expectedRevision: currentRevision },
+    )
+    expect(failed.success).toBe(false)
+    expect(repository.projects).toEqual(original)
+    expect(repository.calls.transact).toHaveLength(1)
+
+    repository.transactionResult = undefined
+    const merged = await projectOrganize(
+      useCaseOptions(repository, access),
+      {
+        action: "merge",
+        target: { owner: "alice", name: "target" },
+        sources: [{ owner: "alice", name: "source" }],
+        targetDisplayName: "Combined",
+        entries: [
+          { project: { owner: "alice", name: "source" }, serviceId: "web", displayName: "API", order: 0 },
+          { project: { owner: "alice", name: "target" }, serviceId: "web", displayName: "Website", order: 1 },
+        ],
+      },
+      { expectedRevision: currentRevision },
+    )
+    expect(merged.success).toBe(true)
+    const request = repository.calls.transact[1]?.options
+    expect(request?.removals).toEqual([{ owner: "alice", name: "source" }])
+    expect(request?.writes[0]).toMatchObject({
+      displayName: "Combined",
+      description: "source-only",
+      previewUrl: "https://preview.example",
+      labels: { section: "Interne", group: "source-group" },
+      github: "https://github.com/target",
+      services: [
+        { id: "source-web", displayName: "API", order: 0, units: ["api.service"], caddy: { port: 3001 } },
+        { id: "web", displayName: "Website", order: 1, units: ["web.service"], caddy: { port: 3000 } },
+      ],
+    })
+  })
+
+  test("applies complete display edits across projects atomically and rejects partial service lists", async () => {
+    const firstR = projectMigrate({
+      schemaVersion: 2,
+      owner: "alice",
+      name: "first",
+      displayName: "First",
+      services: [
+        { id: "web", units: ["web.service"] },
+        { id: "api", units: ["api.service"] },
+      ],
+    })
+    const secondR = projectMigrate({
+      schemaVersion: 2,
+      owner: "alice",
+      name: "second",
+      services: [{ id: "db", units: ["db.service"] }],
+    })
+    if (!firstR.success || !secondR.success) return
+    const repository = repositoryCreate([firstR.data, secondR.data])
+    const access = accessCreate({ subject: "alice-subject", username: "alice", role: "own" }, { alice: "own" })
+    const partial = await projectOrganize(
+      useCaseOptions(repository, access),
+      {
+        action: "displayEdit",
+        projects: [
+          { key: { owner: "alice", name: "first" }, displayName: "Renamed", services: [{ id: "web", order: 0 }] },
+        ],
+      },
+      { expectedRevision: currentRevision },
+    )
+    expect(partial).toMatchObject({ success: false, code: "request.invalid" })
+    expect(repository.calls.transact).toHaveLength(0)
+
+    const edited = await projectOrganize(
+      useCaseOptions(repository, access),
+      {
+        action: "displayEdit",
+        projects: [
+          {
+            key: { owner: "alice", name: "first" },
+            displayName: "Renamed",
+            services: [
+              { id: "api", displayName: "API", order: 1 },
+              { id: "web", displayName: "Web", order: 0 },
+            ],
+          },
+          { key: { owner: "alice", name: "second" }, services: [{ id: "db", order: 2 }] },
+        ],
+      },
+      { expectedRevision: currentRevision },
+    )
+    expect(edited.success).toBe(true)
+    expect(repository.calls.transact).toHaveLength(1)
+    expect(repository.calls.transact[0]?.options.writes).toMatchObject([
+      {
+        name: "first",
+        displayName: "Renamed",
+        services: [
+          { id: "api", displayName: "API", order: 1 },
+          { id: "web", displayName: "Web", order: 0 },
+        ],
+      },
+      { name: "second", services: [{ id: "db", order: 2 }] },
+    ])
+  })
+
+  test("rejects split conflicts without persistence and renames normalized and fallback sections", async () => {
+    const sourceR = projectMigrate({
+      schemaVersion: 2,
+      owner: "alice",
+      name: "source",
+      labels: { section: " Interne " },
+      services: [{ id: "api", units: ["api.service"] }],
+    })
+    const sectionR = projectMigrate({
+      schemaVersion: 2,
+      owner: "alice",
+      name: "section",
+      labels: { section: "interne" },
+    })
+    const fallbackR = projectMigrate({ schemaVersion: 2, owner: "alice", name: "fallback", labels: { section: " " } })
+    const conflictR = projectMigrate({ schemaVersion: 2, owner: "alice", name: "taken" })
+    if (!sourceR.success || !sectionR.success || !fallbackR.success || !conflictR.success) return
+    const repository = repositoryCreate([sourceR.data, sectionR.data, fallbackR.data, conflictR.data])
+    const access = accessCreate({ subject: "alice-subject", username: "alice", role: "own" }, { alice: "own" })
+    const before = [...repository.projects]
+    const conflict = await projectOrganize(
+      useCaseOptions(repository, access),
+      {
+        action: "split",
+        source: { owner: "alice", name: "source" },
+        serviceId: "api",
+        target: { owner: "alice", name: "taken" },
+      },
+      { expectedRevision: currentRevision },
+    )
+    expect(conflict.success).toBe(false)
+    expect(repository.calls.transact).toHaveLength(0)
+    expect(repository.projects).toEqual(before)
+
+    const renamed = await projectOrganize(
+      useCaseOptions(repository, access),
+      {
+        action: "sectionRename",
+        section: " INTERNE ",
+        displayName: "Team",
+      },
+      { expectedRevision: currentRevision },
+    )
+    expect(renamed.success).toBe(true)
+    expect(repository.calls.transact[0]?.options.writes.map((value) => (value as Project).name)).toEqual([
+      "source",
+      "section",
+    ])
+    const fallback = await projectOrganize(
+      useCaseOptions(repository, access),
+      {
+        action: "sectionRename",
+        section: "",
+        displayName: "Misc",
+      },
+      { expectedRevision: currentRevision },
+    )
+    expect(fallback.success).toBe(true)
+    expect(repository.calls.transact[1]?.options.writes.map((value) => (value as Project).name)).toEqual([
+      "fallback",
+      "taken",
+    ])
   })
 
   test("preserves the exact commit and push result for create, edit, and delete", async () => {

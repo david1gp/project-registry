@@ -11,6 +11,8 @@ const projectServiceIdSchema = a.pipe(a.string(), a.regex(/^[a-z0-9][a-z0-9-]*$/
 
 export const projectServiceSchema = a.strictObject({
   id: projectServiceIdSchema,
+  displayName: a.optional(a.pipe(a.string(), a.regex(/\S/))),
+  order: a.optional(a.pipe(a.number(), a.finite())),
   units: a.optional(projectServiceUnitsSchema, []),
   caddy: a.optional(a.nullable(projectCaddySchema), null),
   ownership: a.optional(projectServiceOwnershipSchema, "registry"),
