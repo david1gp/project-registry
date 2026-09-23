@@ -20,6 +20,8 @@ import { projectGetUseCase } from "../project/projectGetUseCase.js"
 import { projectHistory } from "../project/projectHistory.js"
 import { projectListUseCase } from "../project/projectListUseCase.js"
 import { projectOwnerAuthorize } from "../project/projectOwnerAuthorize.js"
+import type { ProjectOrganizationRequest } from "../project/ProjectOrganizationRequest.js"
+import { projectOrganize } from "../project/projectOrganize.js"
 import type { ProjectPortRange } from "../project/projectPortNext.js"
 import type { ProjectRepository } from "../project-store/ProjectRepository.js"
 import type { ProjectRepositoryMutation } from "../project-store/ProjectRepositoryMutation.js"
@@ -45,6 +47,7 @@ type ApiHandlerOptions = {
 
 type ApiRoute =
   | { kind: "projects"; legacy: boolean; owner?: string }
+  | { kind: "organization"; legacy: false; owner: string }
   | { kind: "docs"; legacy: boolean; owner?: string; name: string }
   | { kind: "project"; legacy: boolean; owner?: string; name: string }
   | { kind: "project-by-port"; legacy: true; port: number }
@@ -90,6 +93,7 @@ const apiFailureStatus: Record<string, number> = {
   "projects.disabled": 409,
   "projects.forbidden": 403,
   "projects.not-found": 404,
+  "projects.revision-conflict": 409,
   "request.invalid": 400,
 }
 
@@ -168,6 +172,13 @@ function routeParse(path: string): ApiRoute | undefined {
     const owner = segmentDecode(versionedDefaultDomain[1]!, ownerPattern)
     if (owner === undefined) return undefined
     return { kind: "default-domain", legacy: false, owner }
+  }
+
+  const versionedOrganization = path.match(/^\/api\/v1\/users\/([^/]+)\/projects\/organization$/)
+  if (versionedOrganization !== null) {
+    const owner = segmentDecode(versionedOrganization[1]!, ownerPattern)
+    if (owner === undefined) return undefined
+    return { kind: "organization", legacy: false, owner }
   }
 
   const versionedCloudflareToken = path.match(/^\/api\/v1\/users\/([^/]+)\/cloudflare-token$/)
@@ -274,6 +285,7 @@ async function socketAccessBind(
 function routeRequiresProjectAccess(route: ApiRoute): boolean {
   return (
     route.kind === "projects" ||
+    route.kind === "organization" ||
     route.kind === "docs" ||
     route.kind === "project" ||
     route.kind === "project-by-port" ||
@@ -389,6 +401,7 @@ function accessLogErrorResponse(result: ResultFailure): Response {
 
 function routeMethods(route: ApiRoute): readonly string[] {
   if (route.kind === "projects") return route.legacy ? ["GET"] : ["GET", "POST"]
+  if (route.kind === "organization") return ["POST"]
   if (route.kind === "docs") return ["GET"]
   if (route.kind === "project") return route.legacy ? ["GET", "PUT", "PATCH", "DELETE"] : ["GET", "PATCH", "DELETE"]
   if (route.kind === "project-by-port") return ["DELETE"]
@@ -578,6 +591,32 @@ function projectTypeInputReject(input: unknown): Result<void> {
 
 function expectedRevision(input: unknown): ProjectMutationOptions {
   return { expectedRevision: recordValue(input)?.expectedRevision as string }
+}
+
+function organizationOwnersMatch(request: unknown, owner: string): boolean {
+  const input = recordValue(request)
+  if (input === undefined) return false
+  const keys =
+    input.action === "merge"
+      ? [
+          input.target,
+          ...(Array.isArray(input.sources) ? input.sources : []),
+          ...(Array.isArray(input.entries) ? input.entries.map((entry) => recordValue(entry)?.project) : []),
+        ]
+      : input.action === "split"
+        ? [input.source, input.target]
+        : input.action === "displayEdit"
+          ? Array.isArray(input.projects)
+            ? input.projects.map((project) => recordValue(project)?.key)
+            : undefined
+          : input.action === "sectionRename"
+            ? []
+            : undefined
+  if (keys === undefined) return false
+  return keys.every((value) => {
+    const key = recordValue(value)
+    return key !== undefined && key.owner === owner
+  })
 }
 
 function projectCreateNoDnsParse(input: Record<string, unknown> | undefined): Result<boolean> {
@@ -811,6 +850,40 @@ export function projectRegistryApiHandlerCreate(options: ApiHandlerOptions): Pro
       access: resolvedAccess,
       portRange: options.portRange,
       defaultUserDomains: options.defaultUserDomains,
+    }
+
+    if (route.kind === "organization") {
+      const body = await requestBodyJson(request, false)
+      if (body instanceof Response) return body
+      const bodyRecord = recordValue(body)
+      const operation = bodyRecord?.operation
+      if (
+        bodyRecord === undefined ||
+        typeof bodyRecord.expectedRevision !== "string" ||
+        !organizationOwnersMatch(operation, owner)
+      ) {
+        return errorResponse(
+          {
+            code: "request.invalid",
+            message: "A valid owner-scoped organization operation and expectedRevision are required.",
+            op: "projectRegistryApiOrganize",
+            status: 400,
+          },
+          false,
+        )
+      }
+      const mutationR = await projectOrganize(
+        useCaseOptions,
+        operation as ProjectOrganizationRequest,
+        expectedRevision(body),
+        owner,
+      )
+      if (!mutationR.success) return resultErrorResponse(mutationR, false, "projects")
+      if (mutationR.data.changed) {
+        const applicationR = await options.caddyApplication.projectChange()
+        if (!applicationR.success) return resultErrorResponse(applicationR, false, "caddy")
+      }
+      return successResponse(mutationR.data)
     }
 
     if (route.kind === "cloudflare-token") {

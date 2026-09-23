@@ -19,6 +19,7 @@ import type { ProjectKey } from "../project/projectKey.js"
 import { projectMigrate } from "../project/projectMigrate.js"
 import type { ProjectRepository } from "../project-store/ProjectRepository.js"
 import type { ProjectRepositoryMutation } from "../project-store/ProjectRepositoryMutation.js"
+import type { ProjectRepositoryTransactionOptions } from "../project-store/ProjectRepositoryTransactionOptions.js"
 import { projectRepositoryOpen } from "../project-store/projectRepositoryOpen.js"
 import type { ProjectRegistryDaemonRequestContext } from "../runtime/ProjectRegistryDaemonRequestContext.js"
 import type { UserDefaultDomainMutation } from "../user-default-domain/UserDefaultDomainMutation.js"
@@ -40,6 +41,7 @@ type RepositoryFake = ProjectRepository & {
   }[]
   reads: number
   projects: Project[]
+  transactions: ProjectRepositoryTransactionOptions[]
   revision: string
   ownerHistoryResult?: Result<GitStoreCommitInfo[]>
 }
@@ -146,6 +148,7 @@ function repositoryCreate(): RepositoryFake {
     defaultDomainMutations: [],
     reads: 0,
     projects,
+    transactions: [],
     revision,
     read: async () => {
       repository.reads += 1
@@ -163,7 +166,7 @@ function repositoryCreate(): RepositoryFake {
     },
     create: async (project, options) => {
       if (options.expectedRevision !== repository.revision) {
-        return createResultErrorCode("projectRepositoryCreate", "revision mismatch", "projects.conflict")
+        return createResultErrorCode("projectRepositoryCreate", "revision mismatch", "projects.revision-conflict")
       }
       const value = project as Project
       if (repository.projects.some((item) => item.owner === value.owner && item.name === value.name)) {
@@ -175,7 +178,7 @@ function repositoryCreate(): RepositoryFake {
     },
     edit: async (key, project, options) => {
       if (options.expectedRevision !== repository.revision) {
-        return createResultErrorCode("projectRepositoryEdit", "revision mismatch", "projects.conflict")
+        return createResultErrorCode("projectRepositoryEdit", "revision mismatch", "projects.revision-conflict")
       }
       const index = repository.projects.findIndex((item) => item.owner === key.owner && item.name === key.name)
       if (index < 0) return createResultErrorCode("projectRepositoryEdit", "project not found", "projects.not-found")
@@ -194,7 +197,7 @@ function repositoryCreate(): RepositoryFake {
     },
     delete: async (key, options) => {
       if (options.expectedRevision !== repository.revision) {
-        return createResultErrorCode("projectRepositoryDelete", "revision mismatch", "projects.conflict")
+        return createResultErrorCode("projectRepositoryDelete", "revision mismatch", "projects.revision-conflict")
       }
       const index = repository.projects.findIndex((item) => item.owner === key.owner && item.name === key.name)
       if (index < 0) return createResultErrorCode("projectRepositoryDelete", "project not found", "projects.not-found")
@@ -202,11 +205,36 @@ function repositoryCreate(): RepositoryFake {
       repository.revision = nextRevision
       return createResult(mutation("delete", key, true, repository.revision))
     },
+    transact: async (options) => {
+      repository.transactions.push(options)
+      if (options.expectedRevision !== repository.revision) {
+        return createResultErrorCode("projectRepositoryTransaction", "revision mismatch", "projects.revision-conflict")
+      }
+      const writes = options.writes as Project[]
+      repository.projects = repository.projects
+        .filter((project) => !options.removals.some((key) => key.owner === project.owner && key.name === project.name))
+        .filter((project) => !writes.some((write) => write.owner === project.owner && write.name === project.name))
+        .concat(writes)
+      repository.revision = nextRevision
+      return createResult({
+        action: "transaction",
+        changed: true,
+        revision: nextRevision,
+        localCommit: { status: "committed", revision: nextRevision },
+        push: { requested: false, status: "not-requested" },
+        written: writes.map(({ owner, name }) => ({ owner, name })),
+        removed: options.removals,
+      })
+    },
     migrate: async () => createResultError("projectRepositoryMigration", "not implemented"),
     setUserDefaultDomain: async (owner, domain, options) => {
       repository.defaultDomainMutations.push({ owner, domain, options })
       if (options.expectedRevision !== repository.revision) {
-        return createResultErrorCode("projectRepositorySetUserDefaultDomain", "revision mismatch", "projects.conflict")
+        return createResultErrorCode(
+          "projectRepositorySetUserDefaultDomain",
+          "revision mismatch",
+          "projects.revision-conflict",
+        )
       }
       repository.defaultDomains[owner] = domain
       repository.revision = nextRevision
@@ -1173,7 +1201,7 @@ describe("projectRegistryApiHandlerCreate", () => {
       description: "stale",
     })
     expect(stale.response.status).toBe(409)
-    expect(stale.body).toMatchObject({ success: false, error: { code: "projects.conflict", status: 409 } })
+    expect(stale.body).toMatchObject({ success: false, error: { code: "projects.revision-conflict", status: 409 } })
 
     const duplicateDomain = await requestJson(handler, "/api/v1/users/leo/projects", leo, "POST", {
       expectedRevision: revision,
@@ -1982,5 +2010,251 @@ describe("projectRegistryApiHandlerCreate", () => {
       expect(denied.response.status).toBe(401)
     }
     expect(repository.reads).toBe(readsBefore)
+  })
+
+  test("requires authentication and rejects organization project owners outside the route owner", async () => {
+    const repository = repositoryCreate()
+    const handler = projectRegistryApiHandlerCreate({ repository, caddyApplication: caddyApplicationCreate() })
+    const body = {
+      expectedRevision: revision,
+      operation: {
+        action: "split",
+        source: { owner: "david", name: "david-app" },
+        serviceId: "default",
+        target: { owner: "david", name: "new-app" },
+      },
+    }
+    const unauthenticated = await requestJson(
+      handler,
+      "/api/v1/users/leo/projects/organization",
+      { transport: "http" },
+      "POST",
+      body,
+    )
+    expect(unauthenticated.response.status).toBe(401)
+
+    const mismatch = await requestJson(
+      handler,
+      "/api/v1/users/leo/projects/organization",
+      { transport: "unix", username: "leo" },
+      "POST",
+      body,
+    )
+    expect(mismatch.response.status).toBe(400)
+    expect(mismatch.body).toMatchObject({ success: false, error: { code: "request.invalid", status: 400 } })
+    expect(repository.transactions).toHaveLength(0)
+  })
+
+  test("returns a revision conflict and validates malformed organization operations", async () => {
+    const repository = repositoryCreate()
+    const handler = projectRegistryApiHandlerCreate({ repository, caddyApplication: caddyApplicationCreate() })
+    const context = { transport: "unix", username: "leo" } as const
+    const operation = { action: "sectionRename", section: "", displayName: "Engineering" }
+
+    const invalid = await requestJson(handler, "/api/v1/users/leo/projects/organization", context, "POST", {
+      expectedRevision: revision,
+      operation: { ...operation, displayName: " " },
+    })
+    expect(invalid.response.status).toBe(400)
+    expect(invalid.body).toMatchObject({ success: false, error: { code: "request.invalid" } })
+
+    const stale = await requestJson(handler, "/api/v1/users/leo/projects/organization", context, "POST", {
+      expectedRevision: "c".repeat(40),
+      operation,
+    })
+    expect(stale.response.status).toBe(409)
+    expect(stale.body).toMatchObject({ success: false, error: { code: "projects.revision-conflict", status: 409 } })
+    expect(repository.transactions).toHaveLength(1)
+    expect(repository.transactions[0]?.expectedRevision).toBe("c".repeat(40))
+  })
+
+  test("applies owner-scoped merge, split, and section rename through one transaction each", async () => {
+    const repository = repositoryCreate()
+    const source = { ...repository.projects[0]!, name: "second", labels: { section: "Tools" } }
+    repository.projects[0] = { ...repository.projects[0]!, labels: { section: "Tools" } }
+    repository.projects.push(source)
+    const application = caddyApplicationCreate()
+    const handler = projectRegistryApiHandlerCreate({ repository, caddyApplication: application })
+    const context = { transport: "unix", username: "leo" } as const
+    const target = repository.projects[0]!
+    const targetCanonical = projectMigrate(target)
+    const sourceCanonical = projectMigrate(source)
+    expect(targetCanonical.success && sourceCanonical.success).toBe(true)
+    if (!targetCanonical.success || !sourceCanonical.success) throw new Error("fixtures must migrate")
+    const entries = [
+      ...targetCanonical.data.services.map((service, order) => ({
+        project: { owner: "leo", name: "opencode" },
+        serviceId: service.id,
+        order,
+      })),
+      ...sourceCanonical.data.services.map((service, order) => ({
+        project: { owner: "leo", name: "second" },
+        serviceId: service.id,
+        order: order + targetCanonical.data.services.length,
+      })),
+    ]
+    const postOrganization = (operation: unknown) =>
+      requestJson(handler, "/api/v1/users/leo/projects/organization", context, "POST", {
+        expectedRevision: repository.revision,
+        operation,
+      })
+
+    const merged = await postOrganization({
+      action: "merge",
+      target: { owner: "leo", name: "opencode" },
+      sources: [{ owner: "leo", name: "second" }],
+      entries,
+    })
+    expect(merged.response.status).toBe(200)
+    expect(merged.body).toMatchObject({
+      success: true,
+      data: { action: "transaction", removed: [{ owner: "leo", name: "second" }] },
+    })
+    expect(repository.projects.some((project) => project.owner === "leo" && project.name === "second")).toBe(false)
+
+    const mergedProject = projectMigrate(repository.projects.find((project) => project.name === "opencode")!)
+    expect(mergedProject.success).toBe(true)
+    if (!mergedProject.success) throw new Error("merged fixture must migrate")
+    const split = await postOrganization({
+      action: "split",
+      source: { owner: "leo", name: "opencode" },
+      serviceId: mergedProject.data.services[0]!.id,
+      target: { owner: "leo", name: "split-out" },
+      targetDisplayName: "Split service",
+    })
+    expect(split.response.status).toBe(200)
+    expect(split.body).toMatchObject({
+      success: true,
+      data: {
+        action: "transaction",
+        written: [
+          { owner: "leo", name: "opencode" },
+          { owner: "leo", name: "split-out" },
+        ],
+      },
+    })
+
+    const renamed = await postOrganization({ action: "sectionRename", section: "tools", displayName: "Engineering" })
+    expect(renamed.response.status).toBe(200)
+    expect(renamed.body).toMatchObject({ success: true, data: { action: "transaction" } })
+    expect(repository.transactions).toHaveLength(3)
+    expect(application.projectChanges).toBe(3)
+    expect(
+      repository.transactions.every((transaction) =>
+        (transaction.writes as Project[]).every((project) => project.owner === "leo"),
+      ),
+    ).toBe(true)
+  })
+
+  test("applies owner-scoped complete multi-project display edits in one revisioned transaction", async () => {
+    const repository = repositoryCreate()
+    const second = { ...repository.projects[0]!, name: "second" }
+    repository.projects.push(second)
+    const handler = projectRegistryApiHandlerCreate({ repository, caddyApplication: caddyApplicationCreate() })
+    const context = { transport: "unix", username: "leo" } as const
+    const first = projectMigrate(repository.projects[0]!)
+    const other = projectMigrate(second)
+    expect(first.success && other.success).toBe(true)
+    if (!first.success || !other.success) throw new Error("fixtures must migrate")
+    const operation = {
+      action: "displayEdit",
+      projects: [
+        {
+          key: { owner: "leo", name: "opencode" },
+          displayName: "Tools",
+          services: first.data.services.map((service, order) => ({ id: service.id, displayName: "Web", order })),
+        },
+        {
+          key: { owner: "leo", name: "second" },
+          services: other.data.services.map((service, order) => ({ id: service.id, order })),
+        },
+      ],
+    }
+    const post = (nextOperation: unknown, expectedRevision = repository.revision) =>
+      requestJson(handler, "/api/v1/users/leo/projects/organization", context, "POST", {
+        expectedRevision,
+        operation: nextOperation,
+      })
+
+    const incomplete = await post({ ...operation, projects: [{ ...operation.projects[0], services: [] }] })
+    expect(incomplete.response.status).toBe(400)
+    expect(repository.transactions).toHaveLength(0)
+    const crossOwner = await post({
+      ...operation,
+      projects: [{ ...operation.projects[0], key: { owner: "david", name: "opencode" } }],
+    })
+    expect(crossOwner.response.status).toBe(400)
+    expect(repository.transactions).toHaveLength(0)
+    const stale = await post(operation, "c".repeat(40))
+    expect(stale.response.status).toBe(409)
+    expect(repository.transactions).toHaveLength(1)
+    expect(repository.transactions[0]?.expectedRevision).toBe("c".repeat(40))
+
+    const updated = await post(operation)
+    expect(updated.response.status).toBe(200)
+    expect(updated.body).toMatchObject({
+      success: true,
+      data: {
+        action: "transaction",
+        written: [
+          { owner: "leo", name: "opencode" },
+          { owner: "leo", name: "second" },
+        ],
+      },
+    })
+    expect(repository.transactions).toHaveLength(2)
+    expect(repository.transactions[1]?.expectedRevision).toBe(revision)
+    expect(repository.projects.find((project) => project.name === "opencode")).toMatchObject({ displayName: "Tools" })
+  })
+
+  test("accepts and returns project and service display names and service ordering through PATCH and reads", async () => {
+    const repository = repositoryCreate()
+    const original = projectMigrate(repository.projects[0]!)
+    expect(original.success).toBe(true)
+    if (!original.success) throw new Error("fixture must migrate")
+    const services = original.data.services.map((service, index) => ({ ...service, order: index }))
+    repository.projects[0] = { ...original.data, services }
+    const handler = projectRegistryApiHandlerCreate({ repository, caddyApplication: caddyApplicationCreate() })
+    const context = { transport: "unix", username: "leo" } as const
+    const patch = await requestJson(handler, "/api/v1/users/leo/projects/opencode", context, "PATCH", {
+      expectedRevision: revision,
+      displayName: "Developer Tools",
+      services: services.map((service, index) => ({
+        id: service.id,
+        displayName: `Service ${index + 1}`,
+        order: services.length - index,
+      })),
+    })
+    expect(patch.response.status).toBe(200)
+    const read = await requestJson(handler, "/api/v1/users/leo/projects/opencode", context)
+    expect(read.body).toMatchObject({
+      success: true,
+      data: {
+        project: {
+          displayName: "Developer Tools",
+          services: services.map((service, index) => ({
+            id: service.id,
+            displayName: `Service ${index + 1}`,
+            order: services.length - index,
+          })),
+        },
+      },
+    })
+    const listed = await requestJson(handler, "/api/v1/users/leo/projects", context)
+    expect(listed.body).toMatchObject({
+      success: true,
+      data: {
+        projects: [
+          {
+            displayName: "Developer Tools",
+            services: services.map((service, index) => ({
+              id: service.id,
+              displayName: `Service ${index + 1}`,
+              order: services.length - index,
+            })),
+          },
+        ],
+      },
+    })
   })
 })

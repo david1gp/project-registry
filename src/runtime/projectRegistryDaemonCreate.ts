@@ -1112,6 +1112,8 @@ export function projectRegistryDaemonCreate(options: ProjectRegistryDaemonOption
       gitQueueRun("projectRegistryRepositoryEdit", () => repository.edit(key, project, mutationOptions)),
     delete: (key, mutationOptions) =>
       gitQueueRun("projectRegistryRepositoryDelete", () => repository.delete(key, mutationOptions)),
+    transact: (transactionOptions) =>
+      gitQueueRun("projectRegistryRepositoryTransaction", () => repository.transact(transactionOptions)),
     migrate: (migrationOptions) =>
       gitQueueRun("projectRegistryRepositoryMigration", () => repository.migrate(migrationOptions)),
     setUserDefaultDomain: (owner, domain, mutationOptions) =>
