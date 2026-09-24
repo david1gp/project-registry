@@ -14,6 +14,8 @@ import type {
   ProjectAccessLogSource,
 } from "../access-log/ProjectAccessLogSource.js"
 import type { CaddyApplication } from "../caddy/CaddyApplication.js"
+import { caddyConfigGenerate } from "../caddy/caddyConfigGenerate.js"
+import { projectDocsPublicationStoreCreate } from "../docs/projectDocsPublicationStoreCreate.js"
 import type { Project } from "../project/Project.js"
 import type { ProjectKey } from "../project/projectKey.js"
 import { projectMigrate } from "../project/projectMigrate.js"
@@ -1465,6 +1467,168 @@ describe("projectRegistryApiHandlerCreate", () => {
       username: "david",
     })
     expect(crossOwner.response.status).toBe(403)
+  })
+
+  test("publishes through an automatically created owner-scoped managed docs project", async () => {
+    const repository = repositoryCreate()
+    repository.defaultDomains.leo = "example.test"
+    const storage = mkdtempSync(join(import.meta.dir, ".docs-publication-test-"))
+    temporaryDirectories.push(storage)
+    const store = projectDocsPublicationStoreCreate(join(storage, "published"))
+    const application = caddyApplicationCreate()
+    const dnsProjects: Project[] = []
+    const handler = projectRegistryApiHandlerCreate({
+      repository,
+      caddyApplication: application,
+      docsPublicationStore: store,
+      projectCreateAfterPersistence: (project) => dnsProjects.push(project),
+    })
+    const leo = { transport: "unix", username: "leo" } as const
+    const post = (sourcePath: string, markdown: string) =>
+      requestJson(handler, "/api/v1/users/leo/docs/publications", leo, "POST", {
+        sourcePath,
+        markdown,
+      })
+
+    const first = await post("/work/a.md", "# First")
+    expect(first.response.status).toBe(200)
+    expect(first.body).toMatchObject({
+      success: true,
+      data: {
+        project: "doc",
+        index: "index.md",
+        urls: [expect.stringContaining("doc.example.test/docs/")],
+      },
+    })
+    expect(application.projectChanges).toBe(1)
+    const managed = repository.projects.find((project) => project.owner === "leo" && project.name === "doc")
+    expect(managed?.labels).toEqual({
+      "project-registry.managed-docs": "true",
+    })
+    expect(dnsProjects).toHaveLength(1)
+    expect(managed?.services[0]).toMatchObject({
+      caddy: {
+        domains: ["doc.example.test"],
+        path: store.directory("leo"),
+        docsPath: store.directory("leo"),
+        staticAllow: ["/docs", "/docs/*"],
+      },
+    })
+    const config = caddyConfigGenerate(repository.projects)
+    expect(config.success).toBe(true)
+    if (config.success) {
+      const route = config.data.apps.http.servers.srv0.routes.find((item) =>
+        JSON.stringify(item).includes("doc.example.test"),
+      )
+      expect(JSON.stringify(route)).toContain(store.directory("leo"))
+      expect(JSON.stringify(route)).toContain("Only markdown and YAML files are accessible")
+    }
+
+    const second = await post("/work/a.md", "# Updated")
+    expect(second.response.status).toBe(200)
+    expect((second.body.data as { file: string }).file).toBe((first.body.data as { file: string }).file)
+    expect(application.projectChanges).toBe(2)
+    expect(await Bun.file(join(store.directory("leo"), "index.md")).text()).toContain("[/work/a.md]")
+
+    const crossOwner = await requestJson(
+      handler,
+      "/api/v1/users/leo/docs/publications",
+      { transport: "unix", username: "david" },
+      "POST",
+      { sourcePath: "/private.md", markdown: "# Nope" },
+    )
+    expect(crossOwner.response.status).toBe(403)
+  })
+
+  test("retries a failed Caddy apply on a persisted managed project before reporting publication success", async () => {
+    const repository = repositoryCreate()
+    repository.defaultDomains.leo = "example.test"
+    const storage = mkdtempSync(join(import.meta.dir, ".docs-publication-test-"))
+    temporaryDirectories.push(storage)
+    const store = projectDocsPublicationStoreCreate(join(storage, "published"))
+    const application = caddyApplicationCreate()
+    const originalApply = application.projectChange
+    application.projectChange = async () => {
+      if (application.projectChanges === 0) {
+        application.projectChanges += 1
+        return createResultError("caddyApplication", "Caddy unavailable")
+      }
+      return originalApply()
+    }
+    const handler = projectRegistryApiHandlerCreate({
+      repository,
+      caddyApplication: application,
+      docsPublicationStore: store,
+    })
+    const leo = { transport: "unix", username: "leo" } as const
+    const publish = () =>
+      requestJson(handler, "/api/v1/users/leo/docs/publications", leo, "POST", {
+        sourcePath: "/work/a.md",
+        markdown: "# Content",
+      })
+
+    expect((await publish()).response.status).toBe(500)
+    expect(repository.projects.filter((project) => project.owner === "leo" && project.name === "doc")).toHaveLength(1)
+    expect((await publish()).response.status).toBe(200)
+    expect(application.projectChanges).toBe(2)
+  })
+
+  test("publishes both documents when first-time creation requests race", async () => {
+    const repository = repositoryCreate()
+    repository.defaultDomains.leo = "example.test"
+    const storage = mkdtempSync(join(import.meta.dir, ".docs-publication-test-"))
+    temporaryDirectories.push(storage)
+    const store = projectDocsPublicationStoreCreate(join(storage, "published"))
+    const handler = projectRegistryApiHandlerCreate({
+      repository,
+      caddyApplication: caddyApplicationCreate(),
+      docsPublicationStore: store,
+    })
+    const leo = { transport: "unix", username: "leo" } as const
+    const responses = await Promise.all(
+      ["/work/a.md", "/work/b.md"].map((sourcePath) =>
+        requestJson(handler, "/api/v1/users/leo/docs/publications", leo, "POST", { sourcePath, markdown: "# Content" }),
+      ),
+    )
+
+    expect(responses.map(({ response }) => response.status)).toEqual([200, 200])
+    expect(repository.projects.filter((project) => project.owner === "leo" && project.name === "doc")).toHaveLength(1)
+    const index = await Bun.file(join(store.directory("leo"), "index.md")).text()
+    expect(index).toContain("[/work/a.md]")
+    expect(index).toContain("[/work/b.md]")
+  })
+
+  test("rejects a conflicting doc project and missing default domain without writing publications", async () => {
+    const repository = repositoryCreate()
+    const storage = mkdtempSync(join(import.meta.dir, ".docs-publication-test-"))
+    temporaryDirectories.push(storage)
+    const store = projectDocsPublicationStoreCreate(join(storage, "published"))
+    const handler = projectRegistryApiHandlerCreate({
+      repository,
+      caddyApplication: caddyApplicationCreate(),
+      docsPublicationStore: store,
+    })
+    const leo = { transport: "unix", username: "leo" } as const
+    const publish = (sourcePath: string) =>
+      requestJson(handler, "/api/v1/users/leo/docs/publications", leo, "POST", {
+        sourcePath,
+        markdown: "# Content",
+      })
+
+    expect((await publish("relative.md")).response.status).toBe(400)
+    expect((await publish("/work/../outside.md")).response.status).toBe(400)
+    const explicitRevision = await requestJson(handler, "/api/v1/users/leo/docs/publications", leo, "POST", {
+      sourcePath: "/work/a.md",
+      markdown: "# Content",
+      expectedRevision: revision,
+    })
+    expect(explicitRevision.response.status).toBe(400)
+    expect((await publish("/work/a.md")).body).toMatchObject({
+      error: { code: "documentation.default-domain-required", status: 409 },
+    })
+    repository.projects.push(docsProjectCreate("leo", "doc", ["doc.example.test"]))
+    expect((await publish("/work/a.md")).body).toMatchObject({ error: { code: "projects.conflict", status: 409 } })
+    expect(await Bun.file(join(store.directory("leo"), "index.md")).exists()).toBe(false)
   })
 
   test("returns distinct structured documentation failures and safe enablement hints", async () => {

@@ -1,3 +1,4 @@
+import { isAbsolute, resolve } from "node:path"
 import { createResult, createResultError, createResultErrorCode, type Result, type ResultErr } from "#result"
 import type { Actor } from "../access/Actor.js"
 import type { ProjectAccess } from "../access/ProjectAccess.js"
@@ -9,8 +10,10 @@ import type { CaddyApplicationResult } from "../caddy/CaddyApplicationResult.js"
 import { caddyConfigInspectUseCase } from "../caddy/caddyConfigInspectUseCase.js"
 import type { CaddyConfigOptions } from "../caddy/caddyConfigOptionsSchema.js"
 import { projectDocsUrlsUseCase } from "../caddy/projectDocsUrlsUseCase.js"
+import type { ProjectDocsPublicationStore } from "../docs/ProjectDocsPublicationStore.js"
 import type { Project } from "../project/Project.js"
 import type { ProjectMutationOptions } from "../project/ProjectMutationOptions.js"
+import type { ProjectOrganizationRequest } from "../project/ProjectOrganizationRequest.js"
 import { projectCanonicalToLegacy } from "../project/projectCanonicalToLegacy.js"
 import { projectCreate } from "../project/projectCreate.js"
 import { projectDelete } from "../project/projectDelete.js"
@@ -19,9 +22,8 @@ import { projectEdit } from "../project/projectEdit.js"
 import { projectGetUseCase } from "../project/projectGetUseCase.js"
 import { projectHistory } from "../project/projectHistory.js"
 import { projectListUseCase } from "../project/projectListUseCase.js"
-import { projectOwnerAuthorize } from "../project/projectOwnerAuthorize.js"
-import type { ProjectOrganizationRequest } from "../project/ProjectOrganizationRequest.js"
 import { projectOrganize } from "../project/projectOrganize.js"
+import { projectOwnerAuthorize } from "../project/projectOwnerAuthorize.js"
 import type { ProjectPortRange } from "../project/projectPortNext.js"
 import type { ProjectRepository } from "../project-store/ProjectRepository.js"
 import type { ProjectRepositoryMutation } from "../project-store/ProjectRepositoryMutation.js"
@@ -38,6 +40,7 @@ type ApiHandlerOptions = {
   portRange?: ProjectPortRange
   defaultUserDomains?: Readonly<Record<string, string>>
   projectAccessLogSource?: ProjectAccessLogSource
+  docsPublicationStore?: ProjectDocsPublicationStore
   cloudflareCredentials?: Pick<ProjectRegistryDaemonCloudflareCredentials, "tokenSet">
   socketAccessResolve?: ProjectRegistryDaemonSocketAccessResolve
   projectCreateAfterPersistence?: (project: Project, options: { noDns: boolean }) => void
@@ -49,6 +52,7 @@ type ApiRoute =
   | { kind: "projects"; legacy: boolean; owner?: string }
   | { kind: "organization"; legacy: false; owner: string }
   | { kind: "docs"; legacy: boolean; owner?: string; name: string }
+  | { kind: "docs-publication"; legacy: false; owner: string }
   | { kind: "project"; legacy: boolean; owner?: string; name: string }
   | { kind: "project-by-port"; legacy: true; port: number }
   | { kind: "access-logs"; legacy: false; owner: string; name: string }
@@ -174,6 +178,13 @@ function routeParse(path: string): ApiRoute | undefined {
     return { kind: "default-domain", legacy: false, owner }
   }
 
+  const docsPublication = path.match(/^\/api\/v1\/users\/([^/]+)\/docs\/publications$/)
+  if (docsPublication !== null) {
+    const owner = segmentDecode(docsPublication[1]!, ownerPattern)
+    if (owner === undefined) return undefined
+    return { kind: "docs-publication", legacy: false, owner }
+  }
+
   const versionedOrganization = path.match(/^\/api\/v1\/users\/([^/]+)\/projects\/organization$/)
   if (versionedOrganization !== null) {
     const owner = segmentDecode(versionedOrganization[1]!, ownerPattern)
@@ -287,6 +298,7 @@ function routeRequiresProjectAccess(route: ApiRoute): boolean {
     route.kind === "projects" ||
     route.kind === "organization" ||
     route.kind === "docs" ||
+    route.kind === "docs-publication" ||
     route.kind === "project" ||
     route.kind === "project-by-port" ||
     route.kind === "access-logs" ||
@@ -403,6 +415,7 @@ function routeMethods(route: ApiRoute): readonly string[] {
   if (route.kind === "projects") return route.legacy ? ["GET"] : ["GET", "POST"]
   if (route.kind === "organization") return ["POST"]
   if (route.kind === "docs") return ["GET"]
+  if (route.kind === "docs-publication") return ["POST"]
   if (route.kind === "project") return route.legacy ? ["GET", "PUT", "PATCH", "DELETE"] : ["GET", "PATCH", "DELETE"]
   if (route.kind === "project-by-port") return ["DELETE"]
   if (route.kind === "default-domain") return ["GET", "PUT", "DELETE"]
@@ -1056,6 +1069,180 @@ export function projectRegistryApiHandlerCreate(options: ApiHandlerOptions): Pro
         return legacyDocsErrorResponse(docsR, status)
       }
       return resultErrorResponse(docsR, false, "projects")
+    }
+
+    if (route.kind === "docs-publication") {
+      const body = await requestBodyJson(request, false, 1_100_000)
+      if (body instanceof Response) return body
+      const bodyRecord = recordValue(body)
+      const sourcePath = bodyRecord?.sourcePath
+      const markdown = bodyRecord?.markdown
+      if (
+        bodyRecord === undefined ||
+        typeof sourcePath !== "string" ||
+        !isAbsolute(sourcePath) ||
+        resolve(sourcePath) !== sourcePath ||
+        sourcePath.includes("\0") ||
+        typeof markdown !== "string" ||
+        Buffer.byteLength(markdown, "utf8") > 1_048_576 ||
+        Object.hasOwn(bodyRecord, "expectedRevision")
+      ) {
+        return errorResponse(
+          {
+            code: "request.invalid",
+            message:
+              "Provide an absolute normalized sourcePath and markdown no larger than 1 MiB; expectedRevision is not accepted.",
+            op: "projectDocsPublish",
+            status: 400,
+          },
+          false,
+        )
+      }
+      const store = options.docsPublicationStore
+      if (store === undefined) {
+        return errorResponse(
+          {
+            code: "documentation.storage-unavailable",
+            message: "Managed documentation storage is not configured.",
+            op: "projectDocsPublish",
+            status: 503,
+          },
+          false,
+        )
+      }
+      const actorR = await resolvedAccess.actorResolve()
+      if (!actorR.success) return resultErrorResponse(actorR, false, "projects")
+      const authorizationR = await projectOwnerAuthorize(resolvedAccess, actorR.data, owner)
+      if (!authorizationR.success) return resultErrorResponse(authorizationR, false, "projects")
+
+      const defaultDomainR = await options.repository.getUserDefaultDomain(owner)
+      if (!defaultDomainR.success) return resultErrorResponse(defaultDomainR, false, "projects")
+      const projectsR = await projectListUseCase(useCaseOptions, { owner })
+      if (!projectsR.success) return resultErrorResponse(projectsR, false, "projects")
+      const managedProject = projectsR.data.projects.find((project) => project.name === "doc")
+      const directory = store.directory(owner)
+      const managedProjectValid = (project: Project): boolean =>
+        project.labels?.["project-registry.managed-docs"] === "true" &&
+        project.services.some(
+          (service) =>
+            typeof service !== "string" &&
+            service.caddy?.docsPath === directory &&
+            service.caddy?.path === directory &&
+            service.caddy?.docs === true &&
+            service.caddy?.disabled !== true &&
+            service.caddy?.kind === "static" &&
+            service.caddy.staticAllow?.length === 2 &&
+            service.caddy.staticAllow.includes("/docs") &&
+            service.caddy.staticAllow.includes("/docs/*") &&
+            service.ownership !== "external",
+        )
+      if (managedProject !== undefined) {
+        if (!managedProjectValid(managedProject)) {
+          return errorResponse(
+            {
+              code: "projects.conflict",
+              message: "An unrelated project named doc already exists; it was not modified.",
+              op: "projectDocsPublish",
+              status: 409,
+            },
+            false,
+          )
+        }
+      } else {
+        if (typeof defaultDomainR.data.domain !== "string" || defaultDomainR.data.domain.trim() === "") {
+          return errorResponse(
+            {
+              code: "documentation.default-domain-required",
+              message: "Set an owner default domain before publishing fallback documentation.",
+              op: "projectDocsPublish",
+              status: 409,
+            },
+            false,
+          )
+        }
+        const mutationR = await projectCreate(
+          useCaseOptions,
+          {
+            owner,
+            name: "doc",
+            labels: { "project-registry.managed-docs": "true" },
+            caddy: {
+              domains: [`doc.${defaultDomainR.data.domain}`],
+              docs: true,
+              docsPath: directory,
+              path: directory,
+              staticAllow: ["/docs", "/docs/*"],
+              kind: "static",
+            },
+          },
+          { expectedRevision: projectsR.data.revision },
+          options.projectCreateAfterPersistence === undefined
+            ? undefined
+            : (project) => options.projectCreateAfterPersistence?.(project, { noDns: false }),
+        )
+        if (!mutationR.success) {
+          if (mutationR.code !== "projects.conflict" && mutationR.code !== "projects.revision-conflict")
+            return resultErrorResponse(mutationR, false, "projects")
+          const retryR = await projectListUseCase(useCaseOptions, { owner })
+          if (!retryR.success) return resultErrorResponse(retryR, false, "projects")
+          const existing = retryR.data.projects.find((project) => project.name === "doc")
+          if (existing === undefined) return resultErrorResponse(mutationR, false, "projects")
+          if (!managedProjectValid(existing)) {
+            return errorResponse(
+              {
+                code: "projects.conflict",
+                message: "An unrelated project named doc already exists; it was not modified.",
+                op: "projectDocsPublish",
+                status: 409,
+              },
+              false,
+            )
+          }
+        }
+      }
+
+      // Also retry an earlier failed apply on an already-persisted managed project.
+      // The Caddy application skips unchanged configurations without reloading.
+      const applicationR = await options.caddyApplication.projectChange()
+      if (!applicationR.success) return resultErrorResponse(applicationR, false, "caddy")
+
+      const publicationR = await store.publish(owner, sourcePath, markdown)
+      if (!publicationR.success) {
+        return errorResponse(
+          {
+            code: "documentation.storage-failed",
+            message: "The documentation could not be written to managed storage.",
+            op: publicationR.op,
+            status: 500,
+          },
+          false,
+        )
+      }
+      const currentProjectsR = await projectListUseCase(useCaseOptions, { owner })
+      if (!currentProjectsR.success) return resultErrorResponse(currentProjectsR, false, "projects")
+      const fileUrlsR = await projectDocsUrlsUseCase({
+        actor: { subject: actorR.data.subject, username: actorR.data.username, role: "own" },
+        projectList: async () => createResult(currentProjectsR.data.projects),
+        owner,
+        projectName: "doc",
+        relativePath: publicationR.data.file,
+      })
+      const indexUrlsR = await projectDocsUrlsUseCase({
+        actor: { subject: actorR.data.subject, username: actorR.data.username, role: "own" },
+        projectList: async () => createResult(currentProjectsR.data.projects),
+        owner,
+        projectName: "doc",
+        relativePath: publicationR.data.index,
+      })
+      if (!fileUrlsR.success) return resultErrorResponse(fileUrlsR, false, "projects")
+      if (!indexUrlsR.success) return resultErrorResponse(indexUrlsR, false, "projects")
+      return successResponse({
+        project: "doc",
+        file: publicationR.data.file,
+        index: publicationR.data.index,
+        urls: fileUrlsR.data.urls,
+        indexUrls: indexUrlsR.data.urls,
+      })
     }
 
     if (route.kind === "access-logs" || route.kind === "self-access-logs") {

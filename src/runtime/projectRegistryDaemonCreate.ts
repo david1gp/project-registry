@@ -5,6 +5,7 @@ import type { ProjectAccess } from "../access/ProjectAccess.js"
 import { projectAccessCreate } from "../access/projectAccessCreate.js"
 import { projectAccessLogSourceFileCreate } from "../access-log/projectAccessLogSourceFileCreate.js"
 import { projectRegistryApiHandlerCreate } from "../api/projectRegistryApiHandlerCreate.js"
+import { projectDocsPublicationStoreCreate } from "../docs/projectDocsPublicationStoreCreate.js"
 import type { ProjectRepository } from "../project-store/ProjectRepository.js"
 import { sessionActorResolve } from "../session/sessionActorResolve.js"
 import { sessionRequestResolve } from "../session/sessionRequestResolve.js"
@@ -1142,6 +1143,7 @@ export function projectRegistryDaemonCreate(options: ProjectRegistryDaemonOption
       repository: guardedRepository,
       caddyApplication,
       ...(accessLogSourceR?.success === true ? { projectAccessLogSource: accessLogSourceR.data } : {}),
+      docsPublicationStore: projectDocsPublicationStoreCreate(),
       socketAccessResolve,
       configOptions: {
         httpsListener: config.httpsListener,
