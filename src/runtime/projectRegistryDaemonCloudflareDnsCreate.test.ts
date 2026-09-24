@@ -166,6 +166,71 @@ describe("projectRegistryDaemonConfigFromEnv Cloudflare DNS", () => {
 })
 
 describe("projectRegistryDaemonCloudflareDnsCreate", () => {
+  test("an inaccessible zone does not block a later managed doc domain or reset its retry on each scan", async () => {
+    const timer = timerCreate()
+    const calls: string[] = []
+    let now = 0
+    const queueR = projectRegistryDaemonCloudflareDnsCreate({
+      enabled: true,
+      credentialResolve: async () => createResult("token"),
+      timeoutMs: 1000,
+      serverIpCurrent: () => "203.0.113.10",
+      timer: timer.timer,
+      repositoryProjectsCurrent: async () =>
+        createResult([
+          project(["assets.bad-zone.test"], false, "david", "assets-optimizer"),
+          project(["doc.example.com"], false, "leo", "doc"),
+        ]),
+      fetch: cloudflareFetchCreate(calls),
+      clock: () => now,
+      logger: () => undefined,
+    })
+    expect(queueR.success).toBe(true)
+    if (!queueR.success) return
+    expect(queueR.data.start().success).toBe(true)
+    await settle()
+    expect(calls.some((call) => call.includes("name=doc.example.com"))).toBe(true)
+    const failures = calls.filter((call) => call.includes("name=bad-zone.test")).length
+    expect(failures).toBeGreaterThan(0)
+    now = 1_000
+    timer.tick()
+    await settle()
+    expect(calls.filter((call) => call.includes("name=bad-zone.test"))).toHaveLength(failures)
+    await queueR.data.shutdown()
+  })
+
+  test("retries move behind pending projects when remote failures take longer than the retry delay", async () => {
+    const timer = timerCreate()
+    const calls: string[] = []
+    let now = 0
+    const fetch = cloudflareFetchCreate(calls)
+    const queueR = projectRegistryDaemonCloudflareDnsCreate({
+      enabled: true,
+      credentialResolve: async () => createResult("token"),
+      timeoutMs: 1000,
+      serverIpCurrent: () => "203.0.113.10",
+      timer: timer.timer,
+      clock: () => now,
+      logger: () => undefined,
+      repositoryProjectsCurrent: async () =>
+        createResult([
+          project(["assets.bad-zone.test"], false, "david", "assets"),
+          project(["another.bad-zone.test"], false, "david", "another"),
+          project(["doc.example.com"], false, "leo", "doc"),
+        ]),
+      fetch: async (input, init) => {
+        now += 2_500
+        return fetch(input, init)
+      },
+    })
+    expect(queueR.success).toBe(true)
+    if (!queueR.success) return
+    expect(queueR.data.start().success).toBe(true)
+    await settle()
+    expect(calls.some((call) => call.includes("name=doc.example.com"))).toBe(true)
+    await queueR.data.shutdown()
+  })
+
   test("retries startup reconciliation after the server IP becomes available", async () => {
     const timer = timerCreate()
     const calls: string[] = []

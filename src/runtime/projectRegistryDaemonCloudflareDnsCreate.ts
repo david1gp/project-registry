@@ -226,6 +226,7 @@ export function projectRegistryDaemonCloudflareDnsCreate(options: {
 
   function retryProject(key: string, retry: RetryState, deferred: boolean): void {
     const attempts = deferred ? retry.attempts : retry.attempts + 1
+    pendingProjects.delete(key)
     pendingProjects.set(key, {
       attempts,
       nextAt: clock() + (deferred ? retryBaseMs : retryDelay(attempts)),
@@ -346,7 +347,7 @@ export function projectRegistryDaemonCloudflareDnsCreate(options: {
     for (const project of projectsR.data) {
       const key = projectKeyValue(project)
       desiredProjects.set(key, project)
-      pendingProjects.set(key, { attempts: 0, nextAt: 0, sequence: nextSequence++ })
+      if (!pendingProjects.has(key)) pendingProjects.set(key, { attempts: 0, nextAt: 0, sequence: nextSequence++ })
     }
     drainSchedule(true)
   }
@@ -751,7 +752,8 @@ export function projectRegistryDaemonCloudflareDnsCreate(options: {
         retryProject(dueProject![0], retry, false)
       if (outcome === "deferred" && pendingProjects.get(dueProject![0])?.sequence === retry.sequence)
         retryProject(dueProject![0], retry, true)
-      if (outcome !== "done") return
+      // A project with unavailable credentials or an inaccessible zone must not
+      // prevent unrelated owners' projects from reconciling.
     }
   }
 
