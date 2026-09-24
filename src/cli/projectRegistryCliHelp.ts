@@ -12,7 +12,7 @@ Commands:
   history [--limit <n>]
   docs <path> [--http]
   docs <name> <path> [--http]
-  docs <path> reads Markdown and publishes to the managed doc project when cwd is outside registered project paths
+  docs <path> reads Markdown and publishes to the managed docs project when cwd is outside registered project paths
   docs <name> <path> requests docs from the explicitly named project
   config [selector]
   regenerate

@@ -58,7 +58,7 @@ The `GET` response reports the effective `domain`, its `source` (`explicit`, `en
 
 ## Publishing documentation
 
-From a registered project directory, `docs <path>` requests the document from the project matched to the current directory. If the current directory is not inside a registered project path, the CLI reads the Markdown file (relative paths are resolved from the current directory) and publishes it to the owner's managed `doc` project:
+From a registered project directory, `docs <path>` requests the document from the project matched to the current directory. If the current directory is not inside a registered project path, the CLI reads the Markdown file (relative paths are resolved from the current directory) and publishes it to the owner's managed `docs` project at `docs.<owner default-domain>`:
 
 ```bash
 project-registry docs README.md

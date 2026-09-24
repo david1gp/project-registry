@@ -960,11 +960,11 @@ describe("projectRegistryCliRun", () => {
           return Response.json({
             success: true,
             data: {
-              project: "doc",
+              project: "docs",
               file: "abc123.md",
               index: "index.md",
-              urls: ["https://doc.example/abc123.md"],
-              indexUrls: ["https://doc.example/index.md"],
+              urls: ["https://docs.example/abc123.md"],
+              indexUrls: ["https://docs.example/index.md"],
             },
           })
         }
@@ -975,12 +975,12 @@ describe("projectRegistryCliRun", () => {
               {
                 schemaVersion: 1,
                 owner: "david",
-                name: "doc",
+                name: "docs",
                 order: Number.MAX_SAFE_INTEGER,
                 services: [],
                 caddy: {
                   port: 4322,
-                  domains: ["doc.example"],
+                  domains: ["docs.example"],
                   kind: "static",
                   docs: true,
                   docsPath: "/var/lib/project-registry-docs/david",
@@ -1011,7 +1011,7 @@ describe("projectRegistryCliRun", () => {
         body: { sourcePath, markdown },
       },
     ])
-    expect(stdout.join("")).toBe("https://doc.example/abc123.md\nhttps://doc.example/index.md\n")
+    expect(stdout.join("")).toBe("https://docs.example/abc123.md\nhttps://docs.example/index.md\n")
   })
 
   test("regenerates through the versioned POST endpoint", async () => {

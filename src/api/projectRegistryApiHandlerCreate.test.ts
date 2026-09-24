@@ -1495,20 +1495,20 @@ describe("projectRegistryApiHandlerCreate", () => {
     expect(first.body).toMatchObject({
       success: true,
       data: {
-        project: "doc",
+        project: "docs",
         index: "index.md",
-        urls: [expect.stringContaining("doc.example.test/docs/")],
+        urls: [expect.stringContaining("docs.example.test/docs/")],
       },
     })
     expect(application.projectChanges).toBe(1)
-    const managed = repository.projects.find((project) => project.owner === "leo" && project.name === "doc")
+    const managed = repository.projects.find((project) => project.owner === "leo" && project.name === "docs")
     expect(managed?.labels).toEqual({
       "project-registry.managed-docs": "true",
     })
     expect(dnsProjects).toHaveLength(1)
     expect(managed?.services[0]).toMatchObject({
       caddy: {
-        domains: ["doc.example.test"],
+        domains: ["docs.example.test"],
         path: store.directory("leo"),
         docsPath: store.directory("leo"),
         staticAllow: ["/docs", "/docs/*"],
@@ -1518,7 +1518,7 @@ describe("projectRegistryApiHandlerCreate", () => {
     expect(config.success).toBe(true)
     if (config.success) {
       const route = config.data.apps.http.servers.srv0.routes.find((item) =>
-        JSON.stringify(item).includes("doc.example.test"),
+        JSON.stringify(item).includes("docs.example.test"),
       )
       expect(JSON.stringify(route)).toContain(store.directory("leo"))
       expect(JSON.stringify(route)).toContain("Only markdown and YAML files are accessible")
@@ -1526,6 +1526,14 @@ describe("projectRegistryApiHandlerCreate", () => {
 
     const second = await post("/work/a.md", "# Updated")
     expect(second.response.status).toBe(200)
+    expect(second.body).toMatchObject({
+      success: true,
+      data: {
+        project: "docs",
+        urls: [expect.stringContaining("docs.example.test/docs/")],
+      },
+    })
+    expect(repository.projects.filter((project) => project.owner === "leo" && project.name === "docs")).toHaveLength(1)
     expect((second.body.data as { file: string }).file).toBe((first.body.data as { file: string }).file)
     expect(application.projectChanges).toBe(2)
     expect(await Bun.file(join(store.directory("leo"), "index.md")).text()).toContain("[/work/a.md]")
@@ -1568,7 +1576,7 @@ describe("projectRegistryApiHandlerCreate", () => {
       })
 
     expect((await publish()).response.status).toBe(500)
-    expect(repository.projects.filter((project) => project.owner === "leo" && project.name === "doc")).toHaveLength(1)
+    expect(repository.projects.filter((project) => project.owner === "leo" && project.name === "docs")).toHaveLength(1)
     expect((await publish()).response.status).toBe(200)
     expect(application.projectChanges).toBe(2)
   })
@@ -1592,13 +1600,13 @@ describe("projectRegistryApiHandlerCreate", () => {
     )
 
     expect(responses.map(({ response }) => response.status)).toEqual([200, 200])
-    expect(repository.projects.filter((project) => project.owner === "leo" && project.name === "doc")).toHaveLength(1)
+    expect(repository.projects.filter((project) => project.owner === "leo" && project.name === "docs")).toHaveLength(1)
     const index = await Bun.file(join(store.directory("leo"), "index.md")).text()
     expect(index).toContain("[/work/a.md]")
     expect(index).toContain("[/work/b.md]")
   })
 
-  test("rejects a conflicting doc project and missing default domain without writing publications", async () => {
+  test("rejects a conflicting docs project and missing default domain without writing publications", async () => {
     const repository = repositoryCreate()
     const storage = mkdtempSync(join(import.meta.dir, ".docs-publication-test-"))
     temporaryDirectories.push(storage)
@@ -1626,7 +1634,7 @@ describe("projectRegistryApiHandlerCreate", () => {
     expect((await publish("/work/a.md")).body).toMatchObject({
       error: { code: "documentation.default-domain-required", status: 409 },
     })
-    repository.projects.push(docsProjectCreate("leo", "doc", ["doc.example.test"]))
+    repository.projects.push(docsProjectCreate("leo", "docs", ["docs.example.test"]))
     expect((await publish("/work/a.md")).body).toMatchObject({ error: { code: "projects.conflict", status: 409 } })
     expect(await Bun.file(join(store.directory("leo"), "index.md")).exists()).toBe(false)
   })

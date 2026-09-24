@@ -1119,7 +1119,7 @@ export function projectRegistryApiHandlerCreate(options: ApiHandlerOptions): Pro
       if (!defaultDomainR.success) return resultErrorResponse(defaultDomainR, false, "projects")
       const projectsR = await projectListUseCase(useCaseOptions, { owner })
       if (!projectsR.success) return resultErrorResponse(projectsR, false, "projects")
-      const managedProject = projectsR.data.projects.find((project) => project.name === "doc")
+      const managedProject = projectsR.data.projects.find((project) => project.name === "docs")
       const directory = store.directory(owner)
       const managedProjectValid = (project: Project): boolean =>
         project.labels?.["project-registry.managed-docs"] === "true" &&
@@ -1141,7 +1141,7 @@ export function projectRegistryApiHandlerCreate(options: ApiHandlerOptions): Pro
           return errorResponse(
             {
               code: "projects.conflict",
-              message: "An unrelated project named doc already exists; it was not modified.",
+              message: "An unrelated project named docs already exists; it was not modified.",
               op: "projectDocsPublish",
               status: 409,
             },
@@ -1164,10 +1164,10 @@ export function projectRegistryApiHandlerCreate(options: ApiHandlerOptions): Pro
           useCaseOptions,
           {
             owner,
-            name: "doc",
+            name: "docs",
             labels: { "project-registry.managed-docs": "true" },
             caddy: {
-              domains: [`doc.${defaultDomainR.data.domain}`],
+              domains: [`docs.${defaultDomainR.data.domain}`],
               docs: true,
               docsPath: directory,
               path: directory,
@@ -1185,13 +1185,13 @@ export function projectRegistryApiHandlerCreate(options: ApiHandlerOptions): Pro
             return resultErrorResponse(mutationR, false, "projects")
           const retryR = await projectListUseCase(useCaseOptions, { owner })
           if (!retryR.success) return resultErrorResponse(retryR, false, "projects")
-          const existing = retryR.data.projects.find((project) => project.name === "doc")
+          const existing = retryR.data.projects.find((project) => project.name === "docs")
           if (existing === undefined) return resultErrorResponse(mutationR, false, "projects")
           if (!managedProjectValid(existing)) {
             return errorResponse(
               {
                 code: "projects.conflict",
-                message: "An unrelated project named doc already exists; it was not modified.",
+                message: "An unrelated project named docs already exists; it was not modified.",
                 op: "projectDocsPublish",
                 status: 409,
               },
@@ -1224,20 +1224,20 @@ export function projectRegistryApiHandlerCreate(options: ApiHandlerOptions): Pro
         actor: { subject: actorR.data.subject, username: actorR.data.username, role: "own" },
         projectList: async () => createResult(currentProjectsR.data.projects),
         owner,
-        projectName: "doc",
+        projectName: "docs",
         relativePath: publicationR.data.file,
       })
       const indexUrlsR = await projectDocsUrlsUseCase({
         actor: { subject: actorR.data.subject, username: actorR.data.username, role: "own" },
         projectList: async () => createResult(currentProjectsR.data.projects),
         owner,
-        projectName: "doc",
+        projectName: "docs",
         relativePath: publicationR.data.index,
       })
       if (!fileUrlsR.success) return resultErrorResponse(fileUrlsR, false, "projects")
       if (!indexUrlsR.success) return resultErrorResponse(indexUrlsR, false, "projects")
       return successResponse({
-        project: "doc",
+        project: "docs",
         file: publicationR.data.file,
         index: publicationR.data.index,
         urls: fileUrlsR.data.urls,

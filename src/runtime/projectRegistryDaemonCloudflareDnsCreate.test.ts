@@ -166,7 +166,7 @@ describe("projectRegistryDaemonConfigFromEnv Cloudflare DNS", () => {
 })
 
 describe("projectRegistryDaemonCloudflareDnsCreate", () => {
-  test("an inaccessible zone does not block a later managed doc domain or reset its retry on each scan", async () => {
+  test("an inaccessible zone does not block a later managed docs domain or reset its retry on each scan", async () => {
     const timer = timerCreate()
     const calls: string[] = []
     let now = 0
@@ -179,7 +179,7 @@ describe("projectRegistryDaemonCloudflareDnsCreate", () => {
       repositoryProjectsCurrent: async () =>
         createResult([
           project(["assets.bad-zone.test"], false, "david", "assets-optimizer"),
-          project(["doc.example.com"], false, "leo", "doc"),
+          project(["docs.example.com"], false, "leo", "docs"),
         ]),
       fetch: cloudflareFetchCreate(calls),
       clock: () => now,
@@ -189,7 +189,7 @@ describe("projectRegistryDaemonCloudflareDnsCreate", () => {
     if (!queueR.success) return
     expect(queueR.data.start().success).toBe(true)
     await settle()
-    expect(calls.some((call) => call.includes("name=doc.example.com"))).toBe(true)
+    expect(calls.some((call) => call.includes("name=docs.example.com"))).toBe(true)
     const failures = calls.filter((call) => call.includes("name=bad-zone.test")).length
     expect(failures).toBeGreaterThan(0)
     now = 1_000
@@ -216,7 +216,7 @@ describe("projectRegistryDaemonCloudflareDnsCreate", () => {
         createResult([
           project(["assets.bad-zone.test"], false, "david", "assets"),
           project(["another.bad-zone.test"], false, "david", "another"),
-          project(["doc.example.com"], false, "leo", "doc"),
+          project(["docs.example.com"], false, "leo", "docs"),
         ]),
       fetch: async (input, init) => {
         now += 2_500
@@ -227,7 +227,7 @@ describe("projectRegistryDaemonCloudflareDnsCreate", () => {
     if (!queueR.success) return
     expect(queueR.data.start().success).toBe(true)
     await settle()
-    expect(calls.some((call) => call.includes("name=doc.example.com"))).toBe(true)
+    expect(calls.some((call) => call.includes("name=docs.example.com"))).toBe(true)
     await queueR.data.shutdown()
   })
 
