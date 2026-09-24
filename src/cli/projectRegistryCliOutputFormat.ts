@@ -69,6 +69,13 @@ const userDefaultDomainMutationSchema = a.looseObject({
 const cloudflareTokenMutationSchema = a.object({ updated: a.literal(true) })
 const legacyDeleteSchema = a.object({ deleted: a.string() })
 const docsSchema = a.object({ urls: a.array(a.string()) })
+const docsPublicationSchema = a.object({
+  project: a.string(),
+  file: a.string(),
+  index: a.string(),
+  urls: a.array(a.string()),
+  indexUrls: a.array(a.string()),
+})
 const regenerateSchema = a.looseObject({
   revision: a.string(),
   changed: a.boolean(),
@@ -175,7 +182,7 @@ export function projectRegistryCliOutputFormat(
     parsedData = parsedR.data
   }
   if (command.kind === "docs" || command.kind === "docs-local") {
-    const parsedR = dataParse(docsSchema, data, "documentation URL")
+    const parsedR = dataParse(a.union([docsPublicationSchema, docsSchema]), data, "documentation URL")
     if (!parsedR.success) return parsedR
     parsedData = parsedR.data
   }
@@ -256,6 +263,11 @@ export function projectRegistryCliOutputFormat(
     return createResult(`deleted ${owner === undefined ? deleted.deleted : `${owner}/${deleted.deleted}`}\n`)
   }
   if (command.kind === "docs" || command.kind === "docs-local") {
+    if (typeof parsedData === "object" && parsedData !== null && "indexUrls" in parsedData) {
+      const publication = parsedData as a.InferOutput<typeof docsPublicationSchema>
+      const urls = [...publication.urls, ...publication.indexUrls]
+      return createResult(urls.length === 0 ? "No documentation URLs.\n" : `${urls.join("\n")}\n`)
+    }
     const docs = parsedData as a.InferOutput<typeof docsSchema>
     return createResult(docs.urls.length === 0 ? "No documentation URLs.\n" : `${docs.urls.join("\n")}\n`)
   }

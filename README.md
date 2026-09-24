@@ -56,6 +56,16 @@ DELETE /api/v1/users/:owner/default-domain
 `PUT` accepts `{ "expectedRevision": "...", "domain": "example.com" }`; `DELETE` accepts `{ "expectedRevision": "..." }`.
 The `GET` response reports the effective `domain`, its `source` (`explicit`, `environment`, or `none`), and the registry `revision`. JSON CLI output preserves the complete response or mutation data, including the revision.
 
+## Publishing documentation
+
+From a registered project directory, `docs <path>` requests the document from the project matched to the current directory. If the current directory is not inside a registered project path, the CLI reads the Markdown file (relative paths are resolved from the current directory) and publishes it to the owner's managed `doc` project:
+
+```bash
+project-registry docs README.md
+```
+
+Fallback publication creates the managed project on first use and requires an owner default domain, configured with `project-registry user default-domain set <domain>`. The CLI prints the published document URL and index URL. Use `project-registry docs <name> <path>` to explicitly request docs from a named project; this form does not use fallback publication.
+
 ## Cloudflare DNS credentials
 
 When the daemon's Cloudflare DNS integration is enabled, it reads the credential for each project owner from:

@@ -1,3 +1,4 @@
+import { readFile } from "node:fs/promises"
 import { basename, resolve } from "node:path"
 import * as a from "valibot"
 import { createResult, createResultError, type Result, type ResultErr } from "#result"
@@ -370,7 +371,21 @@ async function commandRequest(
       const projectListR = projectListResponseParse(projectsR.data)
       if (!projectListR.success) return projectListR
       const nameR = projectNameFromPath(projectListR.data, process.cwd())
-      if (!nameR.success) return nameR
+      if (!nameR.success) {
+        const sourcePath = resolve(process.cwd(), command.path)
+        let markdown: string
+        try {
+          markdown = await readFile(sourcePath, "utf8")
+        } catch {
+          return createResultError("projectRegistryCliDocsPublish", `Could not read Markdown file: ${sourcePath}`)
+        }
+        return projectRegistryCliRequest(
+          socketPath,
+          `/api/v1/users/${ownerPath}/docs/publications`,
+          { method: "POST", body: { sourcePath, markdown } },
+          requestFetch,
+        )
+      }
       name = nameR.data
     }
     const query = new URLSearchParams({ path: command.path })

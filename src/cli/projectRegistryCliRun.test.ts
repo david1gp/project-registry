@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test"
-import { basename } from "node:path"
+import { readFile } from "node:fs/promises"
+import { basename, resolve } from "node:path"
 import pkg from "../../package.json" with { type: "json" }
 import { projectRegistryCliRun } from "./projectRegistryCliRun.js"
 
@@ -941,17 +942,50 @@ describe("projectRegistryCliRun", () => {
     expect(stdout.join("")).toBe("https://site.example/docs/guide/intro.md\n")
   })
 
-  test("reports a clear error and skips the docs request when no local project matches", async () => {
-    const requests: string[] = []
-    const stderr: string[] = []
-    const exitCode = await projectRegistryCliRun(["docs", "guide/intro.md"], {
+  test("publishes an unmatched relative Markdown path with absolute source path and content", async () => {
+    const requests: Array<{ path: string; method: string; body?: unknown }> = []
+    const stdout: string[] = []
+    const relativePath = "README.md"
+    const sourcePath = resolve(process.cwd(), relativePath)
+    const markdown = await readFile(sourcePath, "utf8")
+    const exitCode = await projectRegistryCliRun(["docs", relativePath], {
       environment: { USER: "david" },
-      requestFetch: async (input) => {
-        requests.push(new URL(String(input)).pathname)
+      requestFetch: async (input, init) => {
+        requests.push({
+          path: new URL(String(input)).pathname,
+          method: init?.method ?? "GET",
+          body: init?.body === undefined ? undefined : JSON.parse(String(init.body)),
+        })
+        if (init?.method === "POST") {
+          return Response.json({
+            success: true,
+            data: {
+              project: "doc",
+              file: "abc123.md",
+              index: "index.md",
+              urls: ["https://doc.example/abc123.md"],
+              indexUrls: ["https://doc.example/index.md"],
+            },
+          })
+        }
         return Response.json({
           success: true,
           data: {
             projects: [
+              {
+                schemaVersion: 1,
+                owner: "david",
+                name: "doc",
+                order: Number.MAX_SAFE_INTEGER,
+                services: [],
+                caddy: {
+                  port: 4322,
+                  domains: ["doc.example"],
+                  kind: "static",
+                  docs: true,
+                  docsPath: "/var/lib/project-registry-docs/david",
+                },
+              },
               {
                 schemaVersion: 1,
                 owner: "david",
@@ -965,14 +999,19 @@ describe("projectRegistryCliRun", () => {
           },
         })
       },
-      stderr: (text) => stderr.push(text),
+      stdout: (text) => stdout.push(text),
     })
 
-    expect(exitCode).toBe(1)
-    expect(requests).toEqual(["/api/v1/users/david/projects"])
-    expect(stderr.join("")).toBe(
-      `error: no project matches cwd: ${process.cwd()}\n` + "hint: Run: project-registry project create --docs\n",
-    )
+    expect(exitCode).toBe(0)
+    expect(requests).toEqual([
+      { path: "/api/v1/users/david/projects", method: "GET", body: undefined },
+      {
+        path: "/api/v1/users/david/docs/publications",
+        method: "POST",
+        body: { sourcePath, markdown },
+      },
+    ])
+    expect(stdout.join("")).toBe("https://doc.example/abc123.md\nhttps://doc.example/index.md\n")
   })
 
   test("regenerates through the versioned POST endpoint", async () => {
