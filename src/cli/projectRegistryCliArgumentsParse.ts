@@ -60,6 +60,7 @@ export function projectRegistryCliArgumentsParse(args: readonly string[]): Resul
   const domains: string[] = []
   const headerUpEntries: string[] = []
   const labels: Record<string, string> = {}
+  const listMetadata: Record<string, string | undefined> = {}
   const removeLabels: string[] = []
   const seen = new Set<string>()
   const booleans = new Set<string>()
@@ -76,6 +77,8 @@ export function projectRegistryCliArgumentsParse(args: readonly string[]): Resul
   let kind: "proxy" | "static" | undefined
   let access: "internal" | "external" | undefined
   let flushInterval: number | undefined
+  let section: string | undefined
+  let hasListMetadata = false
   let json = false
   let help = false
   let version = false
@@ -133,6 +136,8 @@ export function projectRegistryCliArgumentsParse(args: readonly string[]): Resul
       "--access",
       "--header-up",
       "--label",
+      "--metadata",
+      "--section",
       "--remove-label",
       "--flush-interval",
       "--owner",
@@ -141,7 +146,11 @@ export function projectRegistryCliArgumentsParse(args: readonly string[]): Resul
     const option = optionNames.find((name) => argument === name || argument.startsWith(`${name}=`))
     if (option !== undefined) {
       const repeatable =
-        option === "--domain" || option === "--header-up" || option === "--label" || option === "--remove-label"
+        option === "--domain" ||
+        option === "--header-up" ||
+        option === "--label" ||
+        option === "--metadata" ||
+        option === "--remove-label"
       if (!repeatable && seen.has(option)) return createResultError(op, `Option ${option} may only be provided once.`)
       seen.add(option)
       const value = optionValue(argument, option, args, index)
@@ -245,6 +254,32 @@ export function projectRegistryCliArgumentsParse(args: readonly string[]): Resul
         headerUpEntries.push(value)
         continue
       }
+      if (option === "--section") {
+        if (value === undefined || value.trim() === "" || value.startsWith("-")) {
+          return createResultError(op, "Option --section requires a section name.")
+        }
+        section = value
+        continue
+      }
+      if (option === "--metadata") {
+        if (value === undefined || value.trim() === "" || (optionUsesNextArgument(argument) && value.startsWith("-"))) {
+          return createResultError(op, "Option --metadata requires a key or key=value.")
+        }
+        for (const token of value.split(",")) {
+          const trimmed = token.trim()
+          if (trimmed === "") continue
+          const separator = trimmed.indexOf("=")
+          if (separator === -1) {
+            listMetadata[trimmed] = undefined
+          } else {
+            const key = trimmed.slice(0, separator).trim()
+            if (key === "") return createResultError(op, "Option --metadata requires a non-blank key.")
+            listMetadata[key] = trimmed.slice(separator + 1)
+          }
+        }
+        hasListMetadata = true
+        continue
+      }
       if (option === "--label") {
         if (value === undefined || !value.includes("=")) {
           if (cloudflareTokenSetPositionalsMatch(positionals))
@@ -261,6 +296,7 @@ export function projectRegistryCliArgumentsParse(args: readonly string[]): Resul
           writable: true,
         })
         hasLabels = true
+        listMetadata[key] = value.slice(separator + 1)
         continue
       }
       if (option === "--remove-label") {
@@ -325,6 +361,7 @@ export function projectRegistryCliArgumentsParse(args: readonly string[]): Resul
   const hasCaddyOptions = Object.keys(caddy).length > 0
   const hasOnlyPortOption = port !== undefined && Object.keys(caddy).length === 1
   const hasLabelOptions = hasLabels || removeLabels.length > 0 || clearLabels
+  const hasFilterOptions = section !== undefined || hasListMetadata
   const hasMutationOptions =
     hasCaddyOptions ||
     flagName !== undefined ||
@@ -332,6 +369,7 @@ export function projectRegistryCliArgumentsParse(args: readonly string[]): Resul
     ownership !== undefined ||
     noDns ||
     hasLabelOptions ||
+    hasFilterOptions ||
     tokenStdin
   const hasAccessLogOptions = owner !== undefined || before !== undefined
   const hasHttp = booleans.has("--http")
@@ -343,6 +381,7 @@ export function projectRegistryCliArgumentsParse(args: readonly string[]): Resul
     extra.length === 0 &&
     limit === undefined &&
     !hasMutationOptions &&
+    !hasFilterOptions &&
     !hasAccessLogOptions &&
     !hasHttp
   ) {
@@ -353,11 +392,26 @@ export function projectRegistryCliArgumentsParse(args: readonly string[]): Resul
     action === "list" &&
     value === undefined &&
     limit === undefined &&
-    !hasMutationOptions &&
+    !hasCaddyOptions &&
+    flagName === undefined &&
+    service === undefined &&
+    ownership === undefined &&
+    !noDns &&
+    removeLabels.length === 0 &&
+    !clearLabels &&
+    !tokenStdin &&
     !hasAccessLogOptions &&
     !hasHttp
   ) {
-    return createResult({ command: { kind: "project-list" }, json, socket })
+    return createResult({
+      command: {
+        kind: "project-list",
+        ...(section === undefined ? {} : { section }),
+        ...(hasListMetadata ? { metadata: listMetadata } : {}),
+      },
+      json,
+      socket,
+    })
   }
   if (
     subject === "user" &&

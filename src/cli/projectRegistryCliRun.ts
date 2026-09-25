@@ -13,6 +13,7 @@ import type { ProjectRegistryCliCaddyOptions } from "./ProjectRegistryCliCaddyOp
 import type { ProjectRegistryCliFetch } from "./ProjectRegistryCliFetch.js"
 import type { ProjectRegistryCliInvocation } from "./ProjectRegistryCliInvocation.js"
 import { projectCliServiceRows } from "./projectCliServiceRows.js"
+import { projectFilter } from "../project/projectFilter.js"
 import { projectNameFromPath } from "./projectNameFromPath.js"
 import { projectRegistryCliArgumentsParse } from "./projectRegistryCliArgumentsParse.js"
 import { projectRegistryCliHelp } from "./projectRegistryCliHelp.js"
@@ -254,7 +255,12 @@ async function jsonProjectReadRequest(
   if (!responseR.success) return responseR
 
   if (command.kind === "project-list") {
-    if (Array.isArray(responseR.data)) return responseR
+    if (Array.isArray(responseR.data)) {
+      return projectFilter(responseR.data as { labels?: Record<string, string> }[], {
+        section: command.section,
+        metadata: command.metadata,
+      })
+    }
     const op = "projectRegistryCliProjectListResponseParse"
     const parsedR = a.safeParse(projectListResponseSchema, responseR.data)
     if (!parsedR.success) return createResultError(op, "project-registryd returned malformed project list data.")
@@ -264,7 +270,10 @@ async function jsonProjectReadRequest(
       if (!canonicalR.success) return canonicalR
       rows.push(...projectCliServiceRows(canonicalR.data))
     }
-    return createResult(rows)
+    return projectFilter(rows as { labels?: Record<string, string> }[], {
+      section: command.section,
+      metadata: command.metadata,
+    })
   }
   const legacyProject = recordValue(responseR.data)
   if (legacyProject !== undefined && typeof legacyProject.name === "string" && typeof legacyProject.user === "string") {
@@ -287,7 +296,7 @@ async function commandRequest(
   stdin?: ReadableStream<Uint8Array>,
 ): Promise<Result<unknown> & { hint?: string }> {
   const command = invocation.command
-  if (invocation.json && (command.kind === "project-list" || command.kind === "project-get")) {
+  if (command.kind === "project-list" || (invocation.json && command.kind === "project-get")) {
     return jsonProjectReadRequest(command, socketPath, environment, requestFetch)
   }
   if (

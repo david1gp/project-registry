@@ -4,6 +4,22 @@ import { projectRegistryCliArgumentsParse } from "./projectRegistryCliArgumentsP
 describe("projectRegistryCliArgumentsParse", () => {
   test.each([
     [["project", "list"], { kind: "project-list" }],
+    [["project", "list", "--section", "adaptive"], { kind: "project-list", section: "adaptive" }],
+    [
+      ["project", "list", "--section", "Adaptive", "--metadata", "code=https://github.com/foo,logo"],
+      {
+        kind: "project-list",
+        section: "Adaptive",
+        metadata: { code: "https://github.com/foo", logo: undefined },
+      },
+    ],
+    [
+      ["project", "list", "--metadata", "tier=gold", "--label", "env=prod"],
+      {
+        kind: "project-list",
+        metadata: { tier: "gold", env: "prod" },
+      },
+    ],
     [["project", "get", "site"], { kind: "project-get", name: "site" }],
     [
       ["project", "create", "--name", "site", "--domain", "site.example"],

@@ -1,7 +1,7 @@
 export const projectRegistryCliHelp = `Usage: project-registry [--socket <path>] [--json] <command>
 
 Commands:
-  project list
+  project list [--section <name>] [--metadata <KEY[=VALUE]>]
   project get <name>
   project create [--name <name>] [--service <id>] [--ownership <ownership>] [--domain <hostname>] [options]
   project edit <name> [--service <id>] [--ownership <ownership>] [options]
@@ -51,6 +51,10 @@ Cloudflare credentials:
 
 Project names:
   Start with a lowercase letter or digit; use only lowercase letters, digits, and hyphens.
+
+Project list filters:
+  --section <name>           Filter projects by section name (case-insensitive)
+  --metadata <KEY[=VALUE]>   Filter by metadata/label key or key=value; repeat or comma-separate
 
 Options:
   --socket <path>  Unix socket (then PROJECT_REGISTRY_SOCKET, then /run/project-registry/$USER.sock)

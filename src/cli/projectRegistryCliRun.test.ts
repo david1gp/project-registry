@@ -1263,6 +1263,81 @@ describe("projectRegistryCliRun", () => {
     expect(output.join("")).toContain(`project-registry ${pkg.version}`)
   })
 
+  test("filters project list by section and metadata in table and json output", async () => {
+    const projects = [
+      {
+        name: "authworks-site",
+        user: "david",
+        kind: "static",
+        port: 3045,
+        domains: ["authworks-site.pages.dev"],
+        labels: {
+          section: "Adaptive",
+          code: "https://git.contentoren.de/david/authworks-site",
+        },
+      },
+      {
+        name: "opencode-david",
+        user: "david",
+        kind: "proxy",
+        port: 4097,
+        domains: ["opencode.david-siewert.com"],
+        labels: {
+          section: "Entwicklung Infrastruktur",
+          code: "https://github.com/anomalyco/opencode",
+        },
+      },
+    ]
+
+    const tableOut: string[] = []
+    const exitTable = await projectRegistryCliRun(
+      ["project", "list", "--section", "adaptive"],
+      runOptions(projects, [], tableOut),
+    )
+    expect(exitTable).toBe(0)
+    expect(tableOut.join("")).toContain("authworks-site")
+    expect(tableOut.join("")).not.toContain("opencode-david")
+
+    const jsonOut: string[] = []
+    const exitJson = await projectRegistryCliRun(
+      ["project", "list", "--metadata", "code=https://github.com/anomalyco/opencode", "--json"],
+      {
+        environment: { USER: "david" },
+        requestFetch: async () =>
+          Response.json({
+            success: true,
+            data: {
+              projects: [
+                {
+                  schemaVersion: 2,
+                  owner: "david",
+                  name: "authworks-site",
+                  labels: { section: "Adaptive" },
+                  services: [],
+                },
+                {
+                  schemaVersion: 2,
+                  owner: "david",
+                  name: "opencode-david",
+                  labels: {
+                    section: "Entwicklung Infrastruktur",
+                    code: "https://github.com/anomalyco/opencode",
+                  },
+                  services: [],
+                },
+              ],
+            },
+          }),
+        stdout: (text) => jsonOut.push(text),
+      },
+    )
+    expect(exitJson).toBe(0)
+    const jsonParsed = JSON.parse(jsonOut.join(""))
+    expect(jsonParsed.success).toBe(true)
+    expect(jsonParsed.data).toHaveLength(1)
+    expect(jsonParsed.data[0].name).toBe("opencode-david")
+  })
+
   test("rejects malformed command data", async () => {
     const stderr: string[] = []
     const exitCode = await projectRegistryCliRun(["project", "list"], runOptions([{ user: "david" }], [], [], stderr))

@@ -1,6 +1,7 @@
 import * as a from "valibot"
 import { createResult, createResultError, type Result } from "#result"
 import { projectLabelsSchema } from "../project/projectLabelsSchema.js"
+import { projectFilter } from "../project/projectFilter.js"
 import { projectServiceOwnershipSchema } from "../project/projectServiceOwnershipSchema.js"
 import { projectRegistryVersion } from "../projectRegistryVersion.js"
 import type { ProjectRegistryCliInvocation } from "./ProjectRegistryCliInvocation.js"
@@ -130,7 +131,12 @@ export function projectRegistryCliOutputFormat(
   if (command.kind === "project-list") {
     const parsedR = dataParse(a.array(projectSchema), data, "project list")
     if (!parsedR.success) return parsedR
-    parsedData = parsedR.data.map(projectOutputNormalize)
+    const filteredR = projectFilter(parsedR.data, {
+      section: command.section,
+      metadata: command.metadata,
+    })
+    if (!filteredR.success) return filteredR
+    parsedData = filteredR.data.map(projectOutputNormalize)
   }
   if (command.kind === "project-get") {
     const parsedR = dataParse(a.union([projectSchema, a.array(projectSchema)]), data, "project")
