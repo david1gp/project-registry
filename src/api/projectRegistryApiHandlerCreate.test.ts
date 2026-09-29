@@ -722,6 +722,37 @@ describe("projectRegistryApiHandlerCreate", () => {
     })
   })
 
+  test("allocates an omitted port for a new sibling through the canonical PATCH API", async () => {
+    const repository = repositoryCreate()
+    const canonical = projectMigrate({
+      schemaVersion: 2,
+      owner: "leo",
+      name: "opencode",
+      services: [{ id: "web", units: [], ownership: "registry", caddy: { port: 3000, domains: ["web.example"] } }],
+    })
+    if (!canonical.success) return
+    repository.projects = repository.projects.map((project) =>
+      project.owner === "leo" && project.name === "opencode" ? canonical.data : project,
+    )
+    const handler = projectRegistryApiHandlerCreate({ repository, caddyApplication: caddyApplicationCreate() })
+    const leo = { transport: "unix", username: "leo" } as const
+
+    const patched = await requestJson(handler, "/api/v1/users/leo/projects/opencode", leo, "PATCH", {
+      expectedRevision: revision,
+      schemaVersion: 2,
+      services: [
+        { id: "web", units: [], ownership: "registry", caddy: { port: 3000, domains: ["web.example"] } },
+        { id: "worker", units: [], ownership: "registry", caddy: { domains: ["worker.example"] } },
+      ],
+    })
+
+    expect(patched.response.status).toBe(200)
+    expect(repository.projects.find((project) => project.name === "opencode")?.services).toMatchObject([
+      { id: "web", caddy: { port: 3000 } },
+      { id: "worker", caddy: { port: 3001, domains: ["worker.example"] } },
+    ])
+  })
+
   test("atomically persists a portless external service before the creation callback", async () => {
     const repository = repositoryCreate()
     const persisted: Project[] = []

@@ -1,7 +1,9 @@
-import { createResult, createResultErrorCode, type Result } from "#result"
+import { createResult, type Result } from "#result"
 import type { ProjectCanonicalNormalizeOptions } from "./ProjectCanonicalNormalizeOptions.js"
 import type { ProjectCanonical } from "./projectCanonicalSchema.js"
 import { projectCollisions } from "./projectCollisions.js"
+import { projectDomainIsCloudflarePages } from "./projectDomainIsCloudflarePages.js"
+import { projectDomainNormalize } from "./projectDomainNormalize.js"
 import { projectMigrate } from "./projectMigrate.js"
 import { projectNormalize } from "./projectNormalize.js"
 import { projectPortNext } from "./projectPortNext.js"
@@ -13,6 +15,17 @@ function canonicalInput(input: unknown): unknown {
   return record
 }
 
+function canonicalServiceIsActiveLocal(service: Record<string, unknown>): boolean {
+  const caddy = service.caddy
+  if (!caddy || typeof caddy !== "object" || Array.isArray(caddy)) return false
+  if (service.ownership === "external") return false
+  const caddyRecord = caddy as Record<string, unknown>
+  if (caddyRecord.disabled || !Array.isArray(caddyRecord.domains)) return false
+  return caddyRecord.domains.some(
+    (domain) => typeof domain === "string" && !projectDomainIsCloudflarePages(projectDomainNormalize(domain)),
+  )
+}
+
 function canonicalExternalPortlessNormalize(
   input: unknown,
   options: ProjectCanonicalNormalizeOptions,
@@ -22,36 +35,61 @@ function canonicalExternalPortlessNormalize(
   const services = (record as Record<string, unknown>).services
   if (!Array.isArray(services)) return createResult(record)
 
-  const portlessExternal = services.some((service) => {
+  const allocatePortServiceIds = new Set(options.allocatePortServiceIds ?? [])
+  const portless = services.some((service) => {
     if (!service || typeof service !== "object" || Array.isArray(service)) return false
     const serviceRecord = service as Record<string, unknown>
     const caddy = serviceRecord.caddy
     return (
-      serviceRecord.ownership === "external" &&
+      (serviceRecord.ownership === "external" || allocatePortServiceIds.has(String(serviceRecord.id))) &&
       caddy !== null &&
       typeof caddy === "object" &&
       !Array.isArray(caddy) &&
       (caddy as Record<string, unknown>).port === undefined
     )
   })
-  if (!portlessExternal) return createResult(record)
+  if (!portless) return createResult(record)
 
-  const portR = projectPortNext(options.projects ?? [], options.portRange, options.excludeKey)
-  if (!portR.success) return portR
-  const servicesWithPorts = services.map((service) => {
-    if (!service || typeof service !== "object" || Array.isArray(service)) return service
+  const reserveSiblingPorts = allocatePortServiceIds.size > 0
+  const reservedPorts: number[] = []
+  if (reserveSiblingPorts) {
+    for (const service of services) {
+      if (!service || typeof service !== "object" || Array.isArray(service)) continue
+      const serviceRecord = service as Record<string, unknown>
+      if (!canonicalServiceIsActiveLocal(serviceRecord)) continue
+      const caddy = serviceRecord.caddy as Record<string, unknown>
+      const port = caddy.port
+      if (Number.isInteger(port)) reservedPorts.push(port as number)
+    }
+  }
+
+  const servicesWithPorts = [...services]
+  for (let index = 0; index < servicesWithPorts.length; index += 1) {
+    const service = servicesWithPorts[index]
+    if (!service || typeof service !== "object" || Array.isArray(service)) continue
     const serviceRecord = service as Record<string, unknown>
     const caddy = serviceRecord.caddy
+    const shouldAllocate =
+      serviceRecord.ownership === "external" || allocatePortServiceIds.has(String(serviceRecord.id))
     if (
-      serviceRecord.ownership !== "external" ||
+      !shouldAllocate ||
       caddy === null ||
       typeof caddy !== "object" ||
       Array.isArray(caddy) ||
       (caddy as Record<string, unknown>).port !== undefined
     )
-      return service
-    return { ...serviceRecord, caddy: { ...(caddy as Record<string, unknown>), port: portR.data } }
-  })
+      continue
+
+    const portR = projectPortNext(
+      options.projects ?? [],
+      options.portRange,
+      options.excludeKey,
+      reserveSiblingPorts ? reservedPorts : [],
+    )
+    if (!portR.success) return portR
+    servicesWithPorts[index] = { ...serviceRecord, caddy: { ...(caddy as Record<string, unknown>), port: portR.data } }
+    if (reserveSiblingPorts && canonicalServiceIsActiveLocal(serviceRecord)) reservedPorts.push(portR.data)
+  }
   return createResult({ ...record, services: servicesWithPorts })
 }
 

@@ -1,8 +1,8 @@
 import { createResult, createResultErrorCode, type Result } from "#result"
 import type { Project } from "./Project.js"
-import { projectLocalCaddyEntries } from "./projectLocalCaddyEntries.js"
 import type { ProjectKey } from "./projectKey.js"
 import { projectKeyEqual } from "./projectKeyEqual.js"
+import { projectLocalCaddyEntries } from "./projectLocalCaddyEntries.js"
 
 export type ProjectPortRange = {
   from: number
@@ -22,12 +22,14 @@ export function projectPortNext(
   projects: readonly Project[],
   range: ProjectPortRange = defaultPortRange,
   excludeKey?: ProjectKey,
+  reservedPorts: readonly number[] = [],
 ): Result<number> {
   const op = "projectPortNext"
   const rangeError = projectPortRangeValidate(range)
   if (rangeError) return createResultErrorCode(op, rangeError, "request.invalid")
 
   const used = new Set<number>()
+  for (const port of reservedPorts) used.add(port)
   for (const project of projects) {
     if (excludeKey && projectKeyEqual(project, excludeKey)) continue
     for (const entry of projectLocalCaddyEntries(project)) {

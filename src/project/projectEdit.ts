@@ -147,11 +147,33 @@ export async function projectEdit(
   const existingCanonicalR = projectMigrate(existing)
   if (!existingCanonicalR.success) return existingCanonicalR
 
+  const patchRecord =
+    input && typeof input === "object" && !Array.isArray(input) ? (input as Record<string, unknown>) : undefined
+  const existingServiceIds = new Set(existingCanonicalR.data.services.map((service) => service.id))
+  const allocatePortServiceIds = Array.isArray(patchRecord?.services)
+    ? patchRecord.services.flatMap((service) => {
+        if (!service || typeof service !== "object" || Array.isArray(service)) return []
+        const serviceRecord = service as Record<string, unknown>
+        const caddy = serviceRecord.caddy
+        if (
+          typeof serviceRecord.id !== "string" ||
+          existingServiceIds.has(serviceRecord.id) ||
+          !caddy ||
+          typeof caddy !== "object" ||
+          Array.isArray(caddy) ||
+          (caddy as Record<string, unknown>).port !== undefined
+        )
+          return []
+        return [serviceRecord.id]
+      })
+    : []
+
   const projectR = projectCanonicalNormalize(projectEditCanonicalInput(existingCanonicalR.data, input), {
     projects: snapshotR.data.projects,
     portRange: options.portRange,
     excludeKey: key,
     excludeProject: existingCanonicalR.data,
+    allocatePortServiceIds,
   })
   if (!projectR.success) return projectR
   if (!projectKeyEqual(projectR.data, key))

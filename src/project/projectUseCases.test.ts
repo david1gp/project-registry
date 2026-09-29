@@ -721,6 +721,36 @@ describe("project use cases", () => {
     expect(caddy && typeof caddy === "object" ? Object.hasOwn(caddy, "__proto__") : false).toBe(false)
   })
 
+  test("allocates an omitted port for a new registry-owned sibling without changing existing ports", async () => {
+    const canonical = projectMigrate({
+      schemaVersion: 2,
+      owner: "alice",
+      name: "catalog",
+      services: [{ id: "web", units: [], caddy: { port: 3200, domains: ["web.example"] } }],
+    })
+    if (!canonical.success) return
+    const repository = repositoryCreate([canonical.data])
+    const access = accessCreate({ subject: "alice-subject", username: "alice", role: "own" }, { alice: "own" })
+
+    const result = await projectEdit(
+      useCaseOptions(repository, access, { from: 3200, to: 3201 }),
+      { owner: "alice", name: "catalog" },
+      {
+        schemaVersion: 2,
+        services: [{ id: "worker", units: [], ownership: "registry", caddy: { domains: ["worker.example"] } }],
+      },
+      { expectedRevision: currentRevision },
+    )
+
+    expect(result).toMatchObject({ success: true })
+    expect(repository.calls.edit[0]?.project).toMatchObject({
+      services: [
+        { id: "web", caddy: { port: 3200 } },
+        { id: "worker", ownership: "registry", caddy: { port: 3201, domains: ["worker.example"] } },
+      ],
+    })
+  })
+
   test("returns successful gets and preserves repository get failures", async () => {
     const projectValue = project("alice", "catalog")
     const repository = repositoryCreate([projectValue])
