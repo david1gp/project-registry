@@ -1,5 +1,6 @@
 import type { JSX } from "solid-js"
 import { Show } from "solid-js"
+import { classesInput } from "#ui/input/input/classesInput.js"
 import { Input } from "#ui/input/input/Input.jsx"
 import { Label } from "#ui/input/label/Label.jsx"
 import { Button } from "#ui/interactive/button/Button.jsx"
@@ -58,9 +59,14 @@ export function ProjectServicesPanelView(p: { state: ProjectServicesPanelState; 
             Alle Dienste dieses Projekts mit eigener Domain, eigenem Port und eigenen Caddy-Einstellungen.
           </p>
         </div>
-        <Button variant="outline" onClick={p.state.refresh} disabled={p.state.saving()}>
-          Aktualisieren
-        </Button>
+        <div class="flex gap-2">
+          <Button onClick={p.state.editorNewOpen} disabled={p.state.saving()}>
+            Dienst hinzufügen
+          </Button>
+          <Button variant="outline" onClick={p.state.refresh} disabled={p.state.saving()}>
+            Aktualisieren
+          </Button>
+        </div>
       </div>
       <div aria-busy={p.state.loading() || p.state.saving()}>
         <Show when={p.state.loading()}>
@@ -89,23 +95,37 @@ export function ProjectServicesPanelView(p: { state: ProjectServicesPanelState; 
             <Table1R rows={p.state.services()} columns={columnsCreate(p.state)} />
           </section>
         </Show>
-        <Show when={p.state.draft()} keyed>
+        <Show when={p.state.draft()}>
           {(draft) => (
             <form
               class="mt-4 flex flex-col gap-3 border-t border-slate-200 pt-4 dark:border-slate-700"
-              aria-label={`Dienst ${draft.id} bearbeiten`}
+              aria-label={p.state.creating() ? "Neuen Dienst hinzufügen" : `Dienst ${draft().id} bearbeiten`}
               onSubmit={(event) => {
                 event.preventDefault()
                 p.state.save()
               }}
             >
-              <h3 class="text-lg font-semibold">Dienst {draft.id}</h3>
+              <h3 class="text-lg font-semibold">{p.state.creating() ? "Neuer Dienst" : `Dienst ${draft().id}`}</h3>
               <div class="grid gap-3 sm:grid-cols-2">
+                <Show when={p.state.creating()}>
+                  <div class="flex flex-col gap-1">
+                    <Label for="project-service-id">Dienst-ID</Label>
+                    <Input
+                      id="project-service-id"
+                      value={draft().id}
+                      required
+                      pattern="[a-z0-9][a-z0-9-]*"
+                      onInput={(event) => p.state.draftFieldSet("id", event.currentTarget.value)}
+                    />
+                  </div>
+                </Show>
                 <div class="flex flex-col gap-1">
-                  <Label for="project-service-port">Port</Label>
+                  <Label for="project-service-port">
+                    Port {p.state.creating() ? "(optional, leer = automatisch)" : ""}
+                  </Label>
                   <Input
                     id="project-service-port"
-                    value={draft.port}
+                    value={draft().port}
                     inputMode="numeric"
                     onInput={(event) => p.state.draftFieldSet("port", event.currentTarget.value)}
                   />
@@ -114,15 +134,40 @@ export function ProjectServicesPanelView(p: { state: ProjectServicesPanelState; 
                   <Label for="project-service-domains">Domains (kommagetrennt)</Label>
                   <Input
                     id="project-service-domains"
-                    value={draft.domains}
+                    value={draft().domains}
+                    required
                     onInput={(event) => p.state.draftFieldSet("domains", event.currentTarget.value)}
                   />
+                </div>
+                <div class="flex flex-col gap-1">
+                  <Label for="project-service-kind">Art</Label>
+                  <select
+                    class={classesInput}
+                    id="project-service-kind"
+                    value={draft().kind}
+                    onChange={(event) => p.state.draftFieldSet("kind", event.currentTarget.value)}
+                  >
+                    <option value="proxy">Proxy</option>
+                    <option value="static">Statisch</option>
+                  </select>
+                </div>
+                <div class="flex flex-col gap-1">
+                  <Label for="project-service-access">Zugriff</Label>
+                  <select
+                    class={classesInput}
+                    id="project-service-access"
+                    value={draft().access}
+                    onChange={(event) => p.state.draftFieldSet("access", event.currentTarget.value)}
+                  >
+                    <option value="external">Extern</option>
+                    <option value="internal">Intern</option>
+                  </select>
                 </div>
                 <div class="flex flex-col gap-1">
                   <Label for="project-service-path">Pfad</Label>
                   <Input
                     id="project-service-path"
-                    value={draft.path}
+                    value={draft().path}
                     onInput={(event) => p.state.draftFieldSet("path", event.currentTarget.value)}
                   />
                 </div>
@@ -131,7 +176,7 @@ export function ProjectServicesPanelView(p: { state: ProjectServicesPanelState; 
                 <label class="flex items-center gap-2">
                   <input
                     type="checkbox"
-                    checked={draft.disabled}
+                    checked={draft().disabled}
                     onChange={(event) => p.state.draftFieldSet("disabled", event.currentTarget.checked)}
                   />
                   Deaktiviert
@@ -139,7 +184,7 @@ export function ProjectServicesPanelView(p: { state: ProjectServicesPanelState; 
                 <label class="flex items-center gap-2">
                   <input
                     type="checkbox"
-                    checked={draft.docs}
+                    checked={draft().docs}
                     onChange={(event) => p.state.draftFieldSet("docs", event.currentTarget.checked)}
                   />
                   Dokumentation
@@ -147,10 +192,18 @@ export function ProjectServicesPanelView(p: { state: ProjectServicesPanelState; 
                 <label class="flex items-center gap-2">
                   <input
                     type="checkbox"
-                    checked={draft.spa}
+                    checked={draft().spa}
                     onChange={(event) => p.state.draftFieldSet("spa", event.currentTarget.checked)}
                   />
                   SPA
+                </label>
+                <label class="flex items-center gap-2">
+                  <input
+                    type="checkbox"
+                    checked={draft().browse}
+                    onChange={(event) => p.state.draftFieldSet("browse", event.currentTarget.checked)}
+                  />
+                  Verzeichnis anzeigen
                 </label>
               </div>
               <div class="flex gap-2">

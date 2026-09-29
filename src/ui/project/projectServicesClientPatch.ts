@@ -1,6 +1,6 @@
 import * as v from "valibot"
 import { createResult, createResultError, type Result } from "#result"
-import type { ProjectServicesService } from "./projectServicesSchema.js"
+import type { ProjectServicesPatchService } from "./ProjectServicesPatchService.js"
 
 type ProjectServicesPatchResult = Result<{ revision: string; changed: boolean }> & {
   code?: string
@@ -29,7 +29,7 @@ function recordValue(input: unknown): Record<string, unknown> | undefined {
 export async function projectServicesClientPatch(
   owner: string,
   name: string,
-  input: { services: readonly ProjectServicesService[]; expectedRevision: string; signal?: AbortSignal },
+  input: { services: readonly ProjectServicesPatchService[]; expectedRevision: string; signal?: AbortSignal },
   requestFetch: ProjectServicesFetch = fetch,
 ): Promise<ProjectServicesPatchResult> {
   const path = `/api/v1/users/${encodeURIComponent(owner)}/projects/${encodeURIComponent(name)}`

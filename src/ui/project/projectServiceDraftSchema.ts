@@ -5,7 +5,7 @@ import { projectServiceOwnershipSchema } from "../../project/projectServiceOwner
 export const projectServiceDraftSchema = v.object({
   id: v.pipe(v.string(), v.regex(/^[a-z0-9][a-z0-9-]*$/, "Die Dienst-ID ist ungültig.")),
   ownership: v.optional(projectServiceOwnershipSchema),
-  port: v.pipe(v.string(), v.regex(/^\d+$/, "Der Port muss eine Zahl von 1 bis 65535 sein.")),
+  port: v.string(),
   domains: v.string(),
   path: v.string(),
   kind: v.picklist(["proxy", "static"]),

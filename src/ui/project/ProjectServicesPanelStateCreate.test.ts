@@ -3,6 +3,7 @@ import { createRoot } from "solid-js"
 import { createResult, createResultError } from "#result"
 import { createSignalObject } from "#ui/utils/createSignalObject.js"
 import { projectServicesPanelStateCreate } from "./ProjectServicesPanelStateCreate.js"
+import { projectServicesClientPatch } from "./projectServicesClientPatch.js"
 import type { ProjectServices, ProjectServicesService } from "./projectServicesSchema.js"
 
 const caddy: NonNullable<ProjectServicesService["caddy"]> = {
@@ -101,6 +102,158 @@ describe("projectServicesPanelStateCreate", () => {
         expect(saved[1]?.ownership).toBe("external")
         expect(state.revision()).toBe("r2")
         expect(searchParams.values.has("service")).toBe(false)
+        dispose()
+        resolve()
+      })
+    })
+  })
+
+  test("adds a sibling without a port, then reloads its allocated port from the API", async () => {
+    await new Promise<void>((resolve) => {
+      createRoot(async (dispose) => {
+        const searchParams = searchParamsCreate()
+        let submitted: Parameters<typeof projectServicesClientPatch>[2] | undefined
+        let requests = 0
+        const state = projectServicesPanelStateCreate(
+          () => "leo",
+          () => "app",
+          {
+            searchParams,
+            client: async () => {
+              requests++
+              return createResult({
+                project:
+                  requests === 1
+                    ? project()
+                    : {
+                        ...project(),
+                        services: [
+                          ...services,
+                          {
+                            id: "web",
+                            units: [],
+                            ownership: "registry" as const,
+                            caddy: { ...caddy, port: 3010, domains: ["web.example"] },
+                          },
+                        ],
+                      },
+                revision: requests === 1 ? "r1" : "r2",
+              })
+            },
+            patchClient: async (_owner, _name, input) => {
+              submitted = input
+              return createResult({ revision: "r2", changed: true })
+            },
+          },
+        )
+        await settle()
+        state.editorNewOpen()
+        expect(searchParams.values.get("serviceNew")).toBe("1")
+        state.draftFieldSet("id", "web")
+        state.draftFieldSet("domains", "web.example")
+        state.save()
+        await settle()
+        expect(submitted?.expectedRevision).toBe("r1")
+        expect(submitted?.services[2]?.caddy).not.toHaveProperty("port")
+        expect(state.services()[2]?.caddy?.port).toBe(3010)
+        expect(requests).toBe(2)
+        expect(searchParams.values.has("serviceNew")).toBe(false)
+        dispose()
+        resolve()
+      })
+    })
+  })
+
+  test("keeps the new-service form open when its ID is already taken", async () => {
+    await new Promise<void>((resolve) => {
+      createRoot(async (dispose) => {
+        let patches = 0
+        const state = projectServicesPanelStateCreate(
+          () => "leo",
+          () => "app",
+          {
+            client: async () => createResult({ project: project(), revision: "r1" }),
+            patchClient: async () => {
+              patches++
+              return createResult({ revision: "r2", changed: true })
+            },
+            searchParams: searchParamsCreate(),
+          },
+        )
+        await settle()
+        state.editorNewOpen()
+        state.draftFieldSet("id", "api")
+        state.draftFieldSet("domains", "api.example")
+        state.save()
+        await settle()
+        expect(patches).toBe(0)
+        expect(state.errorMessage()).toContain("bereits vergeben")
+        expect(state.draft()?.id).toBe("api")
+        dispose()
+        resolve()
+      })
+    })
+  })
+
+  test("sends an explicit new-service port unchanged without a reload", async () => {
+    await new Promise<void>((resolve) => {
+      createRoot(async (dispose) => {
+        let requests = 0
+        let port: number | undefined
+        const state = projectServicesPanelStateCreate(
+          () => "leo",
+          () => "app",
+          {
+            client: async () => {
+              requests++
+              return createResult({ project: project(), revision: "r1" })
+            },
+            patchClient: async (_owner, _name, input) => {
+              port = input.services[2]?.caddy?.port
+              return createResult({ revision: "r2", changed: true })
+            },
+            searchParams: searchParamsCreate(),
+          },
+        )
+        await settle()
+        state.editorNewOpen()
+        state.draftFieldSet("id", "web")
+        state.draftFieldSet("domains", "web.example")
+        state.draftFieldSet("port", "3011")
+        state.save()
+        await settle()
+        expect(port).toBe(3011)
+        expect(state.services()[2]?.caddy?.port).toBe(3011)
+        expect(requests).toBe(1)
+        dispose()
+        resolve()
+      })
+    })
+  })
+
+  test("opens a blank new-service draft from its URL query parameter", async () => {
+    await new Promise<void>((resolve) => {
+      createRoot(async (dispose) => {
+        const serviceNew = createSignalObject("1")
+        const state = projectServicesPanelStateCreate(
+          () => "leo",
+          () => "app",
+          {
+            client: async () => createResult({ project: project(), revision: "r1" }),
+            searchParams: {
+              get: (key) => (key === "serviceNew" ? serviceNew.get() : undefined),
+              set: (key, value) => {
+                if (key === "serviceNew") serviceNew.set(value ?? "")
+              },
+            },
+          },
+        )
+        await settle()
+        expect(state.creating()).toBe(true)
+        expect(state.draft()).toMatchObject({ id: "", port: "", domains: "" })
+        serviceNew.set("")
+        await settle()
+        expect(state.draft()).toBeUndefined()
         dispose()
         resolve()
       })

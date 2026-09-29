@@ -61,16 +61,25 @@ export function projectServicesPanelStateCreate(
   }
 
   const editorServiceId = () => searchParams.get("service")
+  const creating = () => searchParams.get("serviceNew") === "1"
+
+  const editorNewOpen = () => {
+    draft.set(projectServiceDraftFrom(undefined, ""))
+    searchParams.set("service", undefined)
+    searchParams.set("serviceNew", "1")
+  }
 
   const editorOpen = (serviceId: string) => {
     const service = services.get().find((candidate) => candidate.id === serviceId)
     draft.set(projectServiceDraftFrom(service, serviceId))
     searchParams.set("service", serviceId)
+    searchParams.set("serviceNew", undefined)
   }
 
   const editorClose = () => {
     draft.set(undefined)
     searchParams.set("service", undefined)
+    searchParams.set("serviceNew", undefined)
   }
 
   const draftFieldSet = (field: keyof ProjectServiceDraft, value: string | boolean) => {
@@ -82,10 +91,10 @@ export function projectServicesPanelStateCreate(
   const save = async () => {
     const current = draft.get()
     if (current === undefined || saving.get()) return
-    const appliedR = projectServiceDraftApply(services.get(), current)
+    const appliedR = projectServiceDraftApply(services.get(), current, creating())
     if (!appliedR.success) {
       errorMessage.set(appliedR.errorMessage)
-      errorHint.set("Prüfen Sie Port und Domains des Dienstes.")
+      errorHint.set("Prüfen Sie Dienst-ID, Port und Domains des Dienstes.")
       return
     }
     saving.set(true)
@@ -100,11 +109,15 @@ export function projectServicesPanelStateCreate(
         errorHint.set(result.hint ?? "Prüfen Sie Port- und Domain-Kollisionen und versuchen Sie es erneut.")
         return
       }
-      services.set(appliedR.data)
       revision.set(result.data.revision)
       errorMessage.set(undefined)
       errorHint.set(undefined)
       editorClose()
+      if (appliedR.data.some((service) => service.caddy !== null && service.caddy.port === undefined)) {
+        await load()
+      } else {
+        services.set(appliedR.data as ProjectServicesService[])
+      }
     } finally {
       if (mounted) saving.set(false)
     }
@@ -121,15 +134,23 @@ export function projectServicesPanelStateCreate(
 
   /** Opens the editor for a deep-linked or externally changed `service` query parameter. */
   createRenderEffect(
-    on(editorServiceId, (serviceId) => {
-      if (serviceId === undefined) {
-        pendingServiceId = undefined
-        draft.set(undefined)
-        return
-      }
-      if (draft.get()?.id === serviceId && pendingServiceId === undefined) return
-      draftSetFrom(serviceId)
-    }),
+    on(
+      () => [editorServiceId(), creating()] as const,
+      ([serviceId, isCreating]) => {
+        if (isCreating) {
+          pendingServiceId = undefined
+          draft.set(projectServiceDraftFrom(undefined, ""))
+          return
+        }
+        if (serviceId === undefined) {
+          pendingServiceId = undefined
+          draft.set(undefined)
+          return
+        }
+        if (draft.get()?.id === serviceId && pendingServiceId === undefined) return
+        draftSetFrom(serviceId)
+      },
+    ),
   )
 
   createRenderEffect(
@@ -178,7 +199,9 @@ export function projectServicesPanelStateCreate(
     errorHint: errorHint.get,
     empty: () => !loading.get() && errorMessage.get() === undefined && services.get().length === 0,
     draft: draft.get,
+    creating,
     editorServiceId,
+    editorNewOpen,
     editorOpen,
     editorClose,
     draftFieldSet,

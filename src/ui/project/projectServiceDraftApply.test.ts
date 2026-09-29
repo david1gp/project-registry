@@ -60,6 +60,27 @@ describe("projectServiceDraftApply", () => {
     expect(result.data[2]?.ownership).toBe("registry")
   })
 
+  test("omits a blank port for a new sibling while preserving existing ports", () => {
+    const result = projectServiceDraftApply(
+      services,
+      { ...projectServiceDraftFrom(undefined, "web"), domains: "WEB.example, api.example" },
+      true,
+    )
+    expect(result.success).toBe(true)
+    if (!result.success) return
+    expect(result.data[0]?.caddy?.port).toBe(3000)
+    expect(result.data[1]?.caddy?.port).toBe(3001)
+    expect(result.data[2]?.caddy).toMatchObject({ domains: ["web.example", "api.example"] })
+    expect(result.data[2]?.caddy).not.toHaveProperty("port")
+  })
+
+  test("rejects a duplicate new service ID rather than overwriting it", () => {
+    expect(
+      projectServiceDraftApply(services, { ...projectServiceDraftFrom(undefined, "api"), domains: "web.example" }, true)
+        .success,
+    ).toBe(false)
+  })
+
   test("defaults docs to disabled for new service schemas and drafts", () => {
     const parsed = v.safeParse(projectServicesSchema, {
       schemaVersion: 2,
