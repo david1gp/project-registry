@@ -17,11 +17,8 @@ export function projectServicesPatchApply(
   const existing = services.find((service) => service.id === serviceId)
 
   if (existing === undefined) {
-    if (caddy.port === undefined || caddy.domains === undefined || caddy.domains.length === 0) {
-      return createResultError(
-        op,
-        `Service ${serviceId} does not exist yet; provide --port and at least one --domain to add it.`,
-      )
+    if (caddy.domains === undefined || caddy.domains.length === 0) {
+      return createResultError(op, `Service ${serviceId} does not exist yet; provide at least one --domain to add it.`)
     }
     const added = {
       id: serviceId,

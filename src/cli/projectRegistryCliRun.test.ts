@@ -660,6 +660,66 @@ describe("projectRegistryCliRun", () => {
     })
   })
 
+  test("adds a selected service without a port and preserves existing siblings", async () => {
+    const bodies: unknown[] = []
+    const exitCode = await projectRegistryCliRun(
+      ["project", "edit", "site", "--service", "docs", "--domain", "docs.example"],
+      {
+        environment: { USER: "david" },
+        requestFetch: async (_input, init) => {
+          if (init?.method === "PATCH") {
+            bodies.push(typeof init.body === "string" ? JSON.parse(init.body) : undefined)
+            return Response.json({ success: true, data: mutation("edit") })
+          }
+          return Response.json({
+            success: true,
+            data: {
+              project: {
+                schemaVersion: 2,
+                owner: "david",
+                name: "site",
+                services: [
+                  {
+                    id: "api",
+                    units: ["api.service"],
+                    ownership: "external",
+                    caddy: { port: 4300, domains: ["api.example"] },
+                  },
+                  { id: "worker", units: ["worker.service"], ownership: "registry", caddy: null },
+                ],
+              },
+              revision: "current",
+            },
+          })
+        },
+        stdout: () => {},
+      },
+    )
+
+    expect(exitCode).toBe(0)
+    expect(bodies).toHaveLength(1)
+    expect(bodies[0]).toMatchObject({
+      expectedRevision: "current",
+      schemaVersion: 2,
+      services: [
+        {
+          id: "api",
+          units: ["api.service"],
+          ownership: "external",
+          caddy: { port: 4300, domains: ["api.example"] },
+        },
+        { id: "worker", units: ["worker.service"], ownership: "registry", caddy: null },
+        {
+          id: "docs",
+          units: [],
+          ownership: "registry",
+          caddy: { domains: ["docs.example"] },
+        },
+      ],
+    })
+    expect(bodies[0]).not.toHaveProperty("services.2.caddy.port")
+  })
+
   test("propagates --no-dns only on project create", async () => {
     const requests: Array<{ method: string; body?: unknown }> = []
     const exitCode = await projectRegistryCliRun(["project", "create", "--name", "site", "--no-dns"], {

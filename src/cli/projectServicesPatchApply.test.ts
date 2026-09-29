@@ -63,7 +63,7 @@ describe("projectServicesPatchApply", () => {
     expect(result).toMatchObject({ success: true, data: [{ id: "worker", caddy: null, ownership: "external" }] })
   })
 
-  test("adds a new service when port and domains are supplied", () => {
+  test("adds a new service with an explicit port and domains", () => {
     const result = projectServicesPatchApply(services, "docs", { port: 3009, domains: ["docs.example"] })
 
     expect(result.success).toBe(true)
@@ -72,11 +72,22 @@ describe("projectServicesPatchApply", () => {
     expect(result.data[2]).toMatchObject({ id: "docs", caddy: { port: 3009, domains: ["docs.example"] } })
   })
 
-  test("rejects adding an unknown service without port and domains", () => {
+  test("adds a new service with domains and omits its unspecified port", () => {
+    const result = projectServicesPatchApply(services, "docs", { domains: ["docs.example"] })
+
+    expect(result.success).toBe(true)
+    if (!result.success) return
+    expect(result.data).toHaveLength(3)
+    expect(result.data[2]?.caddy).toMatchObject({ domains: ["docs.example"] })
+    expect(result.data[2]?.caddy).not.toHaveProperty("port")
+    expect(result.data.slice(0, 2)).toEqual(services)
+  })
+
+  test("rejects adding an unknown service without domains", () => {
     const result = projectServicesPatchApply(services, "docs", { spa: true })
 
     expect(result.success).toBe(false)
     if (result.success) return
-    expect(result.errorMessage).toContain("does not exist yet")
+    expect(result.errorMessage).toContain("at least one --domain")
   })
 })
