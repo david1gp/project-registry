@@ -85,7 +85,7 @@ TAG="v$NEW_VERSION"
 git add "$CHANGELOG_FILE" "$PACKAGE_JSON"
 git commit -m "chore(release): v$NEW_VERSION"
 git tag -a "$TAG" -m "Release v$NEW_VERSION"
-git push origin main
+git push origin HEAD:main
 git push origin --tags
 
 # --- Step 8: Create GitHub release ---
