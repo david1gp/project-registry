@@ -92,7 +92,7 @@ function tokenStdin(value: string): ReadableStream<Uint8Array> {
 
 describe("projectRegistryCliRun", () => {
   test.each([
-    [["project", "list"], [project], "/projects"],
+    [["project", "list"], [project], "/api/v1/users/david/projects"],
     [["project", "get", "site-name"], project, "/projects/site-name"],
     [["project", "history", "site-name", "--limit", "2"], history, "/history?name=site-name&limit=2"],
     [["history"], history, "/history"],
