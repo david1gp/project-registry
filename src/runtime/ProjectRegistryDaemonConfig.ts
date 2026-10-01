@@ -6,6 +6,7 @@ export type ProjectRegistryDaemonConfig = {
   mode: "root" | "user"
   localDomains?: LocalDomainsOptions
   repositoryPath: string
+  docsPublicationDirectory: string
   repositoryBranch: string
   mappedUsers: readonly string[]
   defaultUserDomains: Readonly<Record<string, string>>

@@ -358,22 +358,28 @@ describe("projectRegistryDaemonConfigValidate", () => {
   test("defaults to root mode and requires user-mode identity and absolute runtime paths", () => {
     const rootR = projectRegistryDaemonConfigFromEnv({ PROJECT_REGISTRY_REPOSITORY_PATH: "/tmp/repository" })
     expect(rootR).toMatchObject({ success: true, data: { mode: "root", socketDirectory: "/run/project-registry" } })
-    expect(projectRegistryDaemonConfigFromEnv({
-      PROJECT_REGISTRY_REPOSITORY_PATH: "/tmp/repository",
-      PROJECT_REGISTRY_MODE: "unexpected",
-    }).success).toBe(false)
-    expect(projectRegistryDaemonConfigFromEnv({
-      PROJECT_REGISTRY_REPOSITORY_PATH: "/tmp/repository",
-      PROJECT_REGISTRY_MODE: "user",
-      USER: "  ",
-      XDG_RUNTIME_DIR: "/run/user/1000",
-    }).success).toBe(false)
-    expect(projectRegistryDaemonConfigFromEnv({
-      PROJECT_REGISTRY_REPOSITORY_PATH: "/tmp/repository",
-      PROJECT_REGISTRY_MODE: "user",
-      USER: "david",
-      XDG_RUNTIME_DIR: "run/user/1000",
-    }).success).toBe(false)
+    expect(
+      projectRegistryDaemonConfigFromEnv({
+        PROJECT_REGISTRY_REPOSITORY_PATH: "/tmp/repository",
+        PROJECT_REGISTRY_MODE: "unexpected",
+      }).success,
+    ).toBe(false)
+    expect(
+      projectRegistryDaemonConfigFromEnv({
+        PROJECT_REGISTRY_REPOSITORY_PATH: "/tmp/repository",
+        PROJECT_REGISTRY_MODE: "user",
+        USER: "  ",
+        XDG_RUNTIME_DIR: "/run/user/1000",
+      }).success,
+    ).toBe(false)
+    expect(
+      projectRegistryDaemonConfigFromEnv({
+        PROJECT_REGISTRY_REPOSITORY_PATH: "/tmp/repository",
+        PROJECT_REGISTRY_MODE: "user",
+        USER: "david",
+        XDG_RUNTIME_DIR: "run/user/1000",
+      }).success,
+    ).toBe(false)
     const userR = projectRegistryDaemonConfigFromEnv({
       PROJECT_REGISTRY_REPOSITORY_PATH: "/tmp/repository",
       PROJECT_REGISTRY_MODE: "user",
@@ -383,6 +389,30 @@ describe("projectRegistryDaemonConfigValidate", () => {
     expect(userR).toMatchObject({
       success: true,
       data: { mode: "user", mappedUsers: ["david"], socketDirectory: "/run/user/1000/project-registry" },
+    })
+  })
+
+  test("selects a writable XDG docs path in user mode and preserves the root default", () => {
+    const user = projectRegistryDaemonConfigFromEnv({
+      PROJECT_REGISTRY_REPOSITORY_PATH: "/tmp/repository",
+      PROJECT_REGISTRY_MODE: "user",
+      USER: "david",
+      HOME: "/home/david",
+      XDG_RUNTIME_DIR: "/run/user/1000",
+    })
+    expect(user).toMatchObject({
+      success: true,
+      data: { docsPublicationDirectory: "/home/david/.local/share/project-registry/docs" },
+    })
+    expect(
+      projectRegistryDaemonConfigFromEnv({
+        PROJECT_REGISTRY_REPOSITORY_PATH: "/tmp/repository",
+        PROJECT_REGISTRY_DOCS_DIRECTORY: "/srv/david/docs",
+      }),
+    ).toMatchObject({ success: true, data: { docsPublicationDirectory: "/srv/david/docs" } })
+    expect(projectRegistryDaemonConfigFromEnv({ PROJECT_REGISTRY_REPOSITORY_PATH: "/tmp/repository" })).toMatchObject({
+      success: true,
+      data: { docsPublicationDirectory: "/var/lib/project-registry-docs" },
     })
   })
 
@@ -398,14 +428,18 @@ describe("projectRegistryDaemonConfigValidate", () => {
       success: true,
       data: { cloudflareDns: { credentialsDirectory: "/home/david/.config/project-registry/cloudflare" } },
     })
-    expect(projectRegistryDaemonConfigFromEnv({ ...environment, XDG_CONFIG_HOME: "/home/david/config" })).toMatchObject({
-      success: true,
-      data: { cloudflareDns: { credentialsDirectory: "/home/david/config/project-registry/cloudflare" } },
-    })
-    expect(projectRegistryDaemonConfigFromEnv({
-      ...environment,
-      PROJECT_REGISTRY_CLOUDFLARE_CREDENTIALS_DIR: "/home/david/credentials",
-    })).toMatchObject({
+    expect(projectRegistryDaemonConfigFromEnv({ ...environment, XDG_CONFIG_HOME: "/home/david/config" })).toMatchObject(
+      {
+        success: true,
+        data: { cloudflareDns: { credentialsDirectory: "/home/david/config/project-registry/cloudflare" } },
+      },
+    )
+    expect(
+      projectRegistryDaemonConfigFromEnv({
+        ...environment,
+        PROJECT_REGISTRY_CLOUDFLARE_CREDENTIALS_DIR: "/home/david/credentials",
+      }),
+    ).toMatchObject({
       success: true,
       data: { cloudflareDns: { credentialsDirectory: "/home/david/credentials" } },
     })
@@ -423,7 +457,10 @@ describe("projectRegistryDaemonConfigValidate", () => {
     fakeFilesystem.entries.set("/run/user", { type: "directory", mode: 0o755, uid: 0, gid: 0 })
     fakeFilesystem.entries.set("/run/user/1000", { type: "directory", mode: 0o700, uid: runtimeUid, gid: runtimeUid })
     fakeFilesystem.entries.set("/run/user/1000/project-registry", {
-      type: "directory", mode: 0o700, uid: runtimeUid, gid: runtimeUid,
+      type: "directory",
+      mode: 0o700,
+      uid: runtimeUid,
+      gid: runtimeUid,
     })
     const daemonR = await projectRegistryDaemonOpen({
       config: config({ mode: "user", mappedUsers: [], socketDirectory: "/run/user/1000/project-registry" }),
@@ -432,14 +469,19 @@ describe("projectRegistryDaemonConfigValidate", () => {
       filesystem: fakeFilesystem.filesystem,
       serverFactory: fakeServers.factory,
       posix: {
-        isRoot: () => { throw new Error("must not check for root") },
+        isRoot: () => {
+          throw new Error("must not check for root")
+        },
         userResolve: async () => createResultError("test", "unused"),
       },
     })
     expect(daemonR.success).toBe(true)
     if (!daemonR.success) return
     expect((await daemonR.data.start()).success).toBe(true)
-    expect(fakeFilesystem.entries.get("/run/user/1000/project-registry")).toMatchObject({ uid: runtimeUid, mode: 0o700 })
+    expect(fakeFilesystem.entries.get("/run/user/1000/project-registry")).toMatchObject({
+      uid: runtimeUid,
+      mode: 0o700,
+    })
     await daemonR.data.shutdown()
   })
 

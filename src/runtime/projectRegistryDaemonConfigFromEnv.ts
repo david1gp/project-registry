@@ -31,6 +31,8 @@ export function projectRegistryDaemonConfigFromEnv(
     const values = environment as Environment
     const names = [
       "PROJECT_REGISTRY_REPOSITORY_PATH",
+      "PROJECT_REGISTRY_DOCS_DIRECTORY",
+      "XDG_DATA_HOME",
       "PROJECT_REGISTRY_MODE",
       "PROJECT_REGISTRY_LOCAL_DOMAINS_ENABLED",
       "PROJECT_REGISTRY_LOCAL_MKCERT_BINARY",
@@ -87,6 +89,7 @@ export function projectRegistryDaemonConfigFromEnv(
     const home = values.HOME?.trim()
     const runtimeDirectory = values.XDG_RUNTIME_DIR?.trim()
     const stateDirectory = values.XDG_STATE_HOME?.trim() || (home ? `${home}/.local/state` : undefined)
+    const dataDirectory = values.XDG_DATA_HOME?.trim() || (home ? `${home}/.local/share` : undefined)
     const configDirectory = values.XDG_CONFIG_HOME?.trim() || (home ? `${home}/.config` : undefined)
     const username = values.USER?.trim()
     if (mode === "user" && !username) {
@@ -176,12 +179,20 @@ export function projectRegistryDaemonConfigFromEnv(
           }
         : {}),
       repositoryPath,
+      docsPublicationDirectory:
+        values.PROJECT_REGISTRY_DOCS_DIRECTORY?.trim() ||
+        (mode === "user" && dataDirectory
+          ? `${dataDirectory}/project-registry/docs`
+          : "/var/lib/project-registry-docs"),
       repositoryBranch: values.PROJECT_REGISTRY_REPOSITORY_BRANCH,
-      mappedUsers: (values.PROJECT_REGISTRY_USERS ?? (mode === "user" ? username : undefined))?.split(",")
+      mappedUsers: (values.PROJECT_REGISTRY_USERS ?? (mode === "user" ? username : undefined))
+        ?.split(",")
         .map((user) => user.trim())
         .filter(Boolean),
       ...(defaultUserDomains === undefined ? {} : { defaultUserDomains }),
-      socketDirectory: values.PROJECT_REGISTRY_SOCKET_DIRECTORY ?? (mode === "user" ? `${runtimeDirectory}/project-registry` : undefined),
+      socketDirectory:
+        values.PROJECT_REGISTRY_SOCKET_DIRECTORY ??
+        (mode === "user" ? `${runtimeDirectory}/project-registry` : undefined),
       webListener: {
         hostname: values.PROJECT_REGISTRY_WEB_HOST ?? "127.0.0.1",
         port: webPort ?? 8080,

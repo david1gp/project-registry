@@ -1202,7 +1202,7 @@ export function projectRegistryDaemonCreate(options: ProjectRegistryDaemonOption
       repository: guardedRepository,
       caddyApplication,
       ...(accessLogSourceR?.success === true ? { projectAccessLogSource: accessLogSourceR.data } : {}),
-      docsPublicationStore: projectDocsPublicationStoreCreate(),
+      docsPublicationStore: projectDocsPublicationStoreCreate(config.docsPublicationDirectory),
       socketAccessResolve,
       configOptions: {
         httpsListener: config.httpsListener,

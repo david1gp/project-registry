@@ -152,6 +152,7 @@ export const projectRegistryDaemonConfigSchema = a.strictObject({
   mode: a.optional(a.picklist(["root", "user"]), "root"),
   localDomains: a.optional(localDomainsOptionsSchema),
   repositoryPath: absolutePathSchema,
+  docsPublicationDirectory: a.optional(absolutePathSchema, "/var/lib/project-registry-docs"),
   repositoryBranch: a.optional(branchSchema, "main"),
   mappedUsers: a.optional(
     a.pipe(
