@@ -162,7 +162,7 @@ describe("project-registryd production staging", () => {
       'install -o caddy -g caddy -m 0755 "$BUN_BIN" "$PROJECT_REGISTRY_BUN_RUNTIME_PATH"',
     )
     expect(installerSource).not.toContain('chown caddy:caddy "$PROJECT_REGISTRY_BUN_RUNTIME_PATH"')
-    expect(installerSource).toContain("/home/david/leo/leo-server/caddy/oidc/leonardomora.oidc.env")
+    expect(installerSource).toContain("/home/david/leo_internal/dev-servers/leo-server/caddy/oidc/leonardomora.oidc.env")
     expect(installerSource).toContain("-m 0640")
   })
 

@@ -43,19 +43,19 @@ Replace the Leo host's legacy `caddy-projects` daemon with `project-registry` wh
 - [x] 12. Resolve post-cutover validation blockers: stop periodic and startup no-change Caddy reloads, expose owner-aware read/write socket APIs with usable permissions, optimize aggregate history, and prove rollback through the production admin address before final cutover.
 - [x] 13. Replace the installed legacy `caddy-projects` CLI on Leo with a `project-registry` CLI using the active owner sockets, then remove the old CLI binary without changing the retained rollback daemon.
 - [x] 14. Move the public Project Registry route to `project-registry.leonardomora.de`, configure DNS if required, and validate TLS and the public route.
-- [x] 15. Update the Caddy-projects CLI instructions under `/home/david/personal/agents` to use the Project Registry CLI and its current commands/socket conventions.
+- [x] 15. Update the Caddy-projects CLI instructions under `/home/david/leo_internal/dev-servers/commands_and_skills/commands_shared` to use the Project Registry CLI and its current commands/socket conventions.
 
 ## Paths
 
 - `ops/migration/`
-- `/home/david/leo/leo-server/caddy/projects/`
-- `/home/david/leo/leo-server/caddy/generate.mjs`
-- `/home/david/leo/leo-server/caddy/install/`
-- `/home/david/leo/leo-server/caddy/service/`
-- `/home/david/leo/leo-server/caddy/oidc/leonardomora.oidc.env`
+- `/home/david/leo_internal/dev-servers/leo-server/caddy/projects/`
+- `/home/david/leo_internal/dev-servers/leo-server/caddy/generate.mjs`
+- `/home/david/leo_internal/dev-servers/leo-server/caddy/install/leoProjectRegistryInstallCli.ts`
+- `/home/david/leo_internal/dev-servers/leo-server/caddy/service/caddy.service`
+- `/home/david/leo_internal/dev-servers/leo-server/caddy/oidc/leonardomora.oidc.env`
 - `/home/david/leo/contentoren-server/caddy/config/Caddyfile`
 - `/home/david/leo/contentoren-server/shared/routes.json`
 - `/home/caddy/.local/share/caddy`
 - `/home/caddy/caddy-projects-history`
 - `/home/leo/projects/software/data/projects`
-- `/home/david/personal/agents/`
+- `/home/david/leo_internal/dev-servers/`

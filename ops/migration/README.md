@@ -247,9 +247,9 @@ in the non-secret daemon environment to disable DNS globally. For example:
 
 ```bash
 sudo env \
-  PROJECT_REGISTRY_CLOUDFLARE_LEO_SOURCE=/home/david/leo_internal/leo-server/env/env.conf \
-  PROJECT_REGISTRY_CLOUDFLARE_DAVID_SOURCE=/home/david/leo_internal/david-server/env/env.conf \
-  PROJECT_REGISTRY_CLOUDFLARE_FABIAN_SOURCE=/home/david/leo_internal/fabian-server/env/env.conf \
+  PROJECT_REGISTRY_CLOUDFLARE_LEO_SOURCE=/home/david/leo_internal/dev-servers/leo-server/env/env.conf \
+  PROJECT_REGISTRY_CLOUDFLARE_DAVID_SOURCE=/home/david/leo_internal/dev-servers/david-server/env/env.conf \
+  PROJECT_REGISTRY_CLOUDFLARE_FABIAN_SOURCE=/home/david/leo_internal/dev-servers/fabian-server/env/env.conf \
   PROJECT_REGISTRY_ZITADEL_SOURCE=/run/secrets/project-registry-zitadel.env \
   BUN_BIN=/home/david/.bun/bin/bun \
   PROJECT_REGISTRY_SOURCE=/home/david/adaptive/project-registry \
@@ -371,12 +371,12 @@ bash ops/migration/prepare-leo.bash --dry-run \
   --software-projects /home/david/leo/software/data/projects --software-owner leo \
   --candidate-output /tmp/project-registry-candidate.json \
   --caddy-admin-url http://127.0.0.1:2019/config/ \
-  --oidc-source /home/david/leo/leo-server/caddy/oidc/leonardomora.oidc.env \
+  --oidc-source /home/david/leo_internal/dev-servers/leo-server/caddy/oidc/leonardomora.oidc.env \
   --caddy-data-destination /home/caddy/.local/share/caddy \
   --caddy-backup-root /home/caddy/project-registry-caddy-backups \
   --caddy-binary-source /home/caddy/.local/bin/caddy \
   --caddy-binary-destination /home/caddy/.local/bin/caddy \
-  --caddy-unit-source /home/david/leo/leo-server/caddy/service/caddy.service \
+  --caddy-unit-source /home/david/leo_internal/dev-servers/leo-server/caddy/service/caddy.service \
   --caddy-unit-destination /etc/systemd/system/caddy.service \
   --caddy-config-destination /home/caddy/.config/caddy/caddy.json \
   --caddy-config-stage /home/caddy/project-registry-caddy-staging/caddy.json \
@@ -424,12 +424,12 @@ bash ops/migration/migrate-leo.bash prepare --dry-run \
   --software-projects /home/david/leo/software/data/projects --software-owner leo \
   --candidate-output /tmp/project-registry-candidate.json \
   --caddy-admin-url http://127.0.0.1:2019/config/ \
-  --oidc-source /home/david/leo/leo-server/caddy/oidc/leonardomora.oidc.env \
+  --oidc-source /home/david/leo_internal/dev-servers/leo-server/caddy/oidc/leonardomora.oidc.env \
   --caddy-data-destination /home/caddy/.local/share/caddy \
   --caddy-backup-root /home/caddy/project-registry-caddy-backups \
   --caddy-binary-source /home/caddy/.local/bin/caddy \
   --caddy-binary-destination /home/caddy/.local/bin/caddy \
-  --caddy-unit-source /home/david/leo/leo-server/caddy/service/caddy.service \
+  --caddy-unit-source /home/david/leo_internal/dev-servers/leo-server/caddy/service/caddy.service \
   --caddy-unit-destination /etc/systemd/system/caddy.service \
   --caddy-config-destination /home/caddy/.config/caddy/caddy.json \
   --caddy-config-stage /home/caddy/project-registry-caddy-staging/caddy.json \
