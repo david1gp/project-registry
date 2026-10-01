@@ -795,6 +795,35 @@ describe("projectRegistryDaemonCreate", () => {
     await daemonR.data.shutdown()
   })
 
+  test("root mode still requires the existing identity resolver for private sockets", async () => {
+    const fakeFilesystem = filesystemCreate()
+    const fakeServers = serverFactoryCreate(fakeFilesystem.entries)
+    const daemonR = await projectRegistryDaemonOpen({
+      config: config({ mappedUsers: ["david"] }),
+      repository: repository(),
+      caddyApplication: caddyApplication(),
+      filesystem: fakeFilesystem.filesystem,
+      serverFactory: fakeServers.factory,
+      posix: {
+        isRoot: () => true,
+        userResolve: async () => createResult({ username: "david", uid: 1000, gid: 1000 }),
+      },
+    })
+    expect(daemonR.success).toBe(true)
+    if (!daemonR.success) return
+    try {
+      expect((await daemonR.data.start()).success).toBe(true)
+      const unix = fakeServers.requests.find((entry) => entry.context.endsWith("/david.sock"))
+      expect(unix).toBeDefined()
+      if (unix === undefined) return
+      const response = await unix.fetch(new Request("http://localhost/api/v1/users/david/projects"))
+      expect(response.status).toBe(401)
+      expect(await response.json()).toMatchObject({ success: false, error: { code: "api.unauthenticated" } })
+    } finally {
+      await daemonR.data.shutdown()
+    }
+  })
+
   test("resolves current Unix roles for cross-owner access without trusting request headers", async () => {
     const fakeFilesystem = filesystemCreate()
     const fakeServers = serverFactoryCreate(fakeFilesystem.entries)

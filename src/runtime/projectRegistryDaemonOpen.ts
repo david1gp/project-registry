@@ -69,6 +69,9 @@ function socketAccessResolveCreate(
   browserAuth: ProjectRegistryDaemonBrowserAuth | undefined,
 ): ProjectRegistryDaemonOptions["socketAccessResolve"] {
   if (options.socketAccessResolve !== undefined) return options.socketAccessResolve
+  // User mode derives its owner-only actor from the verified private local socket,
+  // not from the browser/network identity directory.
+  if (config.mode === "user") return undefined
   if (config.zitadel === undefined || browserAuth === undefined) return undefined
   const serviceToken = config.zitadel.serviceToken
   return async (username) =>

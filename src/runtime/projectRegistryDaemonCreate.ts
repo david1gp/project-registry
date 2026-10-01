@@ -1156,10 +1156,46 @@ export function projectRegistryDaemonCreate(options: ProjectRegistryDaemonOption
       : config.caddyAccessLogRoot === undefined
         ? undefined
         : projectAccessLogSourceFileCreate({ root: config.caddyAccessLogRoot, maxRecords: 1_000 })
+  async function userSocketAccessResolve(username: string): PromiseResult<ProjectAccess> {
+    const op = "projectRegistryDaemonUserSocketAccessResolve"
+    if (!config.mappedUsers.includes(username)) return createResultError(op, "socket owner is not configured")
+    const userR = await posixUserResolve(username)
+    if (!userR.success) return userR
+    const record = socketRecords.get(username)
+    if (record === undefined || record.mapping.uid !== userR.data.uid || record.mapping.gid !== userR.data.gid) {
+      return createResultError(op, "verified local socket is unavailable")
+    }
+    try {
+      const directory = await safeLstat(config.socketDirectory)
+      const socket = await safeLstat(record.path)
+      if (
+        directory?.type !== "directory" ||
+        directory.uid !== userR.data.uid ||
+        (directory.mode & 0o7777) !== 0o700 ||
+        socket === undefined ||
+        !statIsSocketOwned(socket, userR.data) ||
+        !statModeIsPrivate(socket)
+      ) {
+        return createResultError(op, "local socket ownership or permissions are unavailable")
+      }
+    } catch (error) {
+      return createResultError(op, errorMessage(error))
+    }
+    // Bun's Unix listener has no peer-credential API. The private, validated
+    // owner-only socket/directory enforce the local UID boundary in the kernel.
+    // username comes exclusively from that listener's mapping, never headers.
+    return createResult({
+      actorResolve: async () => createResult({ subject: null, username, role: "own" as const }),
+      ownerRoleResolve: async (owner) => createResult(owner === username ? ("own" as const) : undefined),
+    })
+  }
+
   const socketAccessResolve =
     socketAccessResolveOption ??
-    (async (username: string) =>
-      createResultError("projectRegistryDaemonSocketAccessResolve", "socket actor role is unavailable", username))
+    (config.mode === "user"
+      ? userSocketAccessResolve
+      : async (username: string) =>
+          createResultError("projectRegistryDaemonSocketAccessResolve", "socket actor role is unavailable", username))
   const handler =
     requestHandlerOption ??
     projectRegistryApiHandlerCreate({
