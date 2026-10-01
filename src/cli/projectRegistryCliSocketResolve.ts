@@ -1,3 +1,4 @@
+import { isAbsolute, join } from "node:path"
 import { createResult, createResultError, type Result } from "#result"
 
 type SocketResolveError = Extract<Result<never>, { success: false }> & { hint: string }
@@ -38,5 +39,15 @@ export function projectRegistryCliSocketResolve(
       "USER is not safe for a project-registry socket path.",
       "Use a valid Unix username in USER or pass --socket <path>.",
     )
+  if (environment.PROJECT_REGISTRY_MODE === "user") {
+    const runtimeDirectory = environment.XDG_RUNTIME_DIR
+    if (runtimeDirectory === undefined || !isAbsolute(runtimeDirectory))
+      return socketResolveError(
+        op,
+        "XDG_RUNTIME_DIR must be an absolute path in user mode.",
+        "Set XDG_RUNTIME_DIR to an absolute runtime directory or pass --socket <path>.",
+      )
+    return createResult(join(runtimeDirectory, "project-registry", `${username}.sock`))
+  }
   return createResult(`/run/project-registry/${username}.sock`)
 }

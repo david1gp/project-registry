@@ -31,6 +31,11 @@ export function projectRegistryDaemonConfigFromEnv(
     const values = environment as Environment
     const names = [
       "PROJECT_REGISTRY_REPOSITORY_PATH",
+      "PROJECT_REGISTRY_MODE",
+      "PROJECT_REGISTRY_LOCAL_DOMAINS_ENABLED",
+      "PROJECT_REGISTRY_LOCAL_MKCERT_BINARY",
+      "PROJECT_REGISTRY_LOCAL_CERTIFICATES_STATE_DIRECTORY",
+      "PROJECT_REGISTRY_LOCAL_HOSTS_FILE",
       "PROJECT_REGISTRY_REPOSITORY_BRANCH",
       "PROJECT_REGISTRY_USERS",
       "PROJECT_REGISTRY_DEFAULT_USER_DOMAINS",
@@ -38,6 +43,7 @@ export function projectRegistryDaemonConfigFromEnv(
       "PROJECT_REGISTRY_WEB_HOST",
       "PROJECT_REGISTRY_CADDY_BINARY",
       "PROJECT_REGISTRY_CADDY_ADMIN_URL",
+      "PROJECT_REGISTRY_CADDY_BASE_CONFIG_PATH",
       "CADDY_USER",
       "CADDY_GROUP",
       "PROJECT_REGISTRY_CADDY_ACCESS_LOG_ROOT",
@@ -74,6 +80,22 @@ export function projectRegistryDaemonConfigFromEnv(
       return createResultError(op, "PROJECT_REGISTRY_REPOSITORY_PATH is required")
     }
 
+    const mode = values.PROJECT_REGISTRY_MODE ?? "root"
+    if (mode !== "root" && mode !== "user") {
+      return createResultError(op, "PROJECT_REGISTRY_MODE must be 'root' or 'user'")
+    }
+    const home = values.HOME?.trim()
+    const runtimeDirectory = values.XDG_RUNTIME_DIR?.trim()
+    const stateDirectory = values.XDG_STATE_HOME?.trim() || (home ? `${home}/.local/state` : undefined)
+    const configDirectory = values.XDG_CONFIG_HOME?.trim() || (home ? `${home}/.config` : undefined)
+    const username = values.USER?.trim()
+    if (mode === "user" && !username) {
+      return createResultError(op, "USER is required in user mode")
+    }
+    if (mode === "user" && (runtimeDirectory === undefined || !runtimeDirectory.startsWith("/"))) {
+      return createResultError(op, "XDG_RUNTIME_DIR must be an absolute path in user mode")
+    }
+
     const oidcR = caddyConfigOptionsFromEnv(values)
     if (!oidcR.success) return oidcR
     const portFrom = environmentInteger(values, "PROJECT_REGISTRY_PORT_FROM")
@@ -93,6 +115,7 @@ export function projectRegistryDaemonConfigFromEnv(
       "PROJECT_REGISTRY_CADDY_INITIALIZE_FROM_GENERATED_CONFIG",
     )
     const cloudflareDnsEnabled = environmentBoolean(values, "PROJECT_REGISTRY_CLOUDFLARE_DNS_ENABLED")
+    const localDomainsEnabled = environmentBoolean(values, "PROJECT_REGISTRY_LOCAL_DOMAINS_ENABLED")
     let defaultUserDomains: unknown
     const defaultUserDomainsValue = values.PROJECT_REGISTRY_DEFAULT_USER_DOMAINS?.trim()
     if (defaultUserDomainsValue !== undefined && defaultUserDomainsValue !== "") {
@@ -135,25 +158,37 @@ export function projectRegistryDaemonConfigFromEnv(
       (values.PROJECT_REGISTRY_GIT_PUSH !== undefined && gitPush === undefined) ||
       (values.PROJECT_REGISTRY_CADDY_INITIALIZE_FROM_GENERATED_CONFIG !== undefined &&
         initializeFromGeneratedConfig === undefined) ||
-      (values.PROJECT_REGISTRY_CLOUDFLARE_DNS_ENABLED !== undefined && cloudflareDnsEnabled === undefined)
+      (values.PROJECT_REGISTRY_CLOUDFLARE_DNS_ENABLED !== undefined && cloudflareDnsEnabled === undefined) ||
+      (values.PROJECT_REGISTRY_LOCAL_DOMAINS_ENABLED !== undefined && localDomainsEnabled === undefined)
     ) {
       return createResultError(op, "daemon environment contains an invalid number or boolean")
     }
 
     return projectRegistryDaemonConfigValidate({
+      mode,
+      ...(localDomainsEnabled === true
+        ? {
+            localDomains: {
+              mkcertBinary: values.PROJECT_REGISTRY_LOCAL_MKCERT_BINARY,
+              stateDirectory: values.PROJECT_REGISTRY_LOCAL_CERTIFICATES_STATE_DIRECTORY,
+              hostsFilePath: values.PROJECT_REGISTRY_LOCAL_HOSTS_FILE,
+            },
+          }
+        : {}),
       repositoryPath,
       repositoryBranch: values.PROJECT_REGISTRY_REPOSITORY_BRANCH,
-      mappedUsers: values.PROJECT_REGISTRY_USERS?.split(",")
+      mappedUsers: (values.PROJECT_REGISTRY_USERS ?? (mode === "user" ? username : undefined))?.split(",")
         .map((user) => user.trim())
         .filter(Boolean),
       ...(defaultUserDomains === undefined ? {} : { defaultUserDomains }),
-      socketDirectory: values.PROJECT_REGISTRY_SOCKET_DIRECTORY,
+      socketDirectory: values.PROJECT_REGISTRY_SOCKET_DIRECTORY ?? (mode === "user" ? `${runtimeDirectory}/project-registry` : undefined),
       webListener: {
         hostname: values.PROJECT_REGISTRY_WEB_HOST ?? "127.0.0.1",
         port: webPort ?? 8080,
       },
       caddyBinary: values.PROJECT_REGISTRY_CADDY_BINARY,
       caddyAdminUrl: values.PROJECT_REGISTRY_CADDY_ADMIN_URL,
+      caddyBaseConfigPath: values.PROJECT_REGISTRY_CADDY_BASE_CONFIG_PATH,
       caddyUser,
       caddyGroup,
       caddyAccessLogRoot,
@@ -182,12 +217,16 @@ export function projectRegistryDaemonConfigFromEnv(
       shutdownTimeoutMs,
       initializeFromGeneratedConfig,
       serverIp: values.SERVER_IP?.trim() || undefined,
-      serverIpCachePath: values.PROJECT_REGISTRY_SERVER_IP_CACHE_PATH?.trim() || undefined,
+      serverIpCachePath:
+        values.PROJECT_REGISTRY_SERVER_IP_CACHE_PATH?.trim() ||
+        (mode === "user" && stateDirectory ? `${stateDirectory}/project-registry/server-ip` : undefined),
       serverIpDiscoveryTimeoutMs,
       cloudflareDns: {
         enabled: cloudflareDnsEnabled !== false,
-        ...(values.PROJECT_REGISTRY_CLOUDFLARE_CREDENTIALS_DIR?.trim() === ""
-          ? {}
+        ...(!values.PROJECT_REGISTRY_CLOUDFLARE_CREDENTIALS_DIR?.trim()
+          ? mode === "user" && configDirectory
+            ? { credentialsDirectory: `${configDirectory}/project-registry/cloudflare` }
+            : {}
           : { credentialsDirectory: values.PROJECT_REGISTRY_CLOUDFLARE_CREDENTIALS_DIR?.trim() }),
       },
     })

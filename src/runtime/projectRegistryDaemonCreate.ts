@@ -426,6 +426,8 @@ export function projectRegistryDaemonCreate(options: ProjectRegistryDaemonOption
 
   async function ensureSocketDirectory(): Promise<Result<string>> {
     const directory = resolve(config.socketDirectory)
+    const userMode = config.mode === "user"
+    const runtimeUid = typeof process.getuid === "function" ? process.getuid() : -1
     const segments = directory.split("/").filter((segment) => segment !== "")
     let current = "/"
     try {
@@ -443,10 +445,15 @@ export function projectRegistryDaemonCreate(options: ProjectRegistryDaemonOption
             current,
           )
         }
-        if (current !== directory && (stat.uid !== 0 || (stat.mode & 0o022) !== 0)) {
+        if (
+          current !== directory &&
+          ((userMode ? stat.uid !== 0 && stat.uid !== runtimeUid : stat.uid !== 0) || (stat.mode & 0o022) !== 0)
+        ) {
           return createResultError(
             "projectRegistryDaemonSocketDirectory",
-            "socket directory ancestor must be root-owned and not group/world writable",
+            userMode
+              ? "socket directory ancestor must be root-owned or daemon-user-owned and not group/world writable"
+              : "socket directory ancestor must be root-owned and not group/world writable",
             current,
           )
         }
@@ -460,21 +467,26 @@ export function projectRegistryDaemonCreate(options: ProjectRegistryDaemonOption
         )
       }
       const directoryStat = await safeLstat(directory)
-      if (directoryStat === undefined || directoryStat.type !== "directory" || directoryStat.uid !== 0) {
+      if (
+        directoryStat === undefined ||
+        directoryStat.type !== "directory" ||
+        directoryStat.uid !== (userMode ? runtimeUid : 0)
+      ) {
         return createResultError(
           "projectRegistryDaemonSocketDirectory",
-          "socket directory must be a root-owned directory",
+          userMode ? "socket directory must be owned by the daemon user" : "socket directory must be root-owned",
           directory,
         )
       }
-      if ((directoryStat.mode & 0o7777) !== directoryMode) {
-        await filesystemChmodNoFollow(directory, directoryMode)
+      const desiredDirectoryMode = userMode ? 0o700 : directoryMode
+      if ((directoryStat.mode & 0o7777) !== desiredDirectoryMode) {
+        await filesystemChmodNoFollow(directory, desiredDirectoryMode)
         const corrected = await safeLstat(directory)
         if (
           corrected === undefined ||
           corrected.type !== "directory" ||
-          corrected.uid !== 0 ||
-          (corrected.mode & 0o7777) !== directoryMode
+          corrected.uid !== (userMode ? runtimeUid : 0) ||
+          (corrected.mode & 0o7777) !== desiredDirectoryMode
         ) {
           return createResultError(
             "projectRegistryDaemonSocketDirectory",
@@ -641,6 +653,17 @@ export function projectRegistryDaemonCreate(options: ProjectRegistryDaemonOption
           "user resolver returned a mismatched user",
           username,
         )
+      }
+      if (config.mode === "user") {
+        const runtimeUid = typeof process.getuid === "function" ? process.getuid() : -1
+        const runtimeGid = typeof process.getgid === "function" ? process.getgid() : -1
+        if (userR.data.uid !== runtimeUid || userR.data.gid !== runtimeGid) {
+          return createResultError(
+            "projectRegistryDaemonUserResolve",
+            "user mode can only create sockets for the daemon's own POSIX identity",
+            username,
+          )
+        }
       }
       return userR
     } catch (error) {

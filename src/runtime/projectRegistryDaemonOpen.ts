@@ -1,8 +1,12 @@
 import { createResult, createResultError, type PromiseResult, type Result } from "#result"
 import { projectAccessCreate } from "../access/projectAccessCreate.js"
 import { caddyApplicationCreate } from "../caddy/caddyApplicationCreate.js"
+import type { CaddyConfig } from "../caddy/CaddyConfig.js"
+import { caddyConfigBaseMerge } from "../caddy/caddyConfigBaseMerge.js"
+import { caddyConfigBaseRead } from "../caddy/caddyConfigBaseRead.js"
 import { caddyProcessRunnerAsUser } from "../caddy/caddyProcessRunnerAsUser.js"
 import { posixUserDirectoryCreate } from "../identity/posixUserDirectoryCreate.js"
+import { localDomainsCaddyConfigReconcileCreate } from "../local-domains/localDomainsCaddyConfigReconcileCreate.js"
 import { projectRepositoryOpen } from "../project-store/projectRepositoryOpen.js"
 import { sessionStoreCreate } from "../session/sessionStoreCreate.js"
 import { tokenReferenceStoreCreate } from "../session/tokenReferenceStoreCreate.js"
@@ -90,7 +94,7 @@ export async function projectRegistryDaemonOpen(
   if (!configR.success) return configR
 
   const posix = options.posix ?? projectRegistryDaemonPosixDefault()
-  if (options.requireRoot !== false) {
+  if (configR.data.mode === "root" && options.requireRoot !== false) {
     try {
       const root = posix.isRoot()
       if (!(await root)) return createResultError(op, "project-registryd must run as root")
@@ -100,9 +104,16 @@ export async function projectRegistryDaemonOpen(
   }
 
   const config = configR.data
+  const baseR =
+    config.caddyBaseConfigPath === undefined
+      ? createResult(undefined)
+      : await caddyConfigBaseRead(config.caddyBaseConfigPath)
+  if (!baseR.success) return baseR
+  const localReconcile =
+    config.localDomains === undefined ? undefined : localDomainsCaddyConfigReconcileCreate(config.localDomains)
   const caddyProcessRunner =
     options.caddyProcessRunner ??
-    (config.caddyUser === undefined || config.caddyGroup === undefined
+    (config.mode === "user" || config.caddyUser === undefined || config.caddyGroup === undefined
       ? undefined
       : caddyProcessRunnerAsUser(config.caddyUser, config.caddyGroup))
   const authR = identityDependenciesCreate(options, config, posix)
@@ -122,6 +133,18 @@ export async function projectRegistryDaemonOpen(
     options.caddyApplication === undefined
       ? caddyApplicationCreate({
           repository: repositoryR.data,
+          ...(baseR.data === undefined && localReconcile === undefined
+            ? {}
+            : {
+                configReconcile: async (generated, projects) => {
+                  // No baseline ownership is inferred from Registry/services metadata.
+                  // Runtime intentionally grants no managedHosts replacement authority.
+                  const mergedR = caddyConfigBaseMerge(generated, { baseConfig: baseR.data })
+                  if (!mergedR.success) return mergedR
+                  const merged = mergedR.data as unknown as CaddyConfig
+                  return localReconcile === undefined ? createResult(merged) : localReconcile(merged, projects)
+                },
+              }),
           configOptions: {
             httpsListener: config.httpsListener,
             oidc: config.oidc,
@@ -135,13 +158,19 @@ export async function projectRegistryDaemonOpen(
           intervalMs: config.regenerationIntervalMs,
           validationTimeoutMs: config.validationTimeoutMs,
           loadTimeoutMs: config.loadTimeoutMs,
-          initializeFromGeneratedConfig: config.initializeFromGeneratedConfig,
+          // Local reconciliation can introduce new versioned TLS paths at startup.
+          // Never assume those generated files are already loaded by Caddy.
+          initializeFromGeneratedConfig:
+            config.localDomains === undefined &&
+            config.caddyBaseConfigPath === undefined &&
+            config.initializeFromGeneratedConfig,
         })
       : createResult(options.caddyApplication)
   if (!caddyR.success) return caddyR
 
   return projectRegistryDaemonCreate({
     ...options,
+    requireRoot: config.mode === "user" ? false : options.requireRoot,
     config,
     repository: repositoryR.data,
     caddyApplication: caddyR.data,

@@ -1,7 +1,10 @@
 import type { CaddyConfigOptions } from "../caddy/caddyConfigOptionsSchema.js"
 import type { ProjectPortRange } from "../project/projectPortNext.js"
+import type { LocalDomainsOptions } from "../local-domains/localDomainsOptionsSchema.js"
 
 export type ProjectRegistryDaemonConfig = {
+  mode: "root" | "user"
+  localDomains?: LocalDomainsOptions
   repositoryPath: string
   repositoryBranch: string
   mappedUsers: readonly string[]
@@ -13,6 +16,7 @@ export type ProjectRegistryDaemonConfig = {
   }
   caddyBinary: string
   caddyAdminUrl: string
+  caddyBaseConfigPath?: string
   caddyUser?: string
   caddyGroup?: string
   caddyAccessLogRoot?: string

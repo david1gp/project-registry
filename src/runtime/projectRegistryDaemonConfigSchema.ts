@@ -2,6 +2,7 @@ import { isIP } from "node:net"
 import * as a from "valibot"
 import { projectAccessLogRootSchema } from "../access-log/projectAccessLogRootSchema.js"
 import { caddyConfigOptionsSchema } from "../caddy/caddyConfigOptionsSchema.js"
+import { localDomainsOptionsSchema } from "../local-domains/localDomainsOptionsSchema.js"
 
 const loopbackHostnameSchema = a.union([a.literal("127.0.0.1"), a.literal("::1")])
 
@@ -148,6 +149,8 @@ const cloudflareDnsSchema = a.strictObject({
 })
 
 export const projectRegistryDaemonConfigSchema = a.strictObject({
+  mode: a.optional(a.picklist(["root", "user"]), "root"),
+  localDomains: a.optional(localDomainsOptionsSchema),
   repositoryPath: absolutePathSchema,
   repositoryBranch: a.optional(branchSchema, "main"),
   mappedUsers: a.optional(
@@ -165,6 +168,7 @@ export const projectRegistryDaemonConfigSchema = a.strictObject({
   }),
   caddyBinary: a.optional(a.pipe(a.string(), a.minLength(1)), "caddy"),
   caddyAdminUrl: a.optional(a.pipe(a.string(), a.minLength(1)), "http://localhost:2019"),
+  caddyBaseConfigPath: a.optional(absolutePathSchema),
   caddyUser: a.optional(caddyServiceIdentitySchema),
   caddyGroup: a.optional(caddyServiceIdentitySchema),
   caddyAccessLogRoot: a.optional(projectAccessLogRootSchema),
