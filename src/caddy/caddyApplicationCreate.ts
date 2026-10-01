@@ -95,6 +95,7 @@ function caddyApplicationOptionsValues(options: unknown): CaddyApplicationOption
   const names = [
     "repository",
     "configOptions",
+    "configReconcile",
     "caddyBin",
     "adminUrl",
     "processRunner",
@@ -319,10 +320,14 @@ function caddyApplicationOptionsValidate(options: unknown): Result<CaddyApplicat
   if (values.clock !== undefined && !caddyApplicationCallable(values.clock)) {
     return createResultError(op, "clock must be a function")
   }
+  if (values.configReconcile !== undefined && !caddyApplicationCallable(values.configReconcile)) {
+    return createResultError(op, "configReconcile must be a function")
+  }
 
   return createResult({
     repository,
     configOptions: values.configOptions as CaddyApplicationOptions["configOptions"],
+    configReconcile: values.configReconcile as CaddyApplicationOptions["configReconcile"],
     caddyBin: values.caddyBin as CaddyApplicationOptions["caddyBin"],
     adminUrl: values.adminUrl as CaddyApplicationOptions["adminUrl"],
     processRunner: values.processRunner as CaddyApplicationOptions["processRunner"],
@@ -473,10 +478,16 @@ export function caddyApplicationCreate(options: unknown): Result<CaddyApplicatio
       lastAttempt: clock(),
       error: statusSequence === sequence ? undefined : status.error,
     }
-    const generatedR = caddyConfigGenerate(snapshot.projects, applicationOptions.configOptions)
+    let generatedR = caddyConfigGenerate(snapshot.projects, applicationOptions.configOptions)
     if (stopped) return stoppedResult()
     if (!generatedR.success) {
       return statusError(generatedR.errorMessage, snapshot, sequence)
+    }
+
+    if (applicationOptions.configReconcile !== undefined) {
+      generatedR = await applicationOptions.configReconcile(generatedR.data, snapshot.projects)
+      if (stopped) return stoppedResult()
+      if (!generatedR.success) return statusError(generatedR.errorMessage, snapshot, sequence)
     }
 
     const serializedR = caddyConfigSerialize(generatedR.data)

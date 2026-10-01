@@ -1,5 +1,12 @@
 export type CaddyConfig = {
   apps: {
+    tls?: {
+      [key: string]: unknown
+      certificates: {
+        [key: string]: unknown
+        load_files: Array<{ certificate: string; key: string; tags?: string[]; [key: string]: unknown }>
+      }
+    }
     http: {
       servers: {
         srv0: {
