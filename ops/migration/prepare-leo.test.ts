@@ -208,6 +208,30 @@ describe("Leo preparation", () => {
     }
   })
 
+  test("accepts a reviewed root unit snapshot without deriving a root state directory", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "project-registry-prepare-root-identity-"))
+    try {
+      const source = join(directory, "project-registry-source")
+      await mkdir(source, { recursive: true })
+      await Bun.write(join(source, "package.json"), "{}\n")
+      const result = await command(
+        "bash",
+        [preparationScript, "--dry-run", ...(await preparationArguments(directory))],
+        {
+          ...(Bun.env as Record<string, string>),
+          CADDY_SERVICE_IDENTITY_FILE: join(migrationDirectory, "fixtures", "caddy-service-identity", "root.properties"),
+        },
+      )
+
+      expect(result.exitCode).toBe(0)
+      expect(result.stdout).toContain("root:root")
+      expect(result.stdout).toContain("working directory=/home/caddy")
+      expect(result.stdout).not.toContain("/root")
+    } finally {
+      await rm(directory, { force: true, recursive: true })
+    }
+  })
+
   test("uses explicit OIDC values over conflicting ambient variables while staging Caddy state", async () => {
     const directory = await mkdtemp(join(tmpdir(), "project-registry-prepare-apply-"))
     const currentAdminConfig = { running: "caddy-admin-config" }
@@ -374,7 +398,8 @@ exec /usr/bin/install "\${filtered[@]}"
         INSTALL_BIN: fakeInstall,
         PARITY_BASELINE: join(directory, "parity-baseline.json"),
         REAL_BUN_BIN: process.execPath,
-        PRODUCTION_CADDY_BINARY: join(directory, "leo-caddy"),
+        PRODUCTION_CADDY_BINARY: join(directory, "validator-wrapper"),
+        PROJECT_REGISTRY_CADDY_BINARY: join(directory, "validator-wrapper"),
         PROJECT_REGISTRY_BUN_RUNTIME_PATH: join(directory, "stable", "bun"),
         OIDC_DESTINATION: liveOidcDestination,
         OIDC_ALIAS_DESTINATION: liveOidcAliasDestination,
@@ -578,6 +603,7 @@ esac
         BUN_BIN: fakeBun,
         SETCAP_BIN: fakeSetcap,
         PATH: `${fakeBin}:${Bun.env.PATH ?? ""}`,
+        CADDY_SERVICE_IDENTITY_FILE: caddyIdentityFixture,
       })
 
       expect(result.exitCode).toBe(23)

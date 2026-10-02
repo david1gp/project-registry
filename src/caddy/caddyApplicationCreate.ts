@@ -366,7 +366,8 @@ export function caddyApplicationCreate(options: unknown): Result<CaddyApplicatio
   let intervalHandle: unknown
   let intervalStarted = false
   let stopped = false
-  let stopPromise: Promise<void> | undefined
+  let stopPromise: PromiseResult<void> | undefined
+  let loadDrainR: Result<void> = createResult(undefined)
   const stopController = new AbortController()
   let retentionReconciliationDirty = false
   let triggerSequence = 0
@@ -548,13 +549,20 @@ export function caddyApplicationCreate(options: unknown): Result<CaddyApplicatio
         successfulCaddyLoad(snapshot, now, sequence)
         return createResult({ revision: snapshot.revision, changed: false, applied: true, attempts: retry + 1 })
       } else {
+        // A client cancellation is not an acknowledgement from Caddy. Keep the
+        // existing running work alive through /load; its own timeout is a drain
+        // failure, never evidence that the server finished applying the config.
+        const previousLoadDrainR = loadDrainR
+        loadDrainR = createResultError("caddyApplicationStop", "Caddy admin load completion was not acknowledged")
         const loadR = await caddyAdminLoad(generatedR.data, {
           adminUrl: applicationOptions.adminUrl,
           fetch: applicationOptions.fetch,
           timeoutMs: applicationOptions.loadTimeoutMs,
-          signal: stopController.signal,
           timer,
         })
+        // Retain earlier failures too: an unacknowledged request can still apply
+        // after a later request succeeds. A successful retry cannot prove drain.
+        loadDrainR = loadR.success ? previousLoadDrainR : createResultError("caddyApplicationStop", loadR.errorMessage)
         if (stopped) return stoppedResult()
         if (loadR.success) {
           const now = clock()
@@ -862,7 +870,7 @@ export function caddyApplicationCreate(options: unknown): Result<CaddyApplicatio
         operation.resolve(stoppedResult())
       }
       if (running !== undefined) work.push(running)
-      stopPromise = Promise.allSettled(work).then(() => undefined)
+      stopPromise = Promise.allSettled(work).then(() => loadDrainR)
       return stopPromise
     },
   }

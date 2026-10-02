@@ -8,6 +8,7 @@ import type { ProjectAccess } from "../access/ProjectAccess.js"
 import type { Role } from "../access/Role.js"
 import type { ProjectAccessLogSource } from "../access-log/ProjectAccessLogSource.js"
 import type { CaddyApplication } from "../caddy/CaddyApplication.js"
+import { caddyApplicationCreate } from "../caddy/caddyApplicationCreate.js"
 import type { ProjectRepository } from "../project-store/ProjectRepository.js"
 import { sessionCookieSerialize } from "../session/sessionCookieSerialize.js"
 import { sessionStoreCreate } from "../session/sessionStoreCreate.js"
@@ -277,6 +278,32 @@ describe("projectRegistryDaemonConfigValidate", () => {
       expect(result.success).toBe(true)
       if (result.success) expect(result.data.caddyAdminUrl).toBe(caddyAdminUrl)
     }
+  })
+
+  test("accepts named root Caddy identities while retaining paired identity validation", () => {
+    const rootR = projectRegistryDaemonConfigValidate({
+      repositoryPath: "/tmp/repository",
+      caddyUser: "root",
+      caddyGroup: "root",
+    })
+    expect(rootR).toMatchObject({ success: true, data: { caddyUser: "root", caddyGroup: "root" } })
+
+    for (const caddyUser of ["0", "root", "root;invalid", " root", "root "]) {
+      expect(projectRegistryDaemonConfigValidate({ repositoryPath: "/tmp/repository", caddyUser }).success).toBe(false)
+    }
+    for (const caddyGroup of ["0", "root", "root;invalid", " root", "root "]) {
+      expect(projectRegistryDaemonConfigValidate({ repositoryPath: "/tmp/repository", caddyGroup }).success).toBe(false)
+    }
+    expect(
+      projectRegistryDaemonConfigValidate({ repositoryPath: "/tmp/repository", caddyUser: "root" }).success,
+    ).toBe(false)
+    expect(
+      projectRegistryDaemonConfigValidate({ repositoryPath: "/tmp/repository", caddyGroup: "root" }).success,
+    ).toBe(false)
+    expect(
+      projectRegistryDaemonConfigValidate({ repositoryPath: "/tmp/repository", caddyUser: "caddy", caddyGroup: "caddy" })
+        .success,
+    ).toBe(true)
   })
 
   test("rejects remote Caddy admin hosts and credentials", () => {
@@ -1570,9 +1597,91 @@ describe("projectRegistryDaemonCreate", () => {
       op: "projectRegistryDaemonShutdown",
       errorMessage: "daemon shutdown degraded",
     })
+    expect(await daemonR.data.termination()).toEqual(shutdownR)
     expect(daemonR.data.healthLive().live).toBe(false)
     expect(fakeServers.stops()).toBe(1)
     caddyStopDeferred.resolve(undefined)
+  })
+
+  test("signal shutdown refuses new publishes immediately and awaits the Caddy load acknowledgement", async () => {
+    const fakeFilesystem = filesystemCreate()
+    const fakeServers = serverFactoryCreate(fakeFilesystem.entries)
+    const fakeSignals = signalsCreate()
+    const loadStarted = deferred<void>()
+    const response = deferred<Response>()
+    let signal: AbortSignal | null | undefined
+    let loads = 0
+    const applicationR = caddyApplicationCreate({
+      repository: repository(),
+      initializeFromGeneratedConfig: true,
+      timer: { wait: async () => undefined, setInterval: () => undefined, clearInterval: () => undefined },
+      processRunner: async () => createResult({ exitCode: 0, stdout: "", stderr: "" }),
+      fetch: async (_input, init) => {
+        loads += 1
+        signal = init.signal
+        loadStarted.resolve()
+        return response.promise
+      },
+    })
+    expect(applicationR.success).toBe(true)
+    if (!applicationR.success) return
+    const daemonR = projectRegistryDaemonCreate({
+      config: config({ shutdownTimeoutMs: 1000 }),
+      repository: repository(),
+      caddyApplication: applicationR.data,
+      filesystem: fakeFilesystem.filesystem,
+      serverFactory: fakeServers.factory,
+      signals: fakeSignals.signals,
+      requireRoot: false,
+    })
+    expect(daemonR.success).toBe(true)
+    if (!daemonR.success) return
+    expect((await daemonR.data.start()).success).toBe(true)
+    const active = applicationR.data.regenerate()
+    await loadStarted.promise
+    let terminated = false
+    void daemonR.data.termination().then(() => {
+      terminated = true
+    })
+
+    fakeSignals.listeners.SIGTERM[0]?.()
+    expect(daemonR.data.healthLive().state).toBe("stopping")
+    expect((await applicationR.data.regenerate()).success).toBe(false)
+    const unavailable = await fakeServers.requests[0]!.fetch(new Request("http://localhost/projects"))
+    expect(unavailable.status).toBe(503)
+    expect(terminated).toBe(false)
+    expect(signal?.aborted).toBe(false)
+    response.resolve(new Response("", { status: 200 }))
+    expect(await daemonR.data.termination()).toEqual(createResult(undefined))
+    expect(await daemonR.data.shutdown()).toEqual(createResult(undefined))
+    expect((await active).success).toBe(false)
+    expect(loads).toBe(1)
+  })
+
+  test("Caddy drain failure reaches signal termination and remains a failure on shutdown retry", async () => {
+    const fakeFilesystem = filesystemCreate()
+    const fakeServers = serverFactoryCreate(fakeFilesystem.entries)
+    const fakeSignals = signalsCreate()
+    const caddy = caddyApplication()
+    caddy.stop = async () => createResultError("caddyApplicationStop", "caddy admin load timed out")
+    const daemonR = projectRegistryDaemonCreate({
+      config: config(),
+      repository: repository(),
+      caddyApplication: caddy,
+      filesystem: fakeFilesystem.filesystem,
+      serverFactory: fakeServers.factory,
+      signals: fakeSignals.signals,
+      requireRoot: false,
+    })
+    expect(daemonR.success).toBe(true)
+    if (!daemonR.success) return
+    expect((await daemonR.data.start()).success).toBe(true)
+
+    fakeSignals.listeners.SIGTERM[0]?.()
+    const failure = createResultError("projectRegistryDaemonShutdown", "daemon shutdown degraded")
+    expect(await daemonR.data.termination()).toEqual(failure)
+    expect(await daemonR.data.shutdown()).toEqual(failure)
+    expect(fakeServers.stops()).toBe(1)
   })
 
   test("shares signal-triggered shutdown and removes signal handlers once", async () => {
@@ -1715,6 +1824,7 @@ describe("projectRegistryDaemonCreate", () => {
   test("bounds startup rollback while continuing listener cleanup", async () => {
     const fakeFilesystem = filesystemCreate()
     const caddyStopDeferred = deferred<void>()
+    const webStopped = deferred<void>()
     let timeoutCallback: (() => void) | undefined
     let webStops = 0
     const daemonR = projectRegistryDaemonCreate({
@@ -1734,6 +1844,7 @@ describe("projectRegistryDaemonCreate", () => {
         return {
           stop: () => {
             webStops += 1
+            webStopped.resolve()
           },
         }
       },
@@ -1758,6 +1869,7 @@ describe("projectRegistryDaemonCreate", () => {
     expect(timeoutCallback).toBeDefined()
     timeoutCallback?.()
     expect((await startPromise).success).toBe(false)
+    await webStopped.promise
     expect(webStops).toBe(1)
     caddyStopDeferred.resolve()
     expect((await daemonR.data.shutdown()).success).toBe(true)

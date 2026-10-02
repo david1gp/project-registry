@@ -75,7 +75,7 @@ const caddyServiceIdentitySchema = a.pipe(
   a.string(),
   a.minLength(1),
   a.maxLength(256),
-  a.check((value) => value !== "root" && value !== "0", "Caddy service identity must not be root"),
+  a.check((value) => value !== "0", "Caddy service identity must not be numeric root"),
   a.regex(/^(?:[0-9]+|[A-Za-z_][A-Za-z0-9_.@-]*\$?)$/, "Caddy service identity is invalid"),
 )
 

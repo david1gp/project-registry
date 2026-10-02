@@ -15,7 +15,6 @@ caddy_service_identity_value_validate() {
   local numeric
 
   [[ -n "$value" ]] || caddy_service_identity_fail "authoritative caddy.service has no concrete $kind identity"
-  [[ "$value" != root && "$value" != 0 ]] || caddy_service_identity_fail "authoritative caddy.service $kind identity must not be root"
   [[ "$value" =~ ^[0-9]+$ || "$value" =~ ^[A-Za-z_][A-Za-z0-9_.@-]*\$?$ ]] || \
     caddy_service_identity_fail "authoritative caddy.service $kind identity is not concrete: $value"
 
@@ -29,8 +28,13 @@ caddy_service_identity_value_validate() {
     numeric="${numeric#*:}"
     numeric="${numeric%%:*}"
   fi
-  [[ "$numeric" =~ ^[0-9]+$ && "$numeric" != 0 ]] || \
-    caddy_service_identity_fail "authoritative caddy.service $kind identity must resolve to a non-root ID: $value"
+  [[ "$numeric" =~ ^[0-9]+$ ]] || \
+    caddy_service_identity_fail "authoritative caddy.service $kind identity has an invalid resolved ID: $value"
+  if [[ "$value" == root ]]; then
+    [[ "$numeric" == 0 ]] || caddy_service_identity_fail "authoritative caddy.service $kind identity does not resolve to root: $value"
+  elif [[ "$numeric" == 0 ]]; then
+    caddy_service_identity_fail "authoritative caddy.service $kind identity unexpectedly resolves to root: $value"
+  fi
 }
 
 caddy_service_identity_load() {

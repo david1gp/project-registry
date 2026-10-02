@@ -241,26 +241,23 @@ identity_resolve() {
 
   [[ "$load_state" == loaded && "$active_state" == active ]] || \
     fail "effective caddy.service is not loaded and active"
-  [[ "$user" =~ ^[A-Za-z_][A-Za-z0-9_.@-]*\$?$ || "$user" =~ ^[1-9][0-9]*$ ]] || \
+  [[ "$user" =~ ^[A-Za-z_][A-Za-z0-9_.@-]*\$?$ || "$user" =~ ^[0-9]+$ ]] || \
     fail "effective caddy.service User is missing or invalid"
-  [[ "$group" =~ ^[A-Za-z_][A-Za-z0-9_.@-]*\$?$ || "$group" =~ ^[1-9][0-9]*$ ]] || \
+  [[ "$group" =~ ^[A-Za-z_][A-Za-z0-9_.@-]*\$?$ || "$group" =~ ^[0-9]+$ ]] || \
     fail "effective caddy.service Group is missing or invalid"
-  [[ "$user" != root && "$user" != 0 && "$group" != root && "$group" != 0 ]] || \
-    fail "effective caddy.service identity must be non-root"
-
-  if [[ "$user" =~ ^[1-9][0-9]*$ ]]; then
+  if [[ "$user" =~ ^[0-9]+$ ]]; then
     caddy_uid="$user"
   else
     caddy_uid="$(id -u -- "$user" 2>/dev/null)" || fail "effective caddy.service User cannot be resolved"
   fi
-  if [[ "$group" =~ ^[1-9][0-9]*$ ]]; then
+  if [[ "$group" =~ ^[0-9]+$ ]]; then
     caddy_gid="$group"
   else
     caddy_gid="$(getent group -- "$group" | awk -F: 'NR == 1 { print $3 }')" || \
       fail "effective caddy.service Group cannot be resolved"
   fi
-  [[ "$caddy_uid" =~ ^[1-9][0-9]*$ && "$caddy_gid" =~ ^[1-9][0-9]*$ ]] || \
-    fail "effective caddy.service identity must be non-root"
+  [[ "$caddy_uid" =~ ^[0-9]+$ && "$caddy_gid" =~ ^[0-9]+$ ]] || \
+    fail "effective caddy.service identity is invalid"
 }
 
 target_binding() {
@@ -317,12 +314,18 @@ entry_mode_owner_assert() {
   local uid gid mode
   [[ ! -L "$path" && -e "$path" ]] || fail "access-log path is missing or symbolic"
   IFS=: read -r uid gid mode < <(stat -c '%u:%g:%a' -- "$path") || fail "access-log path cannot be inspected"
-  [[ "$uid" == "$caddy_uid" && "$gid" == "$caddy_gid" && "$mode" == "$expected_mode" ]] || {
+  [[ "$mode" == "$expected_mode" ]] || {
     fail "access-log ownership or permissions are incorrect"
   }
+  if [[ "$caddy_uid" != 0 ]]; then
+    [[ "$uid" == "$caddy_uid" && "$gid" == "$caddy_gid" ]] || {
+      fail "access-log ownership or permissions are incorrect"
+    }
+  fi
 }
 
 root_validate() {
+  local probe
   no_symlink_ancestor_validate "$log_root" "Caddy access-log root"
   [[ -d "$log_root" && ! -L "$log_root" ]] || fail "Caddy access-log root is unavailable"
   entry_mode_owner_assert "$log_root" 700
@@ -330,6 +333,10 @@ root_validate() {
     [[ -d "$directory" && ! -L "$directory" ]] || fail "Caddy access-log hierarchy is incomplete"
     entry_mode_owner_assert "$directory" 700
   done
+  if [[ "$caddy_uid" == 0 ]]; then
+    probe="$(mktemp "$log_root/projects/.root-write-check.XXXXXX")" || fail "root Caddy cannot create access-log files"
+    rm -f -- "$probe" || fail "root Caddy access-log write check could not be cleaned up"
+  fi
 }
 
 project_id() {

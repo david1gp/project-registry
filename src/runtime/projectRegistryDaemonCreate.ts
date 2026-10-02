@@ -1217,17 +1217,20 @@ export function projectRegistryDaemonCreate(options: ProjectRegistryDaemonOption
         : {}),
       projectEditAfterPersistence: cloudflareDns.projectEditAfterPersistence,
       projectDeleteAfterPersistence: cloudflareDns.projectDeleteAfterPersistence,
+      caddyUser: config.caddyUser,
     })
 
   function caddyStop(): Promise<string[]> {
     if (!caddyStartAttempted) return Promise.resolve([])
     if (caddyStopPromise !== undefined) return caddyStopPromise
-    const current = Promise.resolve()
-      .then(() => caddyApplication.stop())
-      .then(
-        () => [],
-        (error) => [`Caddy application shutdown: ${errorMessage(error)}`],
-      )
+    const current = (async () => {
+      const stopR = await caddyApplication.stop()
+      // Preserve existing injected applications whose stop returns void.
+      return stopR !== undefined && !stopR.success ? [`Caddy application shutdown: ${stopR.errorMessage}`] : []
+    })().then(
+      (failures) => failures,
+      (error) => [`Caddy application shutdown: ${errorMessage(error)}`],
+    )
     caddyStopPromise = current
     void current.then(
       (failures) => {
@@ -1457,6 +1460,10 @@ export function projectRegistryDaemonCreate(options: ProjectRegistryDaemonOption
 
   function shutdown(): PromiseResult<void> {
     if (shutdownPromise !== undefined) return shutdownPromise
+    state = "stopping"
+    // Close publishing admission synchronously with shutdown, before queued
+    // handlers or timer callbacks get another turn. shutdownWork reuses this.
+    void caddyStop()
     shutdownSettled = false
     const current = Promise.resolve()
       .then(shutdownInternal)

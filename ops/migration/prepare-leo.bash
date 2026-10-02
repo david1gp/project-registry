@@ -42,6 +42,7 @@ CADDY_USER="${CADDY_USER:-}"
 CADDY_GROUP="${CADDY_GROUP:-}"
 CADDY_WORKING_DIRECTORY="${CADDY_WORKING_DIRECTORY:-/home/caddy}"
 CADDY_ACCESS_COMMAND="${CADDY_ACCESS_COMMAND:-/usr/sbin/runuser}"
+PROJECT_REGISTRY_CADDY_BINARY="${PROJECT_REGISTRY_CADDY_BINARY:-}"
 
 # shellcheck source=/dev/null
 source "$SCRIPT_DIR/caddy-service-identity.bash"
@@ -113,8 +114,9 @@ Options:
 
 Environment:
   BUN_BIN, INSTALL_BIN, SETCAP_BIN, GETCAP_BIN may override host tools.
-  CADDY_SERVICE_IDENTITY_FILE may inject a read-only User=/Group= fixture for tests.
+  CADDY_SERVICE_IDENTITY_FILE may inject an explicitly reviewed effective-unit snapshot for offline tests.
   CADDY_SERVICE_IDENTITY_OUTPUT may inject systemctl-show output for tests.
+  PROJECT_REGISTRY_CADDY_BINARY selects the same environment-pinning validator wrapper persisted by the installer.
 USAGE
 }
 
@@ -333,9 +335,9 @@ if [[ "$DRY_RUN" -eq 0 ]]; then
   command -v "$INSTALL_BIN" >/dev/null || { printf 'missing install: %s\n' "$INSTALL_BIN" >&2; exit 1; }
 fi
 
-# The live unit is the default read-only source. Tests may replace it with a
-# properties fixture or injected output; no service is started or reloaded.
-CADDY_SERVICE_IDENTITY_FILE="${CADDY_SERVICE_IDENTITY_FILE:-$CADDY_UNIT_DESTINATION}"
+# Production reads effective systemd properties (including drop-ins). Offline
+# tests must pass an explicitly reviewed snapshot; parsing the base unit is not
+# an authoritative substitute for systemd's merged configuration.
 caddy_service_identity_load
 
 CADDY_DATA_REALPATH="$(realpath -m "$CADDY_DATA_DESTINATION")"
@@ -647,7 +649,7 @@ fi
   "$BUN_BIN" run "$SCRIPT_DIR/caddy-semantic-parity.ts" \
     --legacy "$legacy_baseline_path" \
     --candidate "$PREPARATION_TEMP/candidate.json" \
-    --caddy-bin "$CADDY_BINARY_SOURCE" \
+    --caddy-bin "${PROJECT_REGISTRY_CADDY_BINARY:-$CADDY_BINARY_SOURCE}" \
     --caddy-user "$CADDY_USER" \
     --caddy-group "$CADDY_GROUP" \
     --caddy-access-command "$CADDY_ACCESS_COMMAND" \
@@ -697,7 +699,7 @@ PROJECT_REGISTRY_CONFIG_ROOT="$PROJECT_REGISTRY_CONFIG_ROOT" \
 PROJECT_REGISTRY_UNIT_PATH="$PROJECT_REGISTRY_UNIT_DESTINATION" \
 PROJECT_REGISTRY_OIDC_SOURCE="$OIDC_SOURCE" \
 PROJECT_REGISTRY_REPOSITORY_PATH="$MIGRATED_REPOSITORY" \
-PROJECT_REGISTRY_CADDY_BINARY="$CADDY_BINARY_DESTINATION" \
+PROJECT_REGISTRY_CADDY_BINARY="${PROJECT_REGISTRY_CADDY_BINARY:-$CADDY_BINARY_DESTINATION}" \
 CADDY_USER="$CADDY_USER" \
 CADDY_GROUP="$CADDY_GROUP" \
 CADDY_SERVICE_IDENTITY_OUTPUT="User=$CADDY_USER

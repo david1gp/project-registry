@@ -2250,20 +2250,23 @@ describe("caddyApplication", () => {
     expect(signal?.aborted).toBe(true)
   })
 
-  test("stops and resolves active admin load that ignores cancellation", async () => {
+  test("stop awaits an acknowledged admin load without cancelling it and rejects new publishes", async () => {
     let loadStarted: (() => void) | undefined
     const started = new Promise<void>((resolve) => {
       loadStarted = resolve
     })
     let signal: AbortSignal | null | undefined
+    const response = deferred<Response>()
+    let loads = 0
     const applicationR = caddyApplicationCreate({
       repository: { read: async () => createResult(snapshot("revision-active-load")) },
       maxRetries: 0,
       processRunner: async () => createResult({ exitCode: 0, stdout: "", stderr: "" }),
       fetch: async (_input, init) => {
+        loads += 1
         signal = init.signal
         loadStarted?.()
-        return new Promise<Response>(() => undefined)
+        return response.promise
       },
     })
     expect(applicationR.success).toBe(true)
@@ -2272,14 +2275,128 @@ describe("caddyApplication", () => {
     const active = applicationR.data.projectChange()
     await started
     const stopping = applicationR.data.stop()
+    let stopCompleted = false
+    void stopping.then(() => {
+      stopCompleted = true
+    })
 
     expect(await active).toEqual({
       success: false,
       op: "caddyApplication",
       errorMessage: "Caddy application stopped",
     })
-    await stopping
+    for (const publish of ["start", "startup", "regenerate", "projectChange"] as const) {
+      expect((await applicationR.data[publish]()).success).toBe(false)
+    }
+    expect(stopCompleted).toBe(false)
+    expect(signal?.aborted).toBe(false)
+    response.resolve(new Response("", { status: 200 }))
+    expect(await stopping).toEqual(createResult(undefined))
+    expect(stopCompleted).toBe(true)
+    expect(signal?.aborted).toBe(false)
+    expect(loads).toBe(1)
+  })
+
+  test("stop reports a drain failure for a hung admin load, even if it later responds", async () => {
+    const fakeTimer = timeoutTimerFake()
+    const loadStarted = deferred<void>()
+    const response = deferred<Response>()
+    let signal: AbortSignal | null | undefined
+    let loads = 0
+    const applicationR = caddyApplicationCreate({
+      repository: { read: async () => createResult(snapshot("revision-hung-load")) },
+      timer: fakeTimer.timer,
+      loadTimeoutMs: 5,
+      processRunner: async () => createResult({ exitCode: 0, stdout: "", stderr: "" }),
+      fetch: async (_input, init) => {
+        loads += 1
+        signal = init.signal
+        loadStarted.resolve()
+        return response.promise
+      },
+    })
+    expect(applicationR.success).toBe(true)
+    if (!applicationR.success) return
+
+    const active = applicationR.data.projectChange()
+    await loadStarted.promise
+    const stopping = applicationR.data.stop()
+    expect(signal?.aborted).toBe(false)
+    fakeTimer.fireTimeout()
+    const failure = createResultError("caddyApplicationStop", "caddy admin load timed out")
+    expect(await stopping).toEqual(failure)
+    expect((await active).success).toBe(false)
     expect(signal?.aborted).toBe(true)
+    response.resolve(new Response("", { status: 200 }))
+    expect(await applicationR.data.stop()).toEqual(failure)
+    expect(loads).toBe(1)
+  })
+
+  test("stop reports failed or disconnected admin loads rather than claiming successful drain", async () => {
+    for (const failure of ["http", "disconnect"] as const) {
+      const loadStarted = deferred<void>()
+      const response = deferred<Response>()
+      let loads = 0
+      const applicationR = caddyApplicationCreate({
+        repository: { read: async () => createResult(snapshot("revision-failed-load")) },
+        processRunner: async () => createResult({ exitCode: 0, stdout: "", stderr: "" }),
+        fetch: async () => {
+          loads += 1
+          loadStarted.resolve()
+          return response.promise
+        },
+      })
+      expect(applicationR.success).toBe(true)
+      if (!applicationR.success) return
+
+      const active = applicationR.data.projectChange()
+      await loadStarted.promise
+      const queued = applicationR.data.regenerate()
+      const stopping = applicationR.data.stop()
+      if (failure === "http") response.resolve(new Response("", { status: 503 }))
+      if (failure === "disconnect") response.reject(new Error("connection lost"))
+      expect(await stopping).toEqual(
+        createResultError(
+          "caddyApplicationStop",
+          failure === "http" ? "caddy admin load failed (status 503)" : "caddy admin load request failed",
+        ),
+      )
+      expect((await active).success).toBe(false)
+      expect((await queued).success).toBe(false)
+      expect(loads).toBe(1)
+    }
+  })
+
+  test("a successful later load does not erase an earlier unacknowledged load from the drain result", async () => {
+    const fakeTimer = timeoutTimerFake()
+    const loadStarted = deferred<void>()
+    let loads = 0
+    const applicationR = caddyApplicationCreate({
+      repository: { read: async () => createResult(snapshot("revision-recovered-load")) },
+      timer: fakeTimer.timer,
+      maxRetries: 0,
+      processRunner: async () => createResult({ exitCode: 0, stdout: "", stderr: "" }),
+      fetch: async () => {
+        loads += 1
+        if (loads === 1) {
+          loadStarted.resolve()
+          return new Promise<Response>(() => undefined)
+        }
+        return new Response("", { status: 200 })
+      },
+    })
+    expect(applicationR.success).toBe(true)
+    if (!applicationR.success) return
+
+    const first = applicationR.data.projectChange()
+    await loadStarted.promise
+    fakeTimer.fireTimeout()
+    expect((await first).success).toBe(false)
+    expect((await applicationR.data.regenerate()).success).toBe(true)
+    expect(await applicationR.data.stop()).toEqual(
+      createResultError("caddyApplicationStop", "caddy admin load timed out"),
+    )
+    expect(loads).toBe(2)
   })
 
   test("stops during a retry wait and rejects queued work deterministically", async () => {

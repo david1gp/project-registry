@@ -62,7 +62,7 @@ describe("project-registryd production staging", () => {
     }
   })
 
-  test("accepts only a matching non-root authoritative Caddy identity", async () => {
+  test("accepts named root and matching non-root authoritative Caddy identities", async () => {
     const identityScript = join(migrationDirectory, "caddy-service-identity.bash")
     const run = async (fixture: string, configured: Record<string, string> = {}) =>
       command(
@@ -77,6 +77,20 @@ describe("project-registryd production staging", () => {
           ...(Bun.env as Record<string, string>),
           CADDY_SERVICE_IDENTITY_FILE: join(identityFixtureDirectory, fixture),
           ...configured,
+        },
+      )
+    const runOutput = async (output: string) =>
+      command(
+        "bash",
+        [
+          "-c",
+          '. "$1"; caddy_service_identity_load; printf \'%s:%s\\n\' "$CADDY_USER" "$CADDY_GROUP"',
+          "bash",
+          identityScript,
+        ],
+        {
+          ...(Bun.env as Record<string, string>),
+          CADDY_SERVICE_IDENTITY_OUTPUT: output,
         },
       )
 
@@ -96,10 +110,102 @@ describe("project-registryd production staging", () => {
     expect(mismatching.exitCode).toBe(1)
     expect(mismatching.stderr).toContain("mismatches caddy.service User")
 
-    for (const fixture of ["missing.properties", "root.properties"]) {
+    const root = await run("root.properties")
+    expect(root.exitCode).toBe(0)
+    expect(root.stdout).toBe("root:root\n")
+
+    const numericRoot = await runOutput("User=0\nGroup=0\n")
+    expect(numericRoot.exitCode).toBe(1)
+    expect(numericRoot.stderr).toContain("identity unexpectedly resolves to root: 0")
+
+    for (const fixture of ["missing.properties"]) {
       const result = await run(fixture)
       expect(result.exitCode).toBe(1)
       expect(result.stderr).toContain("authoritative caddy.service")
+    }
+  })
+
+  test("reads named root identity from effective systemctl properties", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "project-registry-systemctl-identity-"))
+    const identityScript = join(migrationDirectory, "caddy-service-identity.bash")
+    const systemctl = join(directory, "systemctl")
+
+    try {
+      await Bun.write(systemctl, '#!/bin/sh\nprintf "User=root\\nGroup=root\\n"\n')
+      await chmod(systemctl, 0o755)
+
+      const result = await command(
+        "bash",
+        [
+          "-c",
+          '. "$1"; caddy_service_identity_load; printf \'%s:%s\\n\' "$CADDY_USER" "$CADDY_GROUP"',
+          "bash",
+          identityScript,
+        ],
+        {
+          ...(Bun.env as Record<string, string>),
+          CADDY_SYSTEMCTL: systemctl,
+        },
+      )
+
+      expect(result.exitCode).toBe(0)
+      expect(result.stdout).toBe("root:root\n")
+    } finally {
+      await rm(directory, { force: true, recursive: true })
+    }
+  })
+
+  test("persists the chosen Caddy identity and binary with logging disabled", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "project-registry-root-identity-"))
+    try {
+      const source = join(directory, "source")
+      const oidc = join(directory, "oidc.env")
+      const bun = join(directory, "bun")
+      const cloudflare = join(directory, "cloudflare.env")
+      const tools = join(directory, "tools")
+      await mkdir(tools, { recursive: true })
+      await mkdir(source, { recursive: true })
+      await Bun.write(join(source, "package.json"), "{}\n")
+      await Bun.write(oidc, "PROJECT_REGISTRY_OIDC_CLIENT_ID=id\nPROJECT_REGISTRY_OIDC_CLIENT_SECRET=secret\nPROJECT_REGISTRY_OIDC_COOKIE_SECRET=cookie\n")
+      await Bun.write(bun, "#!/bin/sh\nset -eu\nif [ \"$1\" = \"--version\" ]; then exit 0; fi\nmkdir -p dist node_modules\nprintf daemon > dist/daemon.js\nprintf '{}' > node_modules/package.json\n")
+      await chmod(bun, 0o755)
+      await Bun.write(cloudflare, "CLOUDFLARE_API_TOKEN=fixture-token\n")
+      await Bun.write(join(tools, "id"), '#!/bin/sh\nif [ "$1" = "-u" ]; then printf \'0\\n\'; else exec /usr/bin/id "$@"; fi\n')
+      await Bun.write(join(tools, "chown"), "#!/bin/sh\nexit 0\n")
+      await Bun.write(
+        join(tools, "install"),
+        '#!/bin/bash\nset -euo pipefail\nargs=()\nwhile (($#)); do case "$1" in -o|-g) shift 2;; *) args+=("$1"); shift;; esac; done\nexec /usr/bin/install "${args[@]}"\n',
+      )
+      for (const tool of ["id", "chown", "install"]) await chmod(join(tools, tool), 0o755)
+
+      const configRoot = join(directory, "config")
+      const result = await command("bash", [installer, "--apply"], {
+        ...(Bun.env as Record<string, string>),
+        BUN_BIN: bun,
+        PROJECT_REGISTRY_SOURCE: source,
+        PROJECT_REGISTRY_OIDC_SOURCE: oidc,
+        PROJECT_REGISTRY_INSTALL_ROOT: join(directory, "install"),
+        PROJECT_REGISTRY_CONFIG_ROOT: configRoot,
+        PROJECT_REGISTRY_UNIT_PATH: join(directory, "unit", "project-registryd.service"),
+        PROJECT_REGISTRY_BUN_RUNTIME_PATH: join(directory, "stable", "bun"),
+        PROJECT_REGISTRY_CADDY_BINARY: "/usr/local/libexec/project-registry-caddy",
+        PROJECT_REGISTRY_CADDY_ACCESS_LOG_ROOT: "",
+        PROJECT_REGISTRY_CLOUDFLARE_LEO_SOURCE: cloudflare,
+        PROJECT_REGISTRY_CLOUDFLARE_DAVID_SOURCE: cloudflare,
+        PROJECT_REGISTRY_CLOUDFLARE_FABIAN_SOURCE: cloudflare,
+        PROJECT_REGISTRY_LEGACY_CLOUDFLARE_PATH: join(directory, "legacy.env"),
+        PROJECT_REGISTRY_LEGACY_CLOUDFLARE_DROPIN_PATH: join(directory, "legacy.conf"),
+        CADDY_SERVICE_IDENTITY_FILE: join(identityFixtureDirectory, "root.properties"),
+        PATH: `${tools}:${Bun.env.PATH ?? "/usr/bin:/bin"}`,
+      })
+
+      expect(result.exitCode, `${result.stdout}\n${result.stderr}`).toBe(0)
+      const environment = await readFile(join(configRoot, "project-registryd.env"), "utf8")
+      expect(environment).toContain("PROJECT_REGISTRY_CADDY_BINARY=/usr/local/libexec/project-registry-caddy\n")
+      expect(environment).toContain("CADDY_USER=root\nCADDY_GROUP=root\n")
+      expect(environment).not.toContain("PROJECT_REGISTRY_CADDY_ACCESS_LOG_ROOT=")
+    } finally {
+      await rm(directory, { force: true, recursive: true })
     }
   })
 

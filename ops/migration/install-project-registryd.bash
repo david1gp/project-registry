@@ -203,6 +203,7 @@ if [[ "$DRY_RUN" -eq 1 ]]; then
   else
     printf 'dry-run: Caddy access logging remains disabled (PROJECT_REGISTRY_CADDY_ACCESS_LOG_ROOT is unset)\n'
   fi
+  printf 'dry-run: would persist Caddy subprocess identity %s:%s and binary %s independent of logging\n' "$CADDY_USER" "$CADDY_GROUP" "$CADDY_BINARY_PATH"
   printf 'dry-run: would install unit into %s (mode 0644), repository=%s, Caddy=%s\n' "$UNIT_PATH" "$REPOSITORY_PATH" "$CADDY_BINARY_PATH"
   printf 'dry-run: no service operation will be performed\n'
   exit 0
@@ -372,9 +373,9 @@ if [[ -n "$PROJECT_REGISTRY_CLOUDFLARE_DNS_ENABLED" ]]; then
 fi
 if [[ -n "$PROJECT_REGISTRY_CADDY_ACCESS_LOG_ROOT" ]]; then
   printf 'PROJECT_REGISTRY_CADDY_ACCESS_LOG_ROOT=%s\n' "$PROJECT_REGISTRY_CADDY_ACCESS_LOG_ROOT" >> "$environment_stage"
-  printf 'CADDY_USER=%s\n' "$CADDY_USER" >> "$environment_stage"
-  printf 'CADDY_GROUP=%s\n' "$CADDY_GROUP" >> "$environment_stage"
 fi
+printf 'CADDY_USER=%s\n' "$CADDY_USER" >> "$environment_stage"
+printf 'CADDY_GROUP=%s\n' "$CADDY_GROUP" >> "$environment_stage"
 "$INSTALL_BIN" -o root -g root -m 0640 "$environment_stage" "$CONFIG_ROOT/project-registryd.env"
 normalize_oidc_environment "$oidc_stage"
 "$INSTALL_BIN" -o root -g root -m 0600 "$oidc_stage" "$OIDC_TARGET"
