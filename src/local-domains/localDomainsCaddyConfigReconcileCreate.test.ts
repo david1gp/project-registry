@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test"
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
+import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { createResult } from "#result"
 import { caddyConfigGenerateFixtures } from "../../test/fixtures/caddyConfigGenerateFixtures.js"
@@ -13,7 +14,7 @@ const baseline = "127.0.0.1 localhost\n192.0.2.1 preserved.example\n"
 const timer = { wait: async () => undefined, setInterval: () => 1, clearInterval: () => undefined }
 
 async function harnessCreate() {
-  const root = await mkdtemp("/tmp/opencode/registry-local-wiring-")
+  const root = await mkdtemp(join(tmpdir(), "registry-local-wiring-"))
   const options = {
     mkcertBinary: "/test/mkcert",
     stateDirectory: join(root, "certificates"),

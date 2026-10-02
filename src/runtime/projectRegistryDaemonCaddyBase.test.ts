@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test"
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
+import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { createResult, createResultError } from "#result"
 import { caddyConfigGenerateFixtures } from "../../test/fixtures/caddyConfigGenerateFixtures.js"
@@ -36,7 +37,7 @@ test("preserved JSON environment is optional in root mode and rejects invalid pa
 })
 
 test("daemon preserves 78 baseline routes and TLS tags, certificates cover the merged host union, deletion needs no ownership history", async () => {
-  const root = await mkdtemp("/tmp/opencode/registry-base-compose-")
+  const root = await mkdtemp(join(tmpdir(), "registry-base-compose-"))
   const hosts = Array.from({ length: 78 }, (_, index) => `baseline-${index}.dev`)
   const base = {
     apps: {
@@ -189,7 +190,7 @@ test("daemon preserves 78 baseline routes and TLS tags, certificates cover the m
 })
 
 test("daemon rejects unreadable, malformed and non-object preserved JSON before opening a repository", async () => {
-  const root = await mkdtemp("/tmp/opencode/registry-base-invalid-")
+  const root = await mkdtemp(join(tmpdir(), "registry-base-invalid-"))
   try {
     const path = join(root, "base.json")
     for (const body of [undefined, "not JSON", "[]", "null"]) {
@@ -206,7 +207,7 @@ test("daemon rejects unreadable, malformed and non-object preserved JSON before 
 })
 
 test("base-only root mode does not enable mkcert or hosts and retains imported TLS unchanged", async () => {
-  const root = await mkdtemp("/tmp/opencode/registry-base-optout-")
+  const root = await mkdtemp(join(tmpdir(), "registry-base-optout-"))
   const base = {
     apps: {
       tls: {

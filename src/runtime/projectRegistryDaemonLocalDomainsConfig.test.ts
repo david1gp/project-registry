@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test"
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
+import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { createResult, createResultError } from "#result"
 import { caddyConfigGenerateFixtures } from "../../test/fixtures/caddyConfigGenerateFixtures.js"
@@ -73,7 +74,7 @@ test("local hosts configuration rejects /etc targets and version-relative paths"
 })
 
 test("daemon open composes local reconcilers and always loads new startup TLS even with generated-config initialization enabled", async () => {
-  const root = await mkdtemp("/tmp/opencode/registry-local-daemon-")
+  const root = await mkdtemp(join(tmpdir(), "registry-local-daemon-"))
   const localDomains = {
     mkcertBinary: "/test/mkcert-not-executed",
     stateDirectory: join(root, "certificates"),
