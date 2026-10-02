@@ -303,6 +303,7 @@ async function commandRequest(
     command.kind !== "project-create" &&
     command.kind !== "project-edit" &&
     command.kind !== "project-delete" &&
+    command.kind !== "project-fix-acl" &&
     command.kind !== "project-delete-by-port" &&
     command.kind !== "docs" &&
     command.kind !== "docs-local" &&
@@ -326,6 +327,15 @@ async function commandRequest(
   const ownerR = ownerResolve(environment)
   if (!ownerR.success) return ownerR
   const ownerPath = encodeURIComponent(ownerR.data)
+
+  if (command.kind === "project-fix-acl") {
+    return projectRegistryCliRequest(
+      socketPath,
+      `/api/v1/users/${ownerPath}/projects/${encodeURIComponent(command.name)}/fix-acl`,
+      { method: "POST" },
+      requestFetch,
+    )
+  }
 
   if (
     command.kind === "user-default-domain-get" ||

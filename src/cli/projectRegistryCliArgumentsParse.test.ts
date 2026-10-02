@@ -45,6 +45,7 @@ describe("projectRegistryCliArgumentsParse", () => {
       { kind: "project-edit", name: "site", service: "api", ownership: "registry", caddy: {} },
     ],
     [["project", "delete", "site"], { kind: "project-delete", name: "site" }],
+    [["project", "fix-acl", "site"], { kind: "project-fix-acl", name: "site" }],
     [["delete", "--port", "4321"], { kind: "project-delete-by-port", port: 4321 }],
     [["delete", "--port=4321"], { kind: "project-delete-by-port", port: 4321 }],
     [["project", "history", "site"], { kind: "project-history", name: "site", limit: undefined }],

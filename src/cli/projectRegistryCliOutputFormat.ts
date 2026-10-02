@@ -90,6 +90,13 @@ const accessLogPageSchema = a.object({
   partial: a.boolean(),
   malformedLines: a.pipe(a.number(), a.integer(), a.minValue(0)),
 })
+const projectAclRepairSchema = a.object({
+  roots: a.array(a.object({
+    root: a.string(),
+    entries: a.pipe(a.number(), a.integer(), a.minValue(0)),
+    skipped: a.optional(a.literal("caddy-root")),
+  })),
+})
 const backendVersionSchema = a.object({ version: a.string() })
 
 function dataParse<TSchema extends a.BaseSchema<unknown, unknown, a.BaseIssue<unknown>>>(
@@ -202,6 +209,11 @@ export function projectRegistryCliOutputFormat(
     if (!parsedR.success) return parsedR
     parsedData = parsedR.data
   }
+  if (command.kind === "project-fix-acl") {
+    const parsedR = dataParse(projectAclRepairSchema, data, "project ACL repair")
+    if (!parsedR.success) return parsedR
+    parsedData = parsedR.data
+  }
   if (command.kind === "backend-version") {
     const parsedR = dataParse(backendVersionSchema, data, "version")
     if (!parsedR.success) return parsedR
@@ -292,6 +304,14 @@ export function projectRegistryCliOutputFormat(
     if (page.partial) lines.push("Partial: yes")
     if (page.malformedLines > 0) lines.push(`Malformed lines: ${page.malformedLines}`)
     return createResult(`${lines.join("\n")}\n`)
+  }
+  if (command.kind === "project-fix-acl") {
+    const repair = parsedData as a.InferOutput<typeof projectAclRepairSchema>
+    return createResult(
+      `${repair.roots.map(({ root, entries, skipped }) => skipped === "caddy-root"
+        ? `ACL repair unnecessary: Caddy runs as root (${root})`
+        : `repaired ${root} (${entries} entries)`).join("\n")}\n`,
+    )
   }
   if (command.kind === "backend-version") {
     const versions = parsedData as { backend: string; cli: string; library: string }

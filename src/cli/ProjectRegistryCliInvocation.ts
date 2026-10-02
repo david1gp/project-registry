@@ -36,6 +36,7 @@ export type ProjectRegistryCliInvocation = {
         clearLabels?: boolean
       }
     | { kind: "project-delete"; name: string }
+    | { kind: "project-fix-acl"; name: string }
     | { kind: "project-delete-by-port"; port: number }
     | { kind: "project-history"; name: string; limit?: number }
     | { kind: "project-access-logs"; name: string; owner?: string; limit?: number; before?: string }

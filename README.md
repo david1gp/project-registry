@@ -56,6 +56,21 @@ DELETE /api/v1/users/:owner/default-domain
 `PUT` accepts `{ "expectedRevision": "...", "domain": "example.com" }`; `DELETE` accepts `{ "expectedRevision": "..." }`.
 The `GET` response reports the effective `domain`, its `source` (`explicit`, `environment`, or `none`), and the registry `revision`. JSON CLI output preserves the complete response or mutation data, including the revision.
 
+## Project static ACL repair
+
+Repair Caddy's filesystem access for all static service roots in a project with the authenticated daemon API:
+
+```bash
+project-registry project fix-acl <name>
+```
+
+The CLI reports each repaired root and entry count. If Caddy runs as root, repair is unnecessary and the CLI says so;
+the daemon does not inspect or modify the filesystem in that mode. Non-root repair currently supports the `caddy`
+identity; another configured non-root identity fails explicitly before filesystem access. The daemon authorizes the
+project owner and derives filesystem roots from its canonical static services; the CLI accepts no filesystem paths.
+Use `--json` for the structured per-root results. API errors (including projects without static services and individual
+ACL failures) are returned with their actionable message and optional hint.
+
 ## Publishing documentation
 
 From a registered project directory, `docs <path>` requests the document from the project matched to the current directory. If the current directory is not inside a registered project path, the CLI reads the Markdown file (relative paths are resolved from the current directory) and publishes it to the owner's managed `docs` project at `docs.<owner default-domain>`:

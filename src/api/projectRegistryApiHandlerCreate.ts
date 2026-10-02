@@ -22,8 +22,10 @@ import { projectEdit } from "../project/projectEdit.js"
 import { projectGetUseCase } from "../project/projectGetUseCase.js"
 import { projectHistory } from "../project/projectHistory.js"
 import { projectListUseCase } from "../project/projectListUseCase.js"
+import { projectLocalCaddyEntries } from "../project/projectLocalCaddyEntries.js"
 import { projectOrganize } from "../project/projectOrganize.js"
 import { projectOwnerAuthorize } from "../project/projectOwnerAuthorize.js"
+import { projectStaticAclRepair, type ProjectStaticAclRepairOptions } from "../project/projectStaticAclRepair.js"
 import type { ProjectPortRange } from "../project/projectPortNext.js"
 import type { ProjectRepository } from "../project-store/ProjectRepository.js"
 import type { ProjectRepositoryMutation } from "../project-store/ProjectRepositoryMutation.js"
@@ -40,6 +42,8 @@ type ApiHandlerOptions = {
   portRange?: ProjectPortRange
   defaultUserDomains?: Readonly<Record<string, string>>
   projectAccessLogSource?: ProjectAccessLogSource
+  projectStaticAclRepair?: typeof projectStaticAclRepair
+  caddyUser?: string
   docsPublicationStore?: ProjectDocsPublicationStore
   cloudflareCredentials?: Pick<ProjectRegistryDaemonCloudflareCredentials, "tokenSet">
   socketAccessResolve?: ProjectRegistryDaemonSocketAccessResolve
@@ -56,6 +60,7 @@ type ApiRoute =
   | { kind: "project"; legacy: boolean; owner?: string; name: string }
   | { kind: "project-by-port"; legacy: true; port: number }
   | { kind: "access-logs"; legacy: false; owner: string; name: string }
+  | { kind: "fix-acl"; legacy: false; owner: string; name: string }
   | { kind: "self-access-logs"; legacy: false; name: string }
   | { kind: "history"; legacy: boolean; owner?: string; name?: string }
   | { kind: "config"; legacy: boolean }
@@ -93,9 +98,11 @@ const apiFailureStatus: Record<string, number> = {
   "documentation.invalid-path": 400,
   "documentation.url-generation-failed": 500,
   "platform.internal": 500,
+  "projects.acl-repair-failed": 500,
   "projects.conflict": 409,
   "projects.disabled": 409,
   "projects.forbidden": 403,
+  "projects.no-static-services": 409,
   "projects.not-found": 404,
   "projects.revision-conflict": 409,
   "request.invalid": 400,
@@ -231,6 +238,14 @@ function routeParse(path: string): ApiRoute | undefined {
     return { kind: "access-logs", legacy: false, owner, name }
   }
 
+  const versionedFixAcl = path.match(/^\/api\/v1\/users\/([^/]+)\/projects\/([^/]+)\/fix-acl$/)
+  if (versionedFixAcl !== null) {
+    const owner = segmentDecode(versionedFixAcl[1]!, ownerPattern)
+    const name = segmentDecode(versionedFixAcl[2]!, projectNamePattern)
+    if (owner === undefined || name === undefined) return undefined
+    return { kind: "fix-acl", legacy: false, owner, name }
+  }
+
   const selfAccessLogs = path.match(/^\/api\/v1\/projects\/([^/]+)\/access-logs$/)
   if (selfAccessLogs !== null) {
     const name = segmentDecode(selfAccessLogs[1]!, projectNamePattern)
@@ -302,6 +317,7 @@ function routeRequiresProjectAccess(route: ApiRoute): boolean {
     route.kind === "project" ||
     route.kind === "project-by-port" ||
     route.kind === "access-logs" ||
+    route.kind === "fix-acl" ||
     route.kind === "self-access-logs" ||
     route.kind === "history" ||
     route.kind === "config" ||
@@ -412,6 +428,7 @@ function accessLogErrorResponse(result: ResultFailure): Response {
 }
 
 function routeMethods(route: ApiRoute): readonly string[] {
+  if (route.kind === "fix-acl") return ["POST"]
   if (route.kind === "projects") return route.legacy ? ["GET"] : ["GET", "POST"]
   if (route.kind === "organization") return ["POST"]
   if (route.kind === "docs") return ["GET"]
@@ -1266,6 +1283,75 @@ export function projectRegistryApiHandlerCreate(options: ApiHandlerOptions): Pro
       )
       if (!logsR.success) return accessLogErrorResponse(logsR)
       return successResponse(logsR.data)
+    }
+
+    if (route.kind === "fix-acl") {
+      const projectR = await projectGetUseCase(useCaseOptions, { owner, name: route.name })
+      if (!projectR.success) return resultErrorResponse(projectR, false, "projects")
+      // Use the same local-route selector as Caddy generation: external and
+      // Pages-only services are not served by this daemon's Caddy instance.
+      const staticEntries = projectLocalCaddyEntries(projectR.data.project).filter(
+        ({ caddy }) => !caddy.disabled && caddy.kind === "static",
+      )
+      const roots = new Set<string>()
+      for (const { caddy } of staticEntries) {
+        roots.add(caddy.path)
+        if (caddy.docs !== true || !caddy.docsPath) continue
+
+        // An explicit docsPath is a second Caddy filesystem root. Reject an
+        // out-of-scope configured path before repairing any of the roots.
+        const parts = caddy.docsPath.slice(1).split("/")
+        if (
+          !caddy.docsPath.startsWith("/") ||
+          caddy.docsPath.includes("\0") ||
+          parts.some((part) => !part || part === "." || part === "..") ||
+          parts[0] !== "home" ||
+          parts[1] !== owner ||
+          !((parts[2] === "projects" && parts.length > 3) || (parts[2] === "wiki" && parts.length >= 3))
+        ) {
+          return errorResponse(
+            {
+              code: "projects.acl-repair-failed",
+              message: `ACL repair failed for ${caddy.docsPath}: static root outside owner projects/wiki`,
+              op: "projectRegistryApiFixAcl",
+              status: 500,
+            },
+            false,
+          )
+        }
+        roots.add(caddy.docsPath)
+      }
+      if (roots.size === 0) {
+        return errorResponse(
+          {
+            code: "projects.no-static-services",
+            message: "This project has no static Caddy services to repair.",
+            op: "projectRegistryApiFixAcl",
+            status: 409,
+          },
+          false,
+        )
+      }
+      const results = []
+      for (const root of roots) {
+        const repairedR = await (options.projectStaticAclRepair ?? projectStaticAclRepair)(owner, root, undefined, {
+          caddyUser: options.caddyUser,
+        } satisfies ProjectStaticAclRepairOptions)
+        if (!repairedR.success) {
+          const completedRoots = results.map(({ root: completedRoot }) => completedRoot)
+          return errorResponse(
+            {
+              code: "projects.acl-repair-failed",
+              message: `Partial ACL repair (completed roots: ${completedRoots.length ? completedRoots.join(", ") : "none"}; failing root: ${root}): ${repairedR.errorMessage}`,
+              op: repairedR.op,
+              status: 500,
+            },
+            false,
+          )
+        }
+        results.push(repairedR.data)
+      }
+      return successResponse({ roots: results })
     }
 
     if (request.method !== "GET" && route.kind === "projects") {

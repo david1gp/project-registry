@@ -470,6 +470,19 @@ export function projectRegistryCliArgumentsParse(args: readonly string[]): Resul
   }
   if (
     subject === "project" &&
+    action === "fix-acl" &&
+    value !== undefined &&
+    extra.length === 0 &&
+    limit === undefined &&
+    !hasMutationOptions &&
+    !hasAccessLogOptions &&
+    !hasHttp
+  ) {
+    if (!projectNamePattern.test(value)) return projectNameError(op)
+    return createResult({ command: { kind: "project-fix-acl", name: value }, json, socket })
+  }
+  if (
+    subject === "project" &&
     action === "get" &&
     value !== undefined &&
     extra.length === 0 &&

@@ -356,6 +356,97 @@ describe("projectRegistryCliRun", () => {
     ])
   })
 
+  test("repairs static service roots through the authenticated owner POST route", async () => {
+    const requests: Array<{ path: string; method: string; unix: string | undefined }> = []
+    const stdout: string[] = []
+    const roots = [
+      { root: "/home/david/projects/site/public", entries: 5 },
+      { root: "/home/david/wiki/site", entries: 2 },
+    ]
+    const exitCode = await projectRegistryCliRun(
+      ["project", "fix-acl", "site", "--socket", "/run/project-registry/custom.sock"],
+      {
+        environment: { USER: "david" },
+        requestFetch: async (input, init) => {
+          requests.push({
+            path: new URL(String(input)).pathname,
+            method: init?.method ?? "GET",
+            unix: (init as (RequestInit & { unix?: string }) | undefined)?.unix,
+          })
+          return Response.json({ success: true, data: { roots } })
+        },
+        stdout: (text) => stdout.push(text),
+      },
+    )
+
+    expect(exitCode).toBe(0)
+    expect(requests).toEqual([
+      {
+        path: "/api/v1/users/david/projects/site/fix-acl",
+        method: "POST",
+        unix: "/run/project-registry/custom.sock",
+      },
+    ])
+    expect(stdout.join("")).toBe(
+      "repaired /home/david/projects/site/public (5 entries)\nrepaired /home/david/wiki/site (2 entries)\n",
+    )
+  })
+
+  test("preserves actionable ACL API errors", async () => {
+    const stderr: string[] = []
+    const exitCode = await projectRegistryCliRun(["project", "fix-acl", "site"], {
+      environment: { USER: "david" },
+      requestFetch: async () =>
+        Response.json(
+          {
+            success: false,
+            error: {
+              code: "projects.no-static-services",
+              message: "This project has no static Caddy services to repair.",
+              op: "projectRegistryApiFixAcl",
+              status: 409,
+              hint: "Add a static service, then retry.",
+            },
+          },
+          { status: 409 },
+        ),
+      stderr: (text) => stderr.push(text),
+    })
+
+    expect(exitCode).toBe(1)
+    expect(stderr.join("")).toBe(
+      "error: This project has no static Caddy services to repair.\nhint: Add a static service, then retry.\n",
+    )
+  })
+
+  test("reports that ACL repair is unnecessary when Caddy runs as root", async () => {
+    const stdout: string[] = []
+    const exitCode = await projectRegistryCliRun(["project", "fix-acl", "site"], {
+      environment: { USER: "david" },
+      requestFetch: async () => Response.json({
+        success: true,
+        data: { roots: [{ root: "/home/david/projects/site/public", entries: 0, skipped: "caddy-root" }] },
+      }),
+      stdout: (text) => stdout.push(text),
+      stderr: () => {},
+    })
+    expect(exitCode).toBe(0)
+    expect(stdout.join("")).toBe("ACL repair unnecessary: Caddy runs as root (/home/david/projects/site/public)\n")
+  })
+
+  test("emits structured per-root ACL results as JSON", async () => {
+    const stdout: string[] = []
+    const roots = [{ root: "/home/david/projects/site/public", entries: 3 }]
+    const exitCode = await projectRegistryCliRun(["project", "fix-acl", "site", "--json"], {
+      environment: { USER: "david" },
+      requestFetch: async () => Response.json({ success: true, data: { roots } }),
+      stdout: (text) => stdout.push(text),
+    })
+
+    expect(exitCode).toBe(0)
+    expect(JSON.parse(stdout.join(""))).toEqual({ success: true, data: { roots } })
+  })
+
   test("formats complete access-log records for humans and JSON", async () => {
     const human: string[] = []
     const humanExit = await projectRegistryCliRun(["project", "access-logs", "site"], {
@@ -1317,6 +1408,7 @@ describe("projectRegistryCliRun", () => {
     expect(requests).toBe(0)
     expect(output.join("")).toContain("Usage: project-registry")
     expect(output.join("")).toContain("delete --port <port>")
+    expect(output.join("")).toContain("project fix-acl <name>")
     expect(output.join("")).toContain("--label <KEY=VALUE>")
     expect(output.join("")).toContain("--remove-label <KEY>")
     expect(output.join("")).toContain("--clear-labels")
@@ -1352,7 +1444,7 @@ describe("projectRegistryCliRun", () => {
     const tableOut: string[] = []
     const exitTable = await projectRegistryCliRun(
       ["project", "list", "--section", "adaptive"],
-      runOptions(projects, [], tableOut),
+      runOptions(projects, [], tableOut, []),
     )
     expect(exitTable).toBe(0)
     expect(tableOut.join("")).toContain("authworks-site")

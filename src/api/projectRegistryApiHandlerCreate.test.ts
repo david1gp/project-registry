@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test"
 import { mkdtempSync, rmSync } from "node:fs"
+import { tmpdir } from "node:os"
 import { join } from "node:path"
 import type { GitStoreCommitInfo } from "#git-store"
 import { createResult, createResultError, createResultErrorCode, type Result } from "#result"
@@ -15,6 +16,7 @@ import type {
 } from "../access-log/ProjectAccessLogSource.js"
 import type { CaddyApplication } from "../caddy/CaddyApplication.js"
 import { caddyConfigGenerate } from "../caddy/caddyConfigGenerate.js"
+import { projectRegistryCliRequest } from "../cli/projectRegistryCliRequest.js"
 import { projectDocsPublicationStoreCreate } from "../docs/projectDocsPublicationStoreCreate.js"
 import type { Project } from "../project/Project.js"
 import type { ProjectKey } from "../project/projectKey.js"
@@ -24,6 +26,7 @@ import type { ProjectRepositoryMutation } from "../project-store/ProjectReposito
 import type { ProjectRepositoryTransactionOptions } from "../project-store/ProjectRepositoryTransactionOptions.js"
 import { projectRepositoryOpen } from "../project-store/projectRepositoryOpen.js"
 import type { ProjectRegistryDaemonRequestContext } from "../runtime/ProjectRegistryDaemonRequestContext.js"
+import { projectRegistryDaemonServerDefault } from "../runtime/projectRegistryDaemonServerDefault.js"
 import type { UserDefaultDomainMutation } from "../user-default-domain/UserDefaultDomainMutation.js"
 import { projectRegistryApiHandlerCreate as projectRegistryApiHandlerCreateProduction } from "./projectRegistryApiHandlerCreate.js"
 
@@ -366,6 +369,319 @@ afterEach(() => {
     const directory = temporaryDirectories.pop()
     if (directory !== undefined) rmSync(directory, { recursive: true, force: true })
   }
+})
+
+describe("project static ACL repair API", () => {
+  const path = "/api/v1/users/david/projects/david-app/fix-acl"
+  const root = "/home/david/projects/app"
+
+  test("root Caddy identity acknowledges repair without invoking ACL tools", async () => {
+    const handler = projectRegistryApiHandlerCreate({
+      repository: repositoryCreate(),
+      caddyApplication: caddyApplicationCreate(),
+      caddyUser: "root",
+    })
+    const result = await requestJson(handler, path, { transport: "unix", username: "david" }, "POST")
+    expect(result.response.status).toBe(200)
+    expect(result.body).toMatchObject({ success: true, data: { roots: [{ root, entries: 0, skipped: "caddy-root" }] } })
+  })
+
+  test("returns a delayed ACL repair result over a real Bun Unix socket after the default idle timeout", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "project-registry-acl-timeout-"))
+    const socket = join(directory, "daemon.sock")
+    let repairs = 0
+    const handler = projectRegistryApiHandlerCreate({
+      repository: repositoryCreate(),
+      caddyApplication: caddyApplicationCreate(),
+      projectStaticAclRepair: async (_owner, staticRoot) => {
+        repairs += 1
+        await new Promise<void>((resolve) => setTimeout(resolve, 11_000))
+        return createResult({ root: staticRoot, entries: 1 })
+      },
+    })
+    let server: Awaited<ReturnType<ReturnType<typeof projectRegistryDaemonServerDefault>>> | undefined
+    try {
+      server = await projectRegistryDaemonServerDefault()({
+        unix: socket,
+        fetch: (request) => handler(request, { transport: "unix", username: "david" }),
+      })
+      const result = await projectRegistryCliRequest(socket, path, { method: "POST" })
+      expect(result).toEqual(createResult({ roots: [{ root, entries: 1 }] }))
+      expect(repairs).toBe(1)
+    } finally {
+      await Promise.resolve(server?.stop({ closeActiveConnections: true }))
+      rmSync(directory, { recursive: true, force: true })
+    }
+  }, 20_000)
+
+  test("requires authentication and project owner authorization before invoking the helper", async () => {
+    const calls: string[] = []
+    const handler = projectRegistryApiHandlerCreate({
+      repository: repositoryCreate(),
+      caddyApplication: caddyApplicationCreate(),
+      projectStaticAclRepair: async (_owner, staticRoot) => {
+        calls.push(staticRoot)
+        return createResult({ root: staticRoot, entries: 1 })
+      },
+    })
+    const anonymous = await requestJson(handler, path, { transport: "http" }, "POST")
+    const otherOwner = await requestJson(handler, path, { transport: "unix", username: "leo" }, "POST")
+    const missing = await requestJson(handler, "/api/v1/users/david/projects/missing/fix-acl", { transport: "unix", username: "david" }, "POST")
+    const wrongMethod = await requestJson(handler, path, { transport: "unix", username: "david" })
+    expect(anonymous.response.status).toBe(401)
+    expect(otherOwner.response.status).toBe(403)
+    expect(missing.response.status).toBe(404)
+    expect(wrongMethod.response.status).toBe(405)
+    expect(wrongMethod.response.headers.get("allow")).toBe("POST")
+    expect(calls).toEqual([])
+
+    const authorized = await requestJson(handler, path, { transport: "unix", username: "david" }, "POST", { path: "/etc" })
+    expect(authorized.response.status).toBe(200)
+    expect(authorized.body).toMatchObject({ success: true, data: { roots: [{ root, entries: 1 }] } })
+    const http = await requestJson(handler, path, {
+      transport: "http",
+      access: socketAccessCreate("david", "own", { david: "own" }),
+    }, "POST")
+    expect(http.response.status).toBe(200)
+    expect(calls).toEqual([root, root])
+  })
+
+  test("repairs only static Caddy roots, including distinct services, and deduplicates shared roots", async () => {
+    const repository = repositoryCreate()
+    const projectR = projectMigrate({
+      schemaVersion: 2,
+      owner: "david",
+      name: "static-multi",
+      services: [
+        { id: "web", caddy: { kind: "static", port: 4101, domains: ["web.example"], path: root } },
+        { id: "alias", caddy: { kind: "static", port: 4102, domains: ["alias.example"], path: root } },
+        { id: "docs", caddy: { kind: "static", port: 4103, domains: ["docs.example"], path: "/home/david/wiki" } },
+        { id: "proxy", caddy: { kind: "proxy", port: 4104, domains: ["proxy.example"], path: "/etc" } },
+        { id: "worker" },
+      ],
+    })
+    expect(projectR.success).toBe(true)
+    if (!projectR.success) return
+    repository.projects.push(projectR.data)
+    const calls: { owner: string; root: string }[] = []
+    const handler = projectRegistryApiHandlerCreate({
+      repository,
+      caddyApplication: caddyApplicationCreate(),
+      projectStaticAclRepair: async (owner, staticRoot) => {
+        calls.push({ owner, root: staticRoot })
+        return createResult({ root: staticRoot, entries: 3 })
+      },
+    })
+    const response = await requestJson(handler, "/api/v1/users/david/projects/static-multi/fix-acl", { transport: "unix", username: "david" }, "POST")
+    expect(response.response.status).toBe(200)
+    expect(response.body).toMatchObject({ data: { roots: [{ root, entries: 3 }, { root: "/home/david/wiki", entries: 3 }] } })
+    expect(calls).toEqual([{ owner: "david", root }, { owner: "david", root: "/home/david/wiki" }])
+  })
+
+  test("skips disabled, externally owned and Pages-only static services while repairing locally served roots", async () => {
+    const repository = repositoryCreate()
+    const projectR = projectMigrate({
+      schemaVersion: 2,
+      owner: "david",
+      name: "local-static",
+      services: [
+        { id: "disabled", caddy: { kind: "static", port: 4101, path: "/etc/disabled", domains: ["disabled.example"], disabled: true, docs: true, docsPath: "/etc/disabled-docs" } },
+        { id: "external", ownership: "external", caddy: { kind: "static", port: 4101, path: "/etc/external", domains: ["external.example"] } },
+        { id: "pages", caddy: { kind: "static", port: 4101, path: "/etc/pages", domains: ["site.pages.dev"] } },
+        { id: "local", caddy: { kind: "static", port: 4101, path: root, domains: ["site.pages.dev", "site.example"] } },
+      ],
+    })
+    expect(projectR.success).toBe(true)
+    if (!projectR.success) return
+    repository.projects.push(projectR.data)
+    const calls: string[] = []
+    const handler = projectRegistryApiHandlerCreate({
+      repository,
+      caddyApplication: caddyApplicationCreate(),
+      projectStaticAclRepair: async (_owner, staticRoot) => {
+        calls.push(staticRoot)
+        return createResult({ root: staticRoot, entries: 1 })
+      },
+    })
+    const response = await requestJson(handler, "/api/v1/users/david/projects/local-static/fix-acl", { transport: "unix", username: "david" }, "POST")
+    expect(response.response.status).toBe(200)
+    expect(response.body).toMatchObject({ data: { roots: [{ root, entries: 1 }] } })
+    expect(calls).toEqual([root])
+  })
+
+  test("reports no locally served static roots when every static service is skipped", async () => {
+    const repository = repositoryCreate()
+    const projectR = projectMigrate({
+      schemaVersion: 2,
+      owner: "david",
+      name: "remote-static",
+      services: [
+        { id: "disabled", caddy: { kind: "static", port: 4101, path: root, domains: ["disabled.example"], disabled: true } },
+        { id: "external", ownership: "external", caddy: { kind: "static", port: 4101, path: root, domains: ["external.example"] } },
+        { id: "pages", caddy: { kind: "static", port: 4101, path: root, domains: ["site.pages.dev"] } },
+      ],
+    })
+    expect(projectR.success).toBe(true)
+    if (!projectR.success) return
+    repository.projects.push(projectR.data)
+    const calls: string[] = []
+    const handler = projectRegistryApiHandlerCreate({
+      repository,
+      caddyApplication: caddyApplicationCreate(),
+      projectStaticAclRepair: async (_owner, staticRoot) => {
+        calls.push(staticRoot)
+        return createResult({ root: staticRoot, entries: 1 })
+      },
+    })
+    const response = await requestJson(handler, "/api/v1/users/david/projects/remote-static/fix-acl", { transport: "unix", username: "david" }, "POST")
+    expect(response.response.status).toBe(409)
+    expect(response.body).toMatchObject({ error: { code: "projects.no-static-services" } })
+    expect(calls).toEqual([])
+  })
+
+  test("repairs explicit served docsPath only when docs are enabled and deduplicates shared paths", async () => {
+    const repository = repositoryCreate()
+    const docsRoot = "/home/david/wiki"
+    const projectR = projectMigrate({
+      schemaVersion: 2,
+      owner: "david",
+      name: "static-docs",
+      services: [
+        { id: "web", caddy: { kind: "static", port: 4101, path: root, domains: ["web.example"], docs: true, docsPath: docsRoot } },
+        { id: "alias", caddy: { kind: "static", port: 4101, path: root, domains: ["alias.example"], docs: true, docsPath: docsRoot } },
+        { id: "same", caddy: { kind: "static", port: 4101, path: root, domains: ["same.example"], docs: true, docsPath: root } },
+        { id: "off", caddy: { kind: "static", port: 4101, path: root, domains: ["off.example"], docs: false, docsPath: "/etc/not-served" } },
+      ],
+    })
+    expect(projectR.success).toBe(true)
+    if (!projectR.success) return
+    repository.projects.push(projectR.data)
+    const calls: string[] = []
+    const handler = projectRegistryApiHandlerCreate({
+      repository,
+      caddyApplication: caddyApplicationCreate(),
+      projectStaticAclRepair: async (_owner, staticRoot) => {
+        calls.push(staticRoot)
+        return createResult({ root: staticRoot, entries: 1 })
+      },
+    })
+    const response = await requestJson(handler, "/api/v1/users/david/projects/static-docs/fix-acl", { transport: "unix", username: "david" }, "POST")
+    expect(response.response.status).toBe(200)
+    expect(response.body).toMatchObject({ data: { roots: [{ root, entries: 1 }, { root: docsRoot, entries: 1 }] } })
+    expect(calls).toEqual([root, docsRoot])
+  })
+
+  test("rejects a served docsPath outside the owner allowlist before modifying any root", async () => {
+    const repository = repositoryCreate()
+    const docsRoot = "/home/other/projects/docs"
+    const projectR = projectMigrate({
+      schemaVersion: 2,
+      owner: "david",
+      name: "unsafe-docs",
+      services: [{ id: "web", caddy: { kind: "static", port: 4101, path: root, domains: ["web.example"], docs: true, docsPath: docsRoot } }],
+    })
+    expect(projectR.success).toBe(true)
+    if (!projectR.success) return
+    repository.projects.push(projectR.data)
+    const calls: string[] = []
+    const handler = projectRegistryApiHandlerCreate({
+      repository,
+      caddyApplication: caddyApplicationCreate(),
+      projectStaticAclRepair: async (_owner, staticRoot) => {
+        calls.push(staticRoot)
+        return createResult({ root: staticRoot, entries: 1 })
+      },
+    })
+    const response = await requestJson(handler, "/api/v1/users/david/projects/unsafe-docs/fix-acl", { transport: "unix", username: "david" }, "POST")
+    expect(response.response.status).toBe(500)
+    expect(response.body).toMatchObject({ error: { code: "projects.acl-repair-failed", message: expect.stringContaining("outside owner projects/wiki") } })
+    expect(calls).toEqual([])
+  })
+
+  test("rejects a NUL-containing served docsPath before invoking ACL repair", async () => {
+    const repository = repositoryCreate()
+    const docsRoot = "/home/david/projects/docs\0suffix"
+    const projectR = projectMigrate({
+      schemaVersion: 2,
+      owner: "david",
+      name: "nul-docs",
+      services: [{ id: "web", caddy: { kind: "static", port: 4101, path: root, domains: ["web.example"], docs: true, docsPath: docsRoot } }],
+    })
+    expect(projectR.success).toBe(true)
+    if (!projectR.success) return
+    repository.projects.push(projectR.data)
+    const calls: string[] = []
+    const handler = projectRegistryApiHandlerCreate({
+      repository,
+      caddyApplication: caddyApplicationCreate(),
+      projectStaticAclRepair: async (_owner, staticRoot) => {
+        calls.push(staticRoot)
+        return createResult({ root: staticRoot, entries: 1 })
+      },
+    })
+    const response = await requestJson(handler, "/api/v1/users/david/projects/nul-docs/fix-acl", { transport: "unix", username: "david" }, "POST")
+    expect(response.response.status).toBe(500)
+    expect(response.body).toMatchObject({ error: { code: "projects.acl-repair-failed", message: expect.stringContaining("outside owner projects/wiki") } })
+    expect(calls).toEqual([])
+  })
+
+  test("reports projects with no static Caddy services without invoking ACL repair", async () => {
+    const calls: string[] = []
+    const handler = projectRegistryApiHandlerCreate({
+      repository: repositoryCreate(),
+      caddyApplication: caddyApplicationCreate(),
+      projectStaticAclRepair: async (_owner, staticRoot) => {
+        calls.push(staticRoot)
+        return createResult({ root: staticRoot, entries: 1 })
+      },
+    })
+    const response = await requestJson(handler, "/api/v1/users/leo/projects/opencode/fix-acl", { transport: "unix", username: "leo" }, "POST")
+    expect(response.response.status).toBe(409)
+    expect(response.body).toMatchObject({ error: { code: "projects.no-static-services", message: expect.stringContaining("no static") } })
+    expect(calls).toEqual([])
+  })
+
+  test("surfaces the failing root and helper error rather than reporting success", async () => {
+    const handler = projectRegistryApiHandlerCreate({
+      repository: repositoryCreate(),
+      caddyApplication: caddyApplicationCreate(),
+      projectStaticAclRepair: async () => createResultError("projectStaticAclRepair", "setfacl failed: denied"),
+    })
+    const response = await requestJson(handler, path, { transport: "unix", username: "david" }, "POST")
+    expect(response.response.status).toBe(500)
+    expect(response.body).toMatchObject({ error: { code: "projects.acl-repair-failed", op: "projectStaticAclRepair", message: `Partial ACL repair (completed roots: none; failing root: ${root}): setfacl failed: denied` } })
+  })
+
+  test("reports completed and failing roots when a later root repair fails", async () => {
+    const repository = repositoryCreate()
+    const projectR = projectMigrate({
+      schemaVersion: 2,
+      owner: "david",
+      name: "partial-static",
+      services: [
+        { id: "web", caddy: { kind: "static", port: 4101, domains: ["web.example"], path: root } },
+        { id: "docs", caddy: { kind: "static", port: 4102, domains: ["docs.example"], path: "/home/david/wiki" } },
+      ],
+    })
+    expect(projectR.success).toBe(true)
+    if (!projectR.success) return
+    repository.projects.push(projectR.data)
+    const handler = projectRegistryApiHandlerCreate({
+      repository,
+      caddyApplication: caddyApplicationCreate(),
+      projectStaticAclRepair: async (_owner, staticRoot) => staticRoot === root
+        ? createResult({ root: staticRoot, entries: 1 })
+        : createResultError("projectStaticAclRepair", "Partial ACL repair may have occurred: setfacl failed"),
+    })
+    const response = await requestJson(handler, "/api/v1/users/david/projects/partial-static/fix-acl", { transport: "unix", username: "david" }, "POST")
+    expect(response.response.status).toBe(500)
+    expect(response.body).toMatchObject({
+      error: {
+        code: "projects.acl-repair-failed",
+        message: `Partial ACL repair (completed roots: ${root}; failing root: /home/david/wiki): Partial ACL repair may have occurred: setfacl failed`,
+      },
+    })
+  })
 })
 
 describe("projectRegistryApiHandlerCreate", () => {
