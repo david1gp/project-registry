@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test"
 import { projectFilter } from "./projectFilter.js"
 
 describe("projectFilter", () => {
-  const sampleProjects = [
+  const sampleProjects: { name: string; user: string; labels: Record<string, string> }[] = [
     {
       name: "authworks-site",
       user: "david",
