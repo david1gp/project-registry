@@ -14,7 +14,7 @@ import type { ProjectRegistryCliFetch } from "./ProjectRegistryCliFetch.js"
 import type { ProjectRegistryCliInvocation } from "./ProjectRegistryCliInvocation.js"
 import { projectCliServiceRows } from "./projectCliServiceRows.js"
 import { projectFilter } from "../project/projectFilter.js"
-import { projectNameFromPath } from "./projectNameFromPath.js"
+import { docsLogicalPagePathResolve } from "./docsLogicalPagePath.js"
 import { projectRegistryCliArgumentsParse } from "./projectRegistryCliArgumentsParse.js"
 import { projectRegistryCliHelp } from "./projectRegistryCliHelp.js"
 import { projectRegistryCliOutputFormat } from "./projectRegistryCliOutputFormat.js"
@@ -376,37 +376,24 @@ async function commandRequest(
   }
 
   if (command.kind === "docs" || command.kind === "docs-local") {
-    let name: string
-    if (command.kind === "docs") {
-      name = command.name
-    } else {
-      const projectsR = await projectRegistryCliRequest(
+    if (command.kind === "docs-local") {
+      const pagePathR = docsLogicalPagePathResolve(command.path)
+      if (!pagePathR.success) return pagePathR
+      const sourcePath = resolve(process.cwd(), command.path)
+      let markdown: string
+      try {
+        markdown = await readFile(sourcePath, "utf8")
+      } catch {
+        return createResultError("projectRegistryCliDocsPublish", `Could not read Markdown file: ${sourcePath}`)
+      }
+      return projectRegistryCliRequest(
         socketPath,
-        `/api/v1/users/${ownerPath}/projects`,
-        {},
+        `/api/v1/users/${ownerPath}/docs/publications`,
+        { method: "POST", body: { sourcePath, markdown, pagePath: pagePathR.data } },
         requestFetch,
       )
-      if (!projectsR.success) return projectsR
-      const projectListR = projectListResponseParse(projectsR.data)
-      if (!projectListR.success) return projectListR
-      const nameR = projectNameFromPath(projectListR.data, process.cwd())
-      if (!nameR.success) {
-        const sourcePath = resolve(process.cwd(), command.path)
-        let markdown: string
-        try {
-          markdown = await readFile(sourcePath, "utf8")
-        } catch {
-          return createResultError("projectRegistryCliDocsPublish", `Could not read Markdown file: ${sourcePath}`)
-        }
-        return projectRegistryCliRequest(
-          socketPath,
-          `/api/v1/users/${ownerPath}/docs/publications`,
-          { method: "POST", body: { sourcePath, markdown } },
-          requestFetch,
-        )
-      }
-      name = nameR.data
     }
+    const name = command.name
     const query = new URLSearchParams({ path: command.path })
     if (command.http) query.set("scheme", "http")
     const path = `/api/v1/users/${ownerPath}/projects/${encodeURIComponent(name)}/docs?${query}`

@@ -426,7 +426,12 @@ describe("project static ACL repair API", () => {
     })
     const anonymous = await requestJson(handler, path, { transport: "http" }, "POST")
     const otherOwner = await requestJson(handler, path, { transport: "unix", username: "leo" }, "POST")
-    const missing = await requestJson(handler, "/api/v1/users/david/projects/missing/fix-acl", { transport: "unix", username: "david" }, "POST")
+    const missing = await requestJson(
+      handler,
+      "/api/v1/users/david/projects/missing/fix-acl",
+      { transport: "unix", username: "david" },
+      "POST",
+    )
     const wrongMethod = await requestJson(handler, path, { transport: "unix", username: "david" })
     expect(anonymous.response.status).toBe(401)
     expect(otherOwner.response.status).toBe(403)
@@ -435,13 +440,20 @@ describe("project static ACL repair API", () => {
     expect(wrongMethod.response.headers.get("allow")).toBe("POST")
     expect(calls).toEqual([])
 
-    const authorized = await requestJson(handler, path, { transport: "unix", username: "david" }, "POST", { path: "/etc" })
+    const authorized = await requestJson(handler, path, { transport: "unix", username: "david" }, "POST", {
+      path: "/etc",
+    })
     expect(authorized.response.status).toBe(200)
     expect(authorized.body).toMatchObject({ success: true, data: { roots: [{ root, entries: 1 }] } })
-    const http = await requestJson(handler, path, {
-      transport: "http",
-      access: socketAccessCreate("david", "own", { david: "own" }),
-    }, "POST")
+    const http = await requestJson(
+      handler,
+      path,
+      {
+        transport: "http",
+        access: socketAccessCreate("david", "own", { david: "own" }),
+      },
+      "POST",
+    )
     expect(http.response.status).toBe(200)
     expect(calls).toEqual([root, root])
   })
@@ -472,10 +484,25 @@ describe("project static ACL repair API", () => {
         return createResult({ root: staticRoot, entries: 3 })
       },
     })
-    const response = await requestJson(handler, "/api/v1/users/david/projects/static-multi/fix-acl", { transport: "unix", username: "david" }, "POST")
+    const response = await requestJson(
+      handler,
+      "/api/v1/users/david/projects/static-multi/fix-acl",
+      { transport: "unix", username: "david" },
+      "POST",
+    )
     expect(response.response.status).toBe(200)
-    expect(response.body).toMatchObject({ data: { roots: [{ root, entries: 3 }, { root: "/home/david/wiki", entries: 3 }] } })
-    expect(calls).toEqual([{ owner: "david", root }, { owner: "david", root: "/home/david/wiki" }])
+    expect(response.body).toMatchObject({
+      data: {
+        roots: [
+          { root, entries: 3 },
+          { root: "/home/david/wiki", entries: 3 },
+        ],
+      },
+    })
+    expect(calls).toEqual([
+      { owner: "david", root },
+      { owner: "david", root: "/home/david/wiki" },
+    ])
   })
 
   test("skips disabled, externally owned and Pages-only static services while repairing locally served roots", async () => {
@@ -485,8 +512,23 @@ describe("project static ACL repair API", () => {
       owner: "david",
       name: "local-static",
       services: [
-        { id: "disabled", caddy: { kind: "static", port: 4101, path: "/etc/disabled", domains: ["disabled.example"], disabled: true, docs: true, docsPath: "/etc/disabled-docs" } },
-        { id: "external", ownership: "external", caddy: { kind: "static", port: 4101, path: "/etc/external", domains: ["external.example"] } },
+        {
+          id: "disabled",
+          caddy: {
+            kind: "static",
+            port: 4101,
+            path: "/etc/disabled",
+            domains: ["disabled.example"],
+            disabled: true,
+            docs: true,
+            docsPath: "/etc/disabled-docs",
+          },
+        },
+        {
+          id: "external",
+          ownership: "external",
+          caddy: { kind: "static", port: 4101, path: "/etc/external", domains: ["external.example"] },
+        },
         { id: "pages", caddy: { kind: "static", port: 4101, path: "/etc/pages", domains: ["site.pages.dev"] } },
         { id: "local", caddy: { kind: "static", port: 4101, path: root, domains: ["site.pages.dev", "site.example"] } },
       ],
@@ -503,7 +545,12 @@ describe("project static ACL repair API", () => {
         return createResult({ root: staticRoot, entries: 1 })
       },
     })
-    const response = await requestJson(handler, "/api/v1/users/david/projects/local-static/fix-acl", { transport: "unix", username: "david" }, "POST")
+    const response = await requestJson(
+      handler,
+      "/api/v1/users/david/projects/local-static/fix-acl",
+      { transport: "unix", username: "david" },
+      "POST",
+    )
     expect(response.response.status).toBe(200)
     expect(response.body).toMatchObject({ data: { roots: [{ root, entries: 1 }] } })
     expect(calls).toEqual([root])
@@ -516,8 +563,15 @@ describe("project static ACL repair API", () => {
       owner: "david",
       name: "remote-static",
       services: [
-        { id: "disabled", caddy: { kind: "static", port: 4101, path: root, domains: ["disabled.example"], disabled: true } },
-        { id: "external", ownership: "external", caddy: { kind: "static", port: 4101, path: root, domains: ["external.example"] } },
+        {
+          id: "disabled",
+          caddy: { kind: "static", port: 4101, path: root, domains: ["disabled.example"], disabled: true },
+        },
+        {
+          id: "external",
+          ownership: "external",
+          caddy: { kind: "static", port: 4101, path: root, domains: ["external.example"] },
+        },
         { id: "pages", caddy: { kind: "static", port: 4101, path: root, domains: ["site.pages.dev"] } },
       ],
     })
@@ -533,7 +587,12 @@ describe("project static ACL repair API", () => {
         return createResult({ root: staticRoot, entries: 1 })
       },
     })
-    const response = await requestJson(handler, "/api/v1/users/david/projects/remote-static/fix-acl", { transport: "unix", username: "david" }, "POST")
+    const response = await requestJson(
+      handler,
+      "/api/v1/users/david/projects/remote-static/fix-acl",
+      { transport: "unix", username: "david" },
+      "POST",
+    )
     expect(response.response.status).toBe(409)
     expect(response.body).toMatchObject({ error: { code: "projects.no-static-services" } })
     expect(calls).toEqual([])
@@ -547,10 +606,29 @@ describe("project static ACL repair API", () => {
       owner: "david",
       name: "static-docs",
       services: [
-        { id: "web", caddy: { kind: "static", port: 4101, path: root, domains: ["web.example"], docs: true, docsPath: docsRoot } },
-        { id: "alias", caddy: { kind: "static", port: 4101, path: root, domains: ["alias.example"], docs: true, docsPath: docsRoot } },
-        { id: "same", caddy: { kind: "static", port: 4101, path: root, domains: ["same.example"], docs: true, docsPath: root } },
-        { id: "off", caddy: { kind: "static", port: 4101, path: root, domains: ["off.example"], docs: false, docsPath: "/etc/not-served" } },
+        {
+          id: "web",
+          caddy: { kind: "static", port: 4101, path: root, domains: ["web.example"], docs: true, docsPath: docsRoot },
+        },
+        {
+          id: "alias",
+          caddy: { kind: "static", port: 4101, path: root, domains: ["alias.example"], docs: true, docsPath: docsRoot },
+        },
+        {
+          id: "same",
+          caddy: { kind: "static", port: 4101, path: root, domains: ["same.example"], docs: true, docsPath: root },
+        },
+        {
+          id: "off",
+          caddy: {
+            kind: "static",
+            port: 4101,
+            path: root,
+            domains: ["off.example"],
+            docs: false,
+            docsPath: "/etc/not-served",
+          },
+        },
       ],
     })
     expect(projectR.success).toBe(true)
@@ -565,9 +643,21 @@ describe("project static ACL repair API", () => {
         return createResult({ root: staticRoot, entries: 1 })
       },
     })
-    const response = await requestJson(handler, "/api/v1/users/david/projects/static-docs/fix-acl", { transport: "unix", username: "david" }, "POST")
+    const response = await requestJson(
+      handler,
+      "/api/v1/users/david/projects/static-docs/fix-acl",
+      { transport: "unix", username: "david" },
+      "POST",
+    )
     expect(response.response.status).toBe(200)
-    expect(response.body).toMatchObject({ data: { roots: [{ root, entries: 1 }, { root: docsRoot, entries: 1 }] } })
+    expect(response.body).toMatchObject({
+      data: {
+        roots: [
+          { root, entries: 1 },
+          { root: docsRoot, entries: 1 },
+        ],
+      },
+    })
     expect(calls).toEqual([root, docsRoot])
   })
 
@@ -578,7 +668,12 @@ describe("project static ACL repair API", () => {
       schemaVersion: 2,
       owner: "david",
       name: "unsafe-docs",
-      services: [{ id: "web", caddy: { kind: "static", port: 4101, path: root, domains: ["web.example"], docs: true, docsPath: docsRoot } }],
+      services: [
+        {
+          id: "web",
+          caddy: { kind: "static", port: 4101, path: root, domains: ["web.example"], docs: true, docsPath: docsRoot },
+        },
+      ],
     })
     expect(projectR.success).toBe(true)
     if (!projectR.success) return
@@ -592,9 +687,16 @@ describe("project static ACL repair API", () => {
         return createResult({ root: staticRoot, entries: 1 })
       },
     })
-    const response = await requestJson(handler, "/api/v1/users/david/projects/unsafe-docs/fix-acl", { transport: "unix", username: "david" }, "POST")
+    const response = await requestJson(
+      handler,
+      "/api/v1/users/david/projects/unsafe-docs/fix-acl",
+      { transport: "unix", username: "david" },
+      "POST",
+    )
     expect(response.response.status).toBe(500)
-    expect(response.body).toMatchObject({ error: { code: "projects.acl-repair-failed", message: expect.stringContaining("outside owner projects/wiki") } })
+    expect(response.body).toMatchObject({
+      error: { code: "projects.acl-repair-failed", message: expect.stringContaining("outside owner projects/wiki") },
+    })
     expect(calls).toEqual([])
   })
 
@@ -605,7 +707,12 @@ describe("project static ACL repair API", () => {
       schemaVersion: 2,
       owner: "david",
       name: "nul-docs",
-      services: [{ id: "web", caddy: { kind: "static", port: 4101, path: root, domains: ["web.example"], docs: true, docsPath: docsRoot } }],
+      services: [
+        {
+          id: "web",
+          caddy: { kind: "static", port: 4101, path: root, domains: ["web.example"], docs: true, docsPath: docsRoot },
+        },
+      ],
     })
     expect(projectR.success).toBe(true)
     if (!projectR.success) return
@@ -619,9 +726,16 @@ describe("project static ACL repair API", () => {
         return createResult({ root: staticRoot, entries: 1 })
       },
     })
-    const response = await requestJson(handler, "/api/v1/users/david/projects/nul-docs/fix-acl", { transport: "unix", username: "david" }, "POST")
+    const response = await requestJson(
+      handler,
+      "/api/v1/users/david/projects/nul-docs/fix-acl",
+      { transport: "unix", username: "david" },
+      "POST",
+    )
     expect(response.response.status).toBe(500)
-    expect(response.body).toMatchObject({ error: { code: "projects.acl-repair-failed", message: expect.stringContaining("outside owner projects/wiki") } })
+    expect(response.body).toMatchObject({
+      error: { code: "projects.acl-repair-failed", message: expect.stringContaining("outside owner projects/wiki") },
+    })
     expect(calls).toEqual([])
   })
 
@@ -635,9 +749,16 @@ describe("project static ACL repair API", () => {
         return createResult({ root: staticRoot, entries: 1 })
       },
     })
-    const response = await requestJson(handler, "/api/v1/users/leo/projects/opencode/fix-acl", { transport: "unix", username: "leo" }, "POST")
+    const response = await requestJson(
+      handler,
+      "/api/v1/users/leo/projects/opencode/fix-acl",
+      { transport: "unix", username: "leo" },
+      "POST",
+    )
     expect(response.response.status).toBe(409)
-    expect(response.body).toMatchObject({ error: { code: "projects.no-static-services", message: expect.stringContaining("no static") } })
+    expect(response.body).toMatchObject({
+      error: { code: "projects.no-static-services", message: expect.stringContaining("no static") },
+    })
     expect(calls).toEqual([])
   })
 
@@ -649,7 +770,13 @@ describe("project static ACL repair API", () => {
     })
     const response = await requestJson(handler, path, { transport: "unix", username: "david" }, "POST")
     expect(response.response.status).toBe(500)
-    expect(response.body).toMatchObject({ error: { code: "projects.acl-repair-failed", op: "projectStaticAclRepair", message: `Partial ACL repair (completed roots: none; failing root: ${root}): setfacl failed: denied` } })
+    expect(response.body).toMatchObject({
+      error: {
+        code: "projects.acl-repair-failed",
+        op: "projectStaticAclRepair",
+        message: `Partial ACL repair (completed roots: none; failing root: ${root}): setfacl failed: denied`,
+      },
+    })
   })
 
   test("reports completed and failing roots when a later root repair fails", async () => {
@@ -669,11 +796,17 @@ describe("project static ACL repair API", () => {
     const handler = projectRegistryApiHandlerCreate({
       repository,
       caddyApplication: caddyApplicationCreate(),
-      projectStaticAclRepair: async (_owner, staticRoot) => staticRoot === root
-        ? createResult({ root: staticRoot, entries: 1 })
-        : createResultError("projectStaticAclRepair", "Partial ACL repair may have occurred: setfacl failed"),
+      projectStaticAclRepair: async (_owner, staticRoot) =>
+        staticRoot === root
+          ? createResult({ root: staticRoot, entries: 1 })
+          : createResultError("projectStaticAclRepair", "Partial ACL repair may have occurred: setfacl failed"),
     })
-    const response = await requestJson(handler, "/api/v1/users/david/projects/partial-static/fix-acl", { transport: "unix", username: "david" }, "POST")
+    const response = await requestJson(
+      handler,
+      "/api/v1/users/david/projects/partial-static/fix-acl",
+      { transport: "unix", username: "david" },
+      "POST",
+    )
     expect(response.response.status).toBe(500)
     expect(response.body).toMatchObject({
       error: {
@@ -1847,7 +1980,20 @@ describe("projectRegistryApiHandlerCreate", () => {
         urls: [expect.stringContaining("docs.example.test/docs/")],
       },
     })
-    expect(application.projectChanges).toBe(1)
+
+    const docsPrefix = await requestJson(handler, "/api/v1/users/leo/docs/publications", leo, "POST", {
+      sourcePath: "/work/docs-guide.md",
+      markdown: "# Docs guide",
+      pagePath: "docs/guide.md",
+    })
+    expect(docsPrefix.body).toMatchObject({
+      success: true,
+      data: {
+        file: "docs/guide.md",
+        urls: ["https://docs.example.test/docs/docs/guide.md"],
+      },
+    })
+    expect(application.projectChanges).toBe(2)
     const managed = repository.projects.find((project) => project.owner === "leo" && project.name === "docs")
     expect(managed?.labels).toEqual({
       "project-registry.managed-docs": "true",
@@ -1882,8 +2028,10 @@ describe("projectRegistryApiHandlerCreate", () => {
     })
     expect(repository.projects.filter((project) => project.owner === "leo" && project.name === "docs")).toHaveLength(1)
     expect((second.body.data as { file: string }).file).toBe((first.body.data as { file: string }).file)
-    expect(application.projectChanges).toBe(2)
-    expect(await Bun.file(join(store.directory("leo"), "index.md")).text()).toContain("[/work/a.md]")
+    expect(application.projectChanges).toBe(3)
+    const legacyIndex = await Bun.file(join(store.directory("leo"), "index.md")).text()
+    expect(legacyIndex).toContain("[Updated]")
+    expect(legacyIndex).not.toContain("/work/a.md")
 
     const crossOwner = await requestJson(
       handler,
@@ -1893,6 +2041,110 @@ describe("projectRegistryApiHandlerCreate", () => {
       { sourcePath: "/private.md", markdown: "# Nope" },
     )
     expect(crossOwner.response.status).toBe(403)
+  })
+
+  test("publishes nested logical pages and updates the same page across source paths", async () => {
+    const repository = repositoryCreate()
+    repository.defaultDomains.leo = "example.test"
+    const storage = mkdtempSync(join(import.meta.dir, ".docs-publication-test-"))
+    temporaryDirectories.push(storage)
+    const store = projectDocsPublicationStoreCreate(join(storage, "published"))
+    const handler = projectRegistryApiHandlerCreate({
+      repository,
+      caddyApplication: caddyApplicationCreate(),
+      docsPublicationStore: store,
+    })
+    const leo = { transport: "unix", username: "leo" } as const
+    const publish = (sourcePath: string, markdown: string) =>
+      requestJson(handler, "/api/v1/users/leo/docs/publications", leo, "POST", {
+        sourcePath,
+        markdown,
+        pagePath: "guides/setup.md",
+      })
+
+    const first = await publish("/work/project-a/setup.md", "# Initial setup")
+    expect(first.response.status).toBe(200)
+    expect(first.body).toMatchObject({
+      success: true,
+      data: {
+        file: "guides/setup.md",
+        urls: [expect.stringContaining("docs.example.test/docs/guides/setup.md")],
+      },
+    })
+
+    const updated = await publish("/elsewhere/project-b/README.md", "# Updated setup")
+    expect(updated.response.status).toBe(200)
+    expect((updated.body.data as { file: string }).file).toBe("guides/setup.md")
+    expect(await Bun.file(join(store.directory("leo"), "guides/setup.md")).text()).toContain("# Updated setup")
+    expect(await Bun.file(join(store.directory("leo"), "index.md")).text()).toContain(
+      "[Updated setup](guides/setup.md)",
+    )
+  })
+
+  test("rejects unsafe and reserved logical publication paths as invalid requests", async () => {
+    const repository = repositoryCreate()
+    repository.defaultDomains.leo = "example.test"
+    const initialProjectCount = repository.projects.length
+    const storage = mkdtempSync(join(import.meta.dir, ".docs-publication-test-"))
+    temporaryDirectories.push(storage)
+    const store = projectDocsPublicationStoreCreate(join(storage, "published"))
+    let storeDirectoryCalls = 0
+    const publicationStore = {
+      ...store,
+      directory(owner: string) {
+        storeDirectoryCalls += 1
+        return store.directory(owner)
+      },
+    }
+    const application = caddyApplicationCreate()
+    const handler = projectRegistryApiHandlerCreate({
+      repository,
+      caddyApplication: application,
+      docsPublicationStore: publicationStore,
+    })
+    const leo = { transport: "unix", username: "leo" } as const
+    const invalidPagePaths = [
+      "",
+      "../escape.md",
+      "guides/../escape.md",
+      "guides//setup.md",
+      "/absolute.md",
+      "index.md",
+      `${"a".repeat(64)}.md`,
+      "INDEX.MD/child.md",
+      `${"a".repeat(64)}.json/child.md`,
+      `page-${"a".repeat(64)}.json/child.md`,
+      "bad name.md",
+      "_draft.md",
+      ".hidden/page.md",
+      "notes..md",
+      "guide.txt",
+      null,
+      42,
+    ]
+    for (const pagePath of invalidPagePaths) {
+      const response = await requestJson(handler, "/api/v1/users/leo/docs/publications", leo, "POST", {
+        sourcePath: "/work/source.md",
+        markdown: "# Invalid",
+        pagePath,
+      })
+      expect(response.response.status).toBe(400)
+      expect(response.body).toMatchObject({ error: { code: "request.invalid", status: 400 } })
+    }
+    expect(repository.defaultDomainCalls).toEqual([])
+    expect(repository.projects).toHaveLength(initialProjectCount)
+    expect(application.projectChanges).toBe(0)
+    expect(storeDirectoryCalls).toBe(0)
+    expect(await Bun.file(join(storage, "published", "index.md")).exists()).toBe(false)
+
+    const unauthenticated = await requestJson(
+      handler,
+      "/api/v1/users/leo/docs/publications",
+      { transport: "http" },
+      "POST",
+      { sourcePath: "/work/source.md", markdown: "# Private", pagePath: "guides/private.md" },
+    )
+    expect(unauthenticated.response.status).toBe(401)
   })
 
   test("retries a failed Caddy apply on a persisted managed project before reporting publication success", async () => {
@@ -1949,8 +2201,9 @@ describe("projectRegistryApiHandlerCreate", () => {
     expect(responses.map(({ response }) => response.status)).toEqual([200, 200])
     expect(repository.projects.filter((project) => project.owner === "leo" && project.name === "docs")).toHaveLength(1)
     const index = await Bun.file(join(store.directory("leo"), "index.md")).text()
-    expect(index).toContain("[/work/a.md]")
-    expect(index).toContain("[/work/b.md]")
+    expect(index.match(/\[Content\]/g)).toHaveLength(2)
+    expect(index).not.toContain("/work/a.md")
+    expect(index).not.toContain("/work/b.md")
   })
 
   test("rejects a conflicting docs project and missing default domain without writing publications", async () => {

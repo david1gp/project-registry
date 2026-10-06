@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test"
-import { readFile } from "node:fs/promises"
-import { basename, resolve } from "node:path"
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
+import { basename, join, resolve } from "node:path"
 import pkg from "../../package.json" with { type: "json" }
 import { projectRegistryCliRun } from "./projectRegistryCliRun.js"
 
@@ -423,10 +423,11 @@ describe("projectRegistryCliRun", () => {
     const stdout: string[] = []
     const exitCode = await projectRegistryCliRun(["project", "fix-acl", "site"], {
       environment: { USER: "david" },
-      requestFetch: async () => Response.json({
-        success: true,
-        data: { roots: [{ root: "/home/david/projects/site/public", entries: 0, skipped: "caddy-root" }] },
-      }),
+      requestFetch: async () =>
+        Response.json({
+          success: true,
+          data: { roots: [{ root: "/home/david/projects/site/public", entries: 0, skipped: "caddy-root" }] },
+        }),
       stdout: (text) => stdout.push(text),
       stderr: () => {},
     })
@@ -1010,159 +1011,146 @@ describe("projectRegistryCliRun", () => {
     expect(stdout.join("")).toBe("http://site.example/docs/guide/intro.md\n")
   })
 
-  test("resolves local documentation from the current working directory before requesting docs", async () => {
-    const requests: string[] = []
-    const stdout: string[] = []
-    const exitCode = await projectRegistryCliRun(["docs", "guide/intro.md"], {
-      environment: { USER: "david" },
-      requestFetch: async (input) => {
-        const path = new URL(String(input)).pathname + new URL(String(input)).search
-        requests.push(path)
-        if (path === "/api/v1/users/david/projects") {
-          return Response.json({
-            success: true,
-            data: {
-              projects: [
-                {
-                  schemaVersion: 1,
-                  owner: "david",
-                  name: "site",
-                  order: Number.MAX_SAFE_INTEGER,
-                  services: [],
-                  caddy: {
-                    port: 4321,
-                    domains: ["site.example"],
-                    path: process.cwd(),
-                  },
-                },
-              ],
-              revision: "current",
-            },
-          })
-        }
-        return Response.json({ success: true, data: { urls: ["https://site.example/docs/guide/intro.md"] } })
-      },
-      stdout: (text) => stdout.push(text),
-    })
-
-    expect(exitCode).toBe(0)
-    expect(requests).toEqual([
-      "/api/v1/users/david/projects",
-      "/api/v1/users/david/projects/site/docs?path=guide%2Fintro.md",
-    ])
-    expect(stdout.join("")).toBe("https://site.example/docs/guide/intro.md\n")
-  })
-
-  test("resolves local documentation from a legacy bare-array project list", async () => {
-    const requests: string[] = []
-    const stdout: string[] = []
-    const exitCode = await projectRegistryCliRun(["docs", "guide/intro.md"], {
-      environment: { USER: "david" },
-      requestFetch: async (input) => {
-        const path = new URL(String(input)).pathname + new URL(String(input)).search
-        requests.push(path)
-        if (path === "/api/v1/users/david/projects") {
-          return Response.json({
-            success: true,
-            data: [
-              {
-                schemaVersion: 1,
-                owner: "david",
-                name: "site",
-                order: Number.MAX_SAFE_INTEGER,
-                services: [],
-                caddy: {
-                  port: 4321,
-                  domains: ["site.example"],
-                  path: process.cwd(),
-                },
-              },
-            ],
-          })
-        }
-        return Response.json({ success: true, data: { urls: ["https://site.example/docs/guide/intro.md"] } })
-      },
-      stdout: (text) => stdout.push(text),
-    })
-
-    expect(exitCode).toBe(0)
-    expect(requests).toEqual([
-      "/api/v1/users/david/projects",
-      "/api/v1/users/david/projects/site/docs?path=guide%2Fintro.md",
-    ])
-    expect(stdout.join("")).toBe("https://site.example/docs/guide/intro.md\n")
-  })
-
-  test("publishes an unmatched relative Markdown path with absolute source path and content", async () => {
+  test("publishes local docs from a docs-disabled registered project without querying projects", async () => {
     const requests: Array<{ path: string; method: string; body?: unknown }> = []
     const stdout: string[] = []
-    const relativePath = "README.md"
-    const sourcePath = resolve(process.cwd(), relativePath)
-    const markdown = await readFile(sourcePath, "utf8")
-    const exitCode = await projectRegistryCliRun(["docs", relativePath], {
-      environment: { USER: "david" },
-      requestFetch: async (input, init) => {
-        requests.push({
-          path: new URL(String(input)).pathname,
-          method: init?.method ?? "GET",
-          body: init?.body === undefined ? undefined : JSON.parse(String(init.body)),
-        })
-        if (init?.method === "POST") {
+    const originalCwd = process.cwd()
+    const cwd = await mkdtemp("/tmp/opencode/project-registry-docs-independent-")
+    const relativePath = "./guide/intro.md"
+    const sourcePath = resolve(cwd, "guide/intro.md")
+    const markdown = "# CLI docs test\n"
+    await mkdir(join(cwd, "guide"), { recursive: true })
+    await writeFile(sourcePath, markdown)
+    process.chdir(cwd)
+    try {
+      const exitCode = await projectRegistryCliRun(["docs", relativePath], {
+        environment: { USER: "david" },
+        requestFetch: async (input, init) => {
+          const path = new URL(String(input)).pathname
+          requests.push({
+            path,
+            method: init?.method ?? "GET",
+            body: init?.body === undefined ? undefined : JSON.parse(String(init.body)),
+          })
+          if (path === "/api/v1/users/david/projects") {
+            return Response.json({
+              success: true,
+              data: {
+                projects: [{ ...project, name: basename(cwd), caddy: { docs: false, path: cwd } }],
+                revision: "current",
+              },
+            })
+          }
           return Response.json({
             success: true,
             data: {
               project: "docs",
-              file: "abc123.md",
+              file: "guide/intro.md",
               index: "index.md",
-              urls: ["https://docs.example/abc123.md"],
+              urls: ["https://docs.example/guide/intro.md"],
               indexUrls: ["https://docs.example/index.md"],
             },
           })
-        }
-        return Response.json({
-          success: true,
-          data: {
-            projects: [
-              {
-                schemaVersion: 1,
-                owner: "david",
-                name: "docs",
-                order: Number.MAX_SAFE_INTEGER,
-                services: [],
-                caddy: {
-                  port: 4322,
-                  domains: ["docs.example"],
-                  kind: "static",
-                  docs: true,
-                  docsPath: "/var/lib/project-registry-docs/david",
-                },
-              },
-              {
-                schemaVersion: 1,
-                owner: "david",
-                name: "other",
-                order: Number.MAX_SAFE_INTEGER,
-                services: [],
-                caddy: { port: 4321, domains: ["other.example"], path: "/tmp/other" },
-              },
-            ],
-            revision: "current",
-          },
-        })
+        },
+        stdout: (text) => stdout.push(text),
+      })
+
+      expect(exitCode).toBe(0)
+      expect(requests).toEqual([
+        {
+          path: "/api/v1/users/david/docs/publications",
+          method: "POST",
+          body: { sourcePath, markdown, pagePath: "guide/intro.md" },
+        },
+      ])
+      expect(requests.some(({ path }) => path.includes("/projects"))).toBe(false)
+      expect(stdout.join("")).toBe("https://docs.example/guide/intro.md\nhttps://docs.example/index.md\n")
+    } finally {
+      process.chdir(originalCwd)
+      await rm(cwd, { recursive: true, force: true })
+    }
+  })
+
+  test("publishes a parent-segment source using its normalized in-cwd page path", async () => {
+    const originalCwd = process.cwd()
+    const cwd = await mkdtemp("/tmp/opencode/project-registry-docs-normalized-")
+    const sourcePath = resolve(cwd, "guide.md")
+    const markdown = "# Normalized guide\n"
+    await writeFile(sourcePath, markdown)
+    process.chdir(cwd)
+    try {
+      let requestBody: unknown
+      const exitCode = await projectRegistryCliRun(["docs", "docs/../guide.md"], {
+        environment: { USER: "david" },
+        requestFetch: async (_input, init) => {
+          requestBody = init?.body === undefined ? undefined : JSON.parse(String(init.body))
+          return Response.json({ success: true, data: { urls: [], indexUrls: [] } })
+        },
+        stdout: () => undefined,
+      })
+
+      expect(exitCode).toBe(0)
+      expect(requestBody).toEqual({ sourcePath, markdown, pagePath: "guide.md" })
+    } finally {
+      process.chdir(originalCwd)
+      await rm(cwd, { recursive: true, force: true })
+    }
+  })
+
+  test("publishes local docs successfully from an unregistered cwd without project lookup", async () => {
+    const cwd = await mkdtemp("/tmp/opencode/project-registry-unregistered-")
+    const originalCwd = process.cwd()
+    const sourcePath = resolve(cwd, "guide.md")
+    await writeFile(sourcePath, "# Unregistered\n")
+    process.chdir(cwd)
+    try {
+      const requests: string[] = []
+      const exitCode = await projectRegistryCliRun(["docs", "guide.md"], {
+        environment: { USER: "david" },
+        requestFetch: async (input) => {
+          requests.push(new URL(String(input)).pathname)
+          return Response.json({ success: true, data: { urls: ["https://docs.example/guide.md"], indexUrls: [] } })
+        },
+        stdout: () => undefined,
+      })
+
+      expect(exitCode).toBe(0)
+      expect(requests).toEqual(["/api/v1/users/david/docs/publications"])
+    } finally {
+      process.chdir(originalCwd)
+      await rm(cwd, { recursive: true, force: true })
+    }
+  })
+
+  test("publishes an absolute Markdown file under its basename", async () => {
+    const requests: Array<{ body?: unknown }> = []
+    const sourcePath = resolve(process.cwd(), "README.md")
+    const markdown = await readFile(sourcePath, "utf8")
+    const exitCode = await projectRegistryCliRun(["docs", sourcePath], {
+      environment: { USER: "david" },
+      requestFetch: async (_input, init) => {
+        requests.push({ body: init?.body === undefined ? undefined : JSON.parse(String(init.body)) })
+        return Response.json({ success: true, data: { urls: ["https://docs.example/README.md"], indexUrls: [] } })
       },
-      stdout: (text) => stdout.push(text),
+      stdout: () => undefined,
     })
 
     expect(exitCode).toBe(0)
-    expect(requests).toEqual([
-      { path: "/api/v1/users/david/projects", method: "GET", body: undefined },
-      {
-        path: "/api/v1/users/david/docs/publications",
-        method: "POST",
-        body: { sourcePath, markdown },
+    expect(requests).toEqual([{ body: { sourcePath, markdown, pagePath: "README.md" } }])
+  })
+
+  test("rejects the reserved docs index before making a request", async () => {
+    let requested = false
+    const exitCode = await projectRegistryCliRun(["docs", "index.md"], {
+      environment: { USER: "david" },
+      requestFetch: async () => {
+        requested = true
+        return Response.json({ success: true, data: {} })
       },
-    ])
-    expect(stdout.join("")).toBe("https://docs.example/abc123.md\nhttps://docs.example/index.md\n")
+      stderr: () => undefined,
+    })
+    expect(exitCode).toBe(1)
+    expect(requested).toBe(false)
   })
 
   test("regenerates through the versioned POST endpoint", async () => {

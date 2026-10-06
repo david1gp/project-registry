@@ -11,6 +11,7 @@ import { caddyConfigInspectUseCase } from "../caddy/caddyConfigInspectUseCase.js
 import type { CaddyConfigOptions } from "../caddy/caddyConfigOptionsSchema.js"
 import { projectDocsUrlsUseCase } from "../caddy/projectDocsUrlsUseCase.js"
 import type { ProjectDocsPublicationStore } from "../docs/ProjectDocsPublicationStore.js"
+import { projectDocsPagePathIsValid } from "../docs/projectDocsPagePathIsValid.js"
 import type { Project } from "../project/Project.js"
 import type { ProjectMutationOptions } from "../project/ProjectMutationOptions.js"
 import type { ProjectOrganizationRequest } from "../project/ProjectOrganizationRequest.js"
@@ -1094,6 +1095,7 @@ export function projectRegistryApiHandlerCreate(options: ApiHandlerOptions): Pro
       const bodyRecord = recordValue(body)
       const sourcePath = bodyRecord?.sourcePath
       const markdown = bodyRecord?.markdown
+      const pagePath = bodyRecord?.pagePath
       if (
         bodyRecord === undefined ||
         typeof sourcePath !== "string" ||
@@ -1102,6 +1104,7 @@ export function projectRegistryApiHandlerCreate(options: ApiHandlerOptions): Pro
         sourcePath.includes("\0") ||
         typeof markdown !== "string" ||
         Buffer.byteLength(markdown, "utf8") > 1_048_576 ||
+        (Object.hasOwn(bodyRecord, "pagePath") && !projectDocsPagePathIsValid(pagePath)) ||
         Object.hasOwn(bodyRecord, "expectedRevision")
       ) {
         return errorResponse(
@@ -1223,7 +1226,7 @@ export function projectRegistryApiHandlerCreate(options: ApiHandlerOptions): Pro
       const applicationR = await options.caddyApplication.projectChange()
       if (!applicationR.success) return resultErrorResponse(applicationR, false, "caddy")
 
-      const publicationR = await store.publish(owner, sourcePath, markdown)
+      const publicationR = await store.publish(owner, sourcePath, markdown, pagePath as string | undefined)
       if (!publicationR.success) {
         return errorResponse(
           {
@@ -1242,7 +1245,7 @@ export function projectRegistryApiHandlerCreate(options: ApiHandlerOptions): Pro
         projectList: async () => createResult(currentProjectsR.data.projects),
         owner,
         projectName: "docs",
-        relativePath: publicationR.data.file,
+        relativePath: `/docs/${publicationR.data.file}`,
       })
       const indexUrlsR = await projectDocsUrlsUseCase({
         actor: { subject: actorR.data.subject, username: actorR.data.username, role: "own" },
