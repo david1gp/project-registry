@@ -24,8 +24,8 @@ Extend publication storage and metadata compatibly, then expose logical page pat
 1. Storage and index: complete. Extend the store contract, safe logical-path identity, legacy metadata compatibility, title/hierarchy navigation, and focused store tests.
 2. Publication API: complete. Accept optional `pagePath`, preserve old request/response behavior and authorization, and add focused API tests.
 3. Local CLI and user documentation: complete. Always publish the single-path command, derive logical paths safely, preserve explicit project lookup, update help/README and focused CLI tests.
-4. Shared navigation and integrated verification: complete; live browser acceptance accompanies deployment. Ensure owner pages link to their space home without breaking Markdown links or legacy URLs. Focused tests and browser verification, no full test suite.
-5. Commit and deployment: ready for commit handoff. A fresh Luna subagent executes the commits skill, then deploy using the established operational workflow and verify the live behavior.
+4. Shared navigation and integrated verification: complete. Ensure owner pages link to their space home without breaking Markdown links or legacy URLs. Focused tests and browser verification, no full test suite.
+5. Commit and deployment: complete. Implementation deployed; browser acceptance passed the new-page → space-home → new-page flow and the legacy URL. Final plan bookkeeping committed, pushed, and republished.
 
 ## Verification constraints
 
@@ -37,8 +37,8 @@ Extend publication storage and metadata compatibly, then expose logical page pat
 
 ## Current context
 
-Existing local publishing uses project docs when cwd matches a project and falls back to owner publishing only outside registered projects. Owner publications currently use absolute-source-path hashes and a generated `index.md`. The repository started clean on `main` at v0.9.3.
-
 The implementation extends the store with optional logical page paths, organizes the owner index, adds canonical root-relative owner-page home links, and accepts the extended API body. Logical-path validation is shared across CLI/API/store, follows existing Caddy serving constraints, reserves internal root filenames even as directory components, and preserves literal logical paths beginning with `docs/` in returned URLs. Existing stored publications are left unchanged until explicitly republished. Navigation deduplication applies only to the exact canonical injected prefix; relative authored links retain their original targets.
 
-Deployment uses `bash ops/deploy.sh`, backed by the existing installer under `~/leo_internal/dev-servers/leo-server/caddy/install`. It deploys the local built working tree and refreshes the installed CLI and daemon; a release tag is not required. The existing owner host for browser verification is `docs.david-siewert.com`; retain the published plan URL as a legacy compatibility check. After rollout, publish this actual plan through the new local command rather than introducing disposable production test pages.
+Deployment uses `bash ops/deploy.sh`, backed by the existing installer under `~/leo_internal/dev-servers/leo-server/caddy/install`. It deploys the local built working tree and refreshes the installed CLI and daemon; a release tag is not required. The owner space is hosted at `docs.david-siewert.com`. This plan is now published at `/docs/docs/20261006_owner_docs_space.md` in that space; the legacy hashed publication remains accessible.
+
+Final acceptance confirmed the new-page → space-home → new-page navigation and legacy URL in the browser. The completed plan is republished at `https://docs.david-siewert.com/docs/docs/20261006_owner_docs_space.md`; the older hashed publication was left untouched.
