@@ -73,13 +73,15 @@ ACL failures) are returned with their actionable message and optional hint.
 
 ## Publishing documentation
 
-From a registered project directory, `docs <path>` requests the document from the project matched to the current directory. If the current directory is not inside a registered project path, the CLI reads the Markdown file (relative paths are resolved from the current directory) and publishes it to the owner's managed `docs` project at `docs.<owner default-domain>`:
+`docs <path>` always reads a local Markdown file (relative paths are resolved from the current directory) and publishes it to the authenticated owner's documentation space. It does not inspect the current directory's project registration or docs settings:
 
 ```bash
 project-registry docs README.md
 ```
 
-Fallback publication creates the managed project on first use and requires an owner default domain, configured with `project-registry user default-domain set <domain>`. The CLI prints the published document URL and index URL. Use `project-registry docs <name> <path>` to explicitly request docs from a named project; this form does not use fallback publication.
+Relative input paths that resolve within the current working directory become normalized logical page paths and preserve their hierarchy (`./guide/intro.md` publishes as `guide/intro.md`, and `docs/../guide.md` as `guide.md`). Absolute inputs and relative inputs that resolve outside the current directory publish under their basename, so `../guide.md` publishes as `guide.md`. Logical paths accept only route-safe ASCII letters, digits, dots, underscores, hyphens, and `/`; source paths may contain `..`, but the generated logical path never traverses. Publishing the same logical path again updates that page for the owner, even when the source file is elsewhere. The generated `index.md` is reserved and cannot be published as a page. The CLI prints the published document URL and index URL.
+
+Use `project-registry docs <name> <path>` for explicit legacy project-hosted URL lookup. This two-argument form remains separate from local publication and honors `--http` as before.
 
 ## Cloudflare DNS credentials
 
