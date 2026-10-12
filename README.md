@@ -146,7 +146,8 @@ CLI or API. Updating a token does not immediately reconcile DNS. The next DNS op
 - `bun run test` run tests once
 - `bun run build` emit `dist/`
 - `bun run format` biome format
-- `bun run release` version, changelog, GitHub release
+- `bun run release` version, changelog, GitHub release, then deploy (the release commit, so the daemon serves the released tree; `--no-deploy` skips)
+- `bun run deploy` deploy the working tree without releasing
 
 ## License
 
