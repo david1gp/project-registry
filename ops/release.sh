@@ -3,7 +3,6 @@ set -x # Print all executed commands to the terminal
 set -e # Exit immediately if a command exits with a non-zero status
 
 # --- Configuration ---
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CHANGELOGS_DIR="changelogs"
 REPO_URL=$(git remote get-url origin | sed 's/\.git$//')
 REPO_NAME=$(echo "$REPO_URL" | sed 's/.*://')
@@ -114,9 +113,9 @@ git branch -f released
 # not the pre-release working tree. Skip with --no-deploy for deploy-only flows.
 if [ "$DEPLOY" = true ]; then
   echo "🚀 Deploying released commit..."
-  bash "$SCRIPT_DIR/deploy.sh"
+  bun run deploy
 else
-  echo "⏭️ Skipping deploy (--no-deploy). Run bash \"$SCRIPT_DIR/deploy.sh\" later to serve this release."
+  echo "⏭️ Skipping deploy (--no-deploy). Run bun run deploy later to serve this release."
 fi
 
 echo "✅ Release v$NEW_VERSION complete!"
