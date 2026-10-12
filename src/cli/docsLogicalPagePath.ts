@@ -1,6 +1,6 @@
 import { basename, isAbsolute, relative, resolve, sep } from "node:path"
 import { createResult, createResultError, type Result } from "#result"
-import { projectDocsPagePathIsValid } from "../docs/projectDocsPagePathIsValid.js"
+import { projectDocsPagePathIsValid, projectDocsPagePathNormalize } from "../docs/projectDocsPagePathIsValid.js"
 
 export function docsLogicalPagePathResolve(inputPath: string): Result<string> {
   const op = "docsLogicalPagePathResolve"
@@ -12,7 +12,9 @@ export function docsLogicalPagePathResolve(inputPath: string): Result<string> {
   const sourcePath = resolve(cwd, inputPath)
   const cwdRelativePath = relative(cwd, sourcePath)
   const isOutsideCwd = cwdRelativePath === ".." || cwdRelativePath.startsWith(`..${sep}`) || isAbsolute(cwdRelativePath)
-  const pagePath = isAbsolute(inputPath) || isOutsideCwd ? basename(sourcePath) : cwdRelativePath.split(sep).join("/")
+  const rawPagePath =
+    isAbsolute(inputPath) || isOutsideCwd ? basename(sourcePath) : cwdRelativePath.split(sep).join("/")
+  const pagePath = projectDocsPagePathNormalize(rawPagePath)
   if (!projectDocsPagePathIsValid(pagePath)) {
     return createResultError(op, "Documentation page path is empty or reserved (index.md).")
   }

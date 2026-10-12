@@ -1989,8 +1989,8 @@ describe("projectRegistryApiHandlerCreate", () => {
     expect(docsPrefix.body).toMatchObject({
       success: true,
       data: {
-        file: "docs/guide.md",
-        urls: ["https://docs.example.test/docs/docs/guide.md"],
+        file: "guide.md",
+        urls: ["https://docs.example.test/docs/guide.md"],
       },
     })
     expect(application.projectChanges).toBe(2)

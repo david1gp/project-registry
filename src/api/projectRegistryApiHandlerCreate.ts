@@ -11,7 +11,7 @@ import { caddyConfigInspectUseCase } from "../caddy/caddyConfigInspectUseCase.js
 import type { CaddyConfigOptions } from "../caddy/caddyConfigOptionsSchema.js"
 import { projectDocsUrlsUseCase } from "../caddy/projectDocsUrlsUseCase.js"
 import type { ProjectDocsPublicationStore } from "../docs/ProjectDocsPublicationStore.js"
-import { projectDocsPagePathIsValid } from "../docs/projectDocsPagePathIsValid.js"
+import { projectDocsPagePathIsValid, projectDocsPagePathNormalize } from "../docs/projectDocsPagePathIsValid.js"
 import type { Project } from "../project/Project.js"
 import type { ProjectMutationOptions } from "../project/ProjectMutationOptions.js"
 import type { ProjectOrganizationRequest } from "../project/ProjectOrganizationRequest.js"
@@ -1095,7 +1095,10 @@ export function projectRegistryApiHandlerCreate(options: ApiHandlerOptions): Pro
       const bodyRecord = recordValue(body)
       const sourcePath = bodyRecord?.sourcePath
       const markdown = bodyRecord?.markdown
-      const pagePath = bodyRecord?.pagePath
+      const pagePath =
+        typeof bodyRecord?.pagePath === "string"
+          ? projectDocsPagePathNormalize(bodyRecord.pagePath)
+          : bodyRecord?.pagePath
       if (
         bodyRecord === undefined ||
         typeof sourcePath !== "string" ||

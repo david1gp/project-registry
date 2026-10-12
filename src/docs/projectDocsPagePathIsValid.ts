@@ -5,3 +5,9 @@ export function projectDocsPagePathIsValid(pagePath: unknown): pagePath is strin
   if (typeof pagePath !== "string" || pagePath.includes("..") || !docsPagePathPattern.test(pagePath)) return false
   return !reservedFirstComponentPattern.test(pagePath.split("/")[0] ?? "")
 }
+
+export function projectDocsPagePathNormalize(pagePath: string): string {
+  let normalized = pagePath
+  while (normalized.startsWith("docs/")) normalized = normalized.slice("docs/".length)
+  return normalized
+}

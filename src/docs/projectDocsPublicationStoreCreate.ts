@@ -3,7 +3,7 @@ import { chmod, lstat, mkdir, readdir, readFile, rename, writeFile } from "node:
 import { basename, dirname, isAbsolute, join, resolve, sep } from "node:path"
 import { createResult, createResultError } from "#result"
 import type { ProjectDocsPublicationStore } from "./ProjectDocsPublicationStore.js"
-import { projectDocsPagePathIsValid } from "./projectDocsPagePathIsValid.js"
+import { projectDocsPagePathIsValid, projectDocsPagePathNormalize } from "./projectDocsPagePathIsValid.js"
 
 type PublicationEntry = { file: string; pagePath?: string; sourcePath: string }
 
@@ -90,15 +90,17 @@ export function projectDocsPublicationStoreCreate(
     if (!isAbsolute(sourcePath) || resolve(sourcePath) !== sourcePath || sourcePath.includes("\0")) {
       return createResultError(op, "sourcePath must be an absolute normalized filesystem path")
     }
-    if (pagePath !== undefined && !projectDocsPagePathIsValid(pagePath)) {
+    const normalizedPagePath = pagePath === undefined ? undefined : projectDocsPagePathNormalize(pagePath)
+    if (normalizedPagePath !== undefined && !projectDocsPagePathIsValid(normalizedPagePath)) {
       return createResultError(op, "pagePath must be a safe relative Markdown path other than index.md")
     }
     if (typeof markdown !== "string" || Buffer.byteLength(markdown, "utf8") > 1_048_576) {
       return createResultError(op, "markdown must be a string no larger than 1 MiB")
     }
     const ownerDirectory = directory(owner)
-    const file = pagePath ?? `${hash(sourcePath)}.md`
-    const metadataName = pagePath === undefined ? `${hash(sourcePath)}.json` : `page-${hash(pagePath)}.json`
+    const file = normalizedPagePath ?? `${hash(sourcePath)}.md`
+    const metadataName =
+      normalizedPagePath === undefined ? `${hash(sourcePath)}.json` : `page-${hash(normalizedPagePath)}.json`
     try {
       await mkdir(root, { recursive: true, mode: 0o755 })
       if (!(await lstat(root)).isDirectory()) throw new Error("publication storage root must be a real directory")
@@ -137,8 +139,12 @@ export function projectDocsPublicationStoreCreate(
           // Ignore corrupt metadata; publication writes a fresh record for this identity.
         }
       }
-      const entry: PublicationEntry = { sourcePath, file, ...(pagePath === undefined ? {} : { pagePath }) }
-      entries.set(pagePath === undefined ? `legacy:${sourcePath}` : `page:${pagePath}`, entry)
+      const entry: PublicationEntry = {
+        sourcePath,
+        file,
+        ...(normalizedPagePath === undefined ? {} : { pagePath: normalizedPagePath }),
+      }
+      entries.set(normalizedPagePath === undefined ? `legacy:${sourcePath}` : `page:${normalizedPagePath}`, entry)
       await writeAtomic(join(ownerDirectory, metadataName), JSON.stringify(entry))
       const index = "index.md"
       const indexContent = await indexGenerate([...entries.values()], ownerDirectory)
