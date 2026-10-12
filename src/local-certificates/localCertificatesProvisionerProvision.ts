@@ -58,15 +58,19 @@ export async function localCertificatesProvisionerProvision(
         "privateKeyPath" in current &&
         typeof current.privateKeyPath === "string"
       ) {
-        const [certificate, privateKey] = await Promise.all([stat(current.certificatePath), stat(current.privateKeyPath)])
+        const [certificate, privateKey] = await Promise.all([
+          stat(current.certificatePath),
+          stat(current.privateKeyPath),
+        ])
         if (certificate.isFile() && privateKey.isFile() && (privateKey.mode & 0o077) === 0) {
           return createResult({
             domains,
             certificatePath: current.certificatePath,
             privateKeyPath: current.privateKeyPath,
-            generationPath: "generationPath" in current && typeof current.generationPath === "string"
-              ? current.generationPath
-              : resolve(current.certificatePath, ".."),
+            generationPath:
+              "generationPath" in current && typeof current.generationPath === "string"
+                ? current.generationPath
+                : resolve(current.certificatePath, ".."),
             changed: false,
           })
         }
@@ -80,7 +84,10 @@ export async function localCertificatesProvisionerProvision(
     const command = await run(binary, ["-cert-file", stagedCertificate, "-key-file", stagedPrivateKey, ...domains])
     if (command.exitCode !== 0) {
       await rm(generationPath, { recursive: true, force: true })
-      return createResultError(op, `mkcert failed (exit code ${command.exitCode})${command.stderr ? `: ${command.stderr.trim()}` : ""}`)
+      return createResultError(
+        op,
+        `mkcert failed (exit code ${command.exitCode})${command.stderr ? `: ${command.stderr.trim()}` : ""}`,
+      )
     }
     const [certificate, privateKey] = await Promise.all([stat(stagedCertificate), stat(stagedPrivateKey)])
     if (!certificate.isFile() || !privateKey.isFile()) throw new Error("mkcert did not produce a certificate/key pair")

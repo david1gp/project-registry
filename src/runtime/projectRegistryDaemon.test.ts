@@ -294,15 +294,18 @@ describe("projectRegistryDaemonConfigValidate", () => {
     for (const caddyGroup of ["0", "root", "root;invalid", " root", "root "]) {
       expect(projectRegistryDaemonConfigValidate({ repositoryPath: "/tmp/repository", caddyGroup }).success).toBe(false)
     }
+    expect(projectRegistryDaemonConfigValidate({ repositoryPath: "/tmp/repository", caddyUser: "root" }).success).toBe(
+      false,
+    )
+    expect(projectRegistryDaemonConfigValidate({ repositoryPath: "/tmp/repository", caddyGroup: "root" }).success).toBe(
+      false,
+    )
     expect(
-      projectRegistryDaemonConfigValidate({ repositoryPath: "/tmp/repository", caddyUser: "root" }).success,
-    ).toBe(false)
-    expect(
-      projectRegistryDaemonConfigValidate({ repositoryPath: "/tmp/repository", caddyGroup: "root" }).success,
-    ).toBe(false)
-    expect(
-      projectRegistryDaemonConfigValidate({ repositoryPath: "/tmp/repository", caddyUser: "caddy", caddyGroup: "caddy" })
-        .success,
+      projectRegistryDaemonConfigValidate({
+        repositoryPath: "/tmp/repository",
+        caddyUser: "caddy",
+        caddyGroup: "caddy",
+      }).success,
     ).toBe(true)
   })
 

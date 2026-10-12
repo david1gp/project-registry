@@ -7,11 +7,14 @@ export function projectRegistryDaemonServerConfigurationCreate(
   // idle timeout applies to both HTTP and Unix requests awaiting a response.
   const values: Record<string, unknown> = {
     fetch: (request: Request, server: { timeout: (request: Request, seconds: number) => void }) => {
-      if (request.method === "POST" && /^\/api\/v1\/users\/[^/]+\/projects\/[^/]+\/fix-acl$/.test(new URL(request.url).pathname)) {
+      if (
+        request.method === "POST" &&
+        /^\/api\/v1\/users\/[^/]+\/projects\/[^/]+\/fix-acl$/.test(new URL(request.url).pathname)
+      ) {
         server.timeout(request, 0)
       }
       return options.fetch(request)
-    }
+    },
   }
   if (options.unix !== undefined) {
     values.unix = options.unix

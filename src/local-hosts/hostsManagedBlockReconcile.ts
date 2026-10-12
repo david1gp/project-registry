@@ -37,7 +37,13 @@ export async function hostsManagedBlockReconcile(
   if (starts.length === 1) {
     const start = starts[0]
     const end = ends[0]
-    if (start === undefined || end === undefined || start.index === undefined || end.index === undefined || end.index < start.index) {
+    if (
+      start === undefined ||
+      end === undefined ||
+      start.index === undefined ||
+      end.index === undefined ||
+      end.index < start.index
+    ) {
       return createResultError(op, "Existing managed hosts markers are malformed.")
     }
     const endAfterLine = existing.indexOf("\n", end.index)

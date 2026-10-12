@@ -32,7 +32,9 @@ describe("projectRegistryCliSocketResolve", () => {
     "rejects missing or relative XDG runtime only for the user-mode default (%s)",
     (runtimeDirectory) => {
       const environment = { XDG_RUNTIME_DIR: runtimeDirectory, USER: "david" }
-      expect(projectRegistryCliSocketResolve(undefined, { ...environment, PROJECT_REGISTRY_MODE: "user" })).toMatchObject({
+      expect(
+        projectRegistryCliSocketResolve(undefined, { ...environment, PROJECT_REGISTRY_MODE: "user" }),
+      ).toMatchObject({
         success: false,
         op: "projectRegistryCliSocketResolve",
         errorMessage: "XDG_RUNTIME_DIR must be an absolute path in user mode.",
@@ -65,7 +67,9 @@ describe("projectRegistryCliSocketResolve", () => {
         success: true,
         data: "/environment.sock",
       })
-      expect(projectRegistryCliSocketResolve("/explicit.sock", { ...environment, PROJECT_REGISTRY_SOCKET: "" })).toEqual({
+      expect(
+        projectRegistryCliSocketResolve("/explicit.sock", { ...environment, PROJECT_REGISTRY_SOCKET: "" }),
+      ).toEqual({
         success: true,
         data: "/explicit.sock",
       })

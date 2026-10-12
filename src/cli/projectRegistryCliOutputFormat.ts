@@ -91,11 +91,13 @@ const accessLogPageSchema = a.object({
   malformedLines: a.pipe(a.number(), a.integer(), a.minValue(0)),
 })
 const projectAclRepairSchema = a.object({
-  roots: a.array(a.object({
-    root: a.string(),
-    entries: a.pipe(a.number(), a.integer(), a.minValue(0)),
-    skipped: a.optional(a.literal("caddy-root")),
-  })),
+  roots: a.array(
+    a.object({
+      root: a.string(),
+      entries: a.pipe(a.number(), a.integer(), a.minValue(0)),
+      skipped: a.optional(a.literal("caddy-root")),
+    }),
+  ),
 })
 const backendVersionSchema = a.object({ version: a.string() })
 
@@ -308,9 +310,13 @@ export function projectRegistryCliOutputFormat(
   if (command.kind === "project-fix-acl") {
     const repair = parsedData as a.InferOutput<typeof projectAclRepairSchema>
     return createResult(
-      `${repair.roots.map(({ root, entries, skipped }) => skipped === "caddy-root"
-        ? `ACL repair unnecessary: Caddy runs as root (${root})`
-        : `repaired ${root} (${entries} entries)`).join("\n")}\n`,
+      `${repair.roots
+        .map(({ root, entries, skipped }) =>
+          skipped === "caddy-root"
+            ? `ACL repair unnecessary: Caddy runs as root (${root})`
+            : `repaired ${root} (${entries} entries)`,
+        )
+        .join("\n")}\n`,
     )
   }
   if (command.kind === "backend-version") {

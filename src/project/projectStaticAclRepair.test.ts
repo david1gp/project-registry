@@ -2,7 +2,15 @@ import { describe, expect, test } from "bun:test"
 import { constants } from "node:fs"
 import { projectStaticAclRepair, type ProjectStaticAclRepairAdapter } from "./projectStaticAclRepair.js"
 
-type Node = { kind: "directory" | "file" | "symlink"; mode: number; ino: number; nlink: number; mountId: number; children?: string[]; acl: Map<string, string> }
+type Node = {
+  kind: "directory" | "file" | "symlink"
+  mode: number
+  ino: number
+  nlink: number
+  mountId: number
+  children?: string[]
+  acl: Map<string, string>
+}
 
 function fixture() {
   const nodes = new Map<string, Node>()
@@ -13,7 +21,12 @@ function fixture() {
   const calls: { command: string; args: string[] }[] = []
   let fail: string | undefined
   let verifyFailure = false
-  const basic = () => new Map([["user:", "rwx"], ["group:", "r-x"], ["other:", "---"]])
+  const basic = () =>
+    new Map([
+      ["user:", "rwx"],
+      ["group:", "r-x"],
+      ["other:", "---"],
+    ])
   function add(path: string, kind: Node["kind"] = "directory", mode = 0o755) {
     nodes.set(path, { kind, mode, ino: nextIno++, nlink: 1, mountId: 1, children: [], acl: basic() })
     if (path !== "/") nodes.get(path.slice(0, path.lastIndexOf("/")) || "/")?.children?.push(path.split("/").at(-1)!)
@@ -48,16 +61,20 @@ function fixture() {
       pinned.set(fd, node)
       return {
         fd,
-        stat: async () => ({
-          isDirectory: () => node.kind === "directory",
-          isFile: () => node.kind === "file",
-          isSymbolicLink: () => node.kind === "symlink",
-          mode: node.mode,
-          ino: node.ino,
-          dev: 1,
-          nlink: node.nlink,
-        }) as never,
-        close: async () => { handles.delete(fd); pinned.delete(fd) },
+        stat: async () =>
+          ({
+            isDirectory: () => node.kind === "directory",
+            isFile: () => node.kind === "file",
+            isSymbolicLink: () => node.kind === "symlink",
+            mode: node.mode,
+            ino: node.ino,
+            dev: 1,
+            nlink: node.nlink,
+          }) as never,
+        close: async () => {
+          handles.delete(fd)
+          pinned.delete(fd)
+        },
       }
     },
     list: async (descriptor) => [...(nodes.get(descriptorPath(descriptor))?.children ?? [])],
@@ -70,7 +87,11 @@ function fixture() {
       const node = descriptor ? pinned.get(Number(descriptor[1])) : nodes.get(path)
       if (!node) throw new Error(`missing: ${path}`)
       if (command === "getfacl") {
-        return { exitCode: 0, stdout: `${[...node.acl].map(([key, value]) => `${key}:${value}`).join("\n")}\n`, stderr: "" }
+        return {
+          exitCode: 0,
+          stdout: `${[...node.acl].map(([key, value]) => `${key}:${value}`).join("\n")}\n`,
+          stderr: "",
+        }
       }
       if (command === "setfacl") {
         expect(args).toContain("--no-mask")
@@ -88,11 +109,22 @@ function fixture() {
       const node = pinned.get(fd)!
       const named = node.acl.get("user:caddy")
       const mask = node.acl.get("mask:") ?? "rwx"
-      const allowed = named === undefined ? node.acl.get("other:")! : [...named].filter((right) => mask.includes(right)).join("")
+      const allowed =
+        named === undefined ? node.acl.get("other:")! : [...named].filter((right) => mask.includes(right)).join("")
       if (!allowed.includes(permission.slice(1))) throw new Error("Caddy verification failed")
     },
   }
-  return { nodes, calls, adapter, failWith(command: string) { fail = command }, failVerification() { verifyFailure = true } }
+  return {
+    nodes,
+    calls,
+    adapter,
+    failWith(command: string) {
+      fail = command
+    },
+    failVerification() {
+      verifyFailure = true
+    },
+  }
 }
 
 describe("projectStaticAclRepair", () => {
@@ -100,14 +132,32 @@ describe("projectStaticAclRepair", () => {
     const f = fixture()
     const calls: string[] = []
     const adapter: ProjectStaticAclRepairAdapter = {
-      open: async () => { calls.push("open"); throw new Error("unexpected open") },
-      mountId: async () => { calls.push("mountId"); throw new Error("unexpected mountId") },
-      list: async () => { calls.push("list"); throw new Error("unexpected list") },
-      run: async () => { calls.push("run"); throw new Error("unexpected run") },
-      verify: async () => { calls.push("verify"); throw new Error("unexpected verify") },
+      open: async () => {
+        calls.push("open")
+        throw new Error("unexpected open")
+      },
+      mountId: async () => {
+        calls.push("mountId")
+        throw new Error("unexpected mountId")
+      },
+      list: async () => {
+        calls.push("list")
+        throw new Error("unexpected list")
+      },
+      run: async () => {
+        calls.push("run")
+        throw new Error("unexpected run")
+      },
+      verify: async () => {
+        calls.push("verify")
+        throw new Error("unexpected verify")
+      },
     }
     const result = await projectStaticAclRepair("ada", "/home/ada/projects/site/dist", adapter, { caddyUser: "root" })
-    expect(result).toMatchObject({ success: true, data: { root: "/home/ada/projects/site/dist", entries: 0, skipped: "caddy-root" } })
+    expect(result).toMatchObject({
+      success: true,
+      data: { root: "/home/ada/projects/site/dist", entries: 0, skipped: "caddy-root" },
+    })
     expect(calls).toEqual([])
     expect(f.calls).toHaveLength(0)
     expect(f.nodes.get("/home/ada/projects/site/dist")!.acl.has("user:caddy")).toBe(false)
@@ -115,7 +165,9 @@ describe("projectStaticAclRepair", () => {
 
   test("root Caddy identity still rejects roots outside the authorized owner scope", async () => {
     const f = fixture()
-    const result = await projectStaticAclRepair("ada", "/home/ada/projects-other/site", f.adapter, { caddyUser: "root" })
+    const result = await projectStaticAclRepair("ada", "/home/ada/projects-other/site", f.adapter, {
+      caddyUser: "root",
+    })
     expect(result.success).toBe(false)
     expect(f.calls).toHaveLength(0)
   })
@@ -123,34 +175,79 @@ describe("projectStaticAclRepair", () => {
   test("unsupported non-root Caddy identities fail before path access or ACL commands", async () => {
     const calls: string[] = []
     const adapter: ProjectStaticAclRepairAdapter = {
-      open: async () => { calls.push("open"); throw new Error("unexpected open") },
-      mountId: async () => { calls.push("mountId"); throw new Error("unexpected mountId") },
-      list: async () => { calls.push("list"); throw new Error("unexpected list") },
-      run: async () => { calls.push("run"); throw new Error("unexpected run") },
-      verify: async () => { calls.push("verify"); throw new Error("unexpected verify") },
+      open: async () => {
+        calls.push("open")
+        throw new Error("unexpected open")
+      },
+      mountId: async () => {
+        calls.push("mountId")
+        throw new Error("unexpected mountId")
+      },
+      list: async () => {
+        calls.push("list")
+        throw new Error("unexpected list")
+      },
+      run: async () => {
+        calls.push("run")
+        throw new Error("unexpected run")
+      },
+      verify: async () => {
+        calls.push("verify")
+        throw new Error("unexpected verify")
+      },
     }
-    const result = await projectStaticAclRepair("ada", "/home/ada/projects/site/dist", adapter, { caddyUser: "www-data" })
-    expect(result).toMatchObject({ success: false, errorMessage: "unsupported Caddy identity for ACL repair: www-data; supported non-root identity is caddy" })
+    const result = await projectStaticAclRepair("ada", "/home/ada/projects/site/dist", adapter, {
+      caddyUser: "www-data",
+    })
+    expect(result).toMatchObject({
+      success: false,
+      errorMessage: "unsupported Caddy identity for ACL repair: www-data; supported non-root identity is caddy",
+    })
     expect(calls).toEqual([])
   })
 
   test("root Caddy identity rejects a NUL-containing root without inspecting paths", async () => {
     const calls: string[] = []
     const adapter: ProjectStaticAclRepairAdapter = {
-      open: async () => { calls.push("open"); throw new Error("unexpected open") },
-      mountId: async () => { calls.push("mountId"); throw new Error("unexpected mountId") },
-      list: async () => { calls.push("list"); throw new Error("unexpected list") },
-      run: async () => { calls.push("run"); throw new Error("unexpected run") },
-      verify: async () => { calls.push("verify"); throw new Error("unexpected verify") },
+      open: async () => {
+        calls.push("open")
+        throw new Error("unexpected open")
+      },
+      mountId: async () => {
+        calls.push("mountId")
+        throw new Error("unexpected mountId")
+      },
+      list: async () => {
+        calls.push("list")
+        throw new Error("unexpected list")
+      },
+      run: async () => {
+        calls.push("run")
+        throw new Error("unexpected run")
+      },
+      verify: async () => {
+        calls.push("verify")
+        throw new Error("unexpected verify")
+      },
     }
-    const result = await projectStaticAclRepair("ada", "/home/ada/projects/site\0suffix", adapter, { caddyUser: "root" })
+    const result = await projectStaticAclRepair("ada", "/home/ada/projects/site\0suffix", adapter, {
+      caddyUser: "root",
+    })
     expect(result.success).toBe(false)
     expect(calls).toEqual([])
   })
 
   test("rejects escaping paths and mismatched owners without running commands", async () => {
     const f = fixture()
-    for (const root of ["/home/ada/projects", "/home/adam/projects/site", "/home/ada/projects/../other", "/home/ada/wiki2", "/tmp/ada/projects/site", "/home/ada/projects/site/", "/home/ada/projects/site\0suffix"]) {
+    for (const root of [
+      "/home/ada/projects",
+      "/home/adam/projects/site",
+      "/home/ada/projects/../other",
+      "/home/ada/wiki2",
+      "/tmp/ada/projects/site",
+      "/home/ada/projects/site/",
+      "/home/ada/projects/site\0suffix",
+    ]) {
       expect((await projectStaticAclRepair("ada", root, f.adapter)).success).toBe(false)
     }
     expect((await projectStaticAclRepair("../ada", "/home/ada/wiki", f.adapter)).success).toBe(false)
@@ -241,7 +338,19 @@ describe("projectStaticAclRepair", () => {
 
   test("accepts the wiki subtree but not a neighboring path", async () => {
     const f = fixture()
-    f.nodes.set("/home/ada/wiki", { kind: "directory", mode: 0o755, ino: 1000, nlink: 1, mountId: 1, children: [], acl: new Map([["user:", "rwx"], ["group:", "r-x"], ["other:", "---"]]) })
+    f.nodes.set("/home/ada/wiki", {
+      kind: "directory",
+      mode: 0o755,
+      ino: 1000,
+      nlink: 1,
+      mountId: 1,
+      children: [],
+      acl: new Map([
+        ["user:", "rwx"],
+        ["group:", "r-x"],
+        ["other:", "---"],
+      ]),
+    })
     expect((await projectStaticAclRepair("ada", "/home/ada/wiki", f.adapter)).success).toBe(true)
     expect((await projectStaticAclRepair("ada", "/home/ada/wiki-backup", f.adapter)).success).toBe(false)
   })
@@ -252,7 +361,12 @@ describe("projectStaticAclRepair", () => {
     const root = `/home/${owner}/wiki`
     const parent = f.nodes.get("/home/ada")!
     f.nodes.set(`/home/${owner}`, { ...parent, ino: 1001, children: ["wiki"], acl: new Map(parent.acl) })
-    f.nodes.set(root, { ...f.nodes.get("/home/ada/projects/site/dist")!, ino: 1002, children: [], acl: new Map(parent.acl) })
+    f.nodes.set(root, {
+      ...f.nodes.get("/home/ada/projects/site/dist")!,
+      ino: 1002,
+      children: [],
+      acl: new Map(parent.acl),
+    })
     expect((await projectStaticAclRepair(owner, root, f.adapter)).success).toBe(true)
     expect((await projectStaticAclRepair(owner, "/home/Ada.Name2/wiki", f.adapter)).success).toBe(false)
   })
@@ -260,10 +374,14 @@ describe("projectStaticAclRepair", () => {
   test("reports command and verification failures", async () => {
     const failing = fixture()
     failing.failWith("setfacl")
-    expect(await projectStaticAclRepair("ada", "/home/ada/projects/site/dist", failing.adapter)).toMatchObject({ success: false })
+    expect(await projectStaticAclRepair("ada", "/home/ada/projects/site/dist", failing.adapter)).toMatchObject({
+      success: false,
+    })
     const verification = fixture()
     verification.failVerification()
-    expect(await projectStaticAclRepair("ada", "/home/ada/projects/site/dist", verification.adapter)).toMatchObject({ success: false })
+    expect(await projectStaticAclRepair("ada", "/home/ada/projects/site/dist", verification.adapter)).toMatchObject({
+      success: false,
+    })
     const masked = fixture()
     const original = masked.adapter.run
     masked.adapter.run = async (command, args) => {
@@ -272,7 +390,10 @@ describe("projectStaticAclRepair", () => {
       return result
     }
     const result = await projectStaticAclRepair("ada", "/home/ada/projects/site/dist", masked.adapter)
-    expect(result).toMatchObject({ success: false, errorMessage: "Partial ACL repair may have occurred: Caddy ACL is masked" })
+    expect(result).toMatchObject({
+      success: false,
+      errorMessage: "Partial ACL repair may have occurred: Caddy ACL is masked",
+    })
   })
 
   test("reports possible partial repair when a later ACL operation fails", async () => {
@@ -285,7 +406,10 @@ describe("projectStaticAclRepair", () => {
       return run(command, args)
     }
     const result = await projectStaticAclRepair("ada", "/home/ada/projects/site/dist", f.adapter)
-    expect(result).toMatchObject({ success: false, errorMessage: expect.stringContaining("Partial ACL repair may have occurred") })
+    expect(result).toMatchObject({
+      success: false,
+      errorMessage: expect.stringContaining("Partial ACL repair may have occurred"),
+    })
   })
 
   test("does not write shared ancestors when Caddy already has traversal", async () => {
@@ -326,7 +450,10 @@ describe("projectStaticAclRepair", () => {
         f.nodes.set(root, { ...f.nodes.get(root)!, ino: 10000 })
       }
     }
-    expect(await projectStaticAclRepair("ada", root, f.adapter)).toMatchObject({ success: false, errorMessage: `Partial ACL repair may have occurred: static path changed: ${root}` })
+    expect(await projectStaticAclRepair("ada", root, f.adapter)).toMatchObject({
+      success: false,
+      errorMessage: `Partial ACL repair may have occurred: static path changed: ${root}`,
+    })
   })
 
   test("does not grant a pinned file after it has been renamed out of the served tree", async () => {
@@ -342,14 +469,22 @@ describe("projectStaticAclRepair", () => {
     const original = f.adapter.run
     f.adapter.run = async (command, args) => {
       const result = await original(command, args)
-      if (command === "getfacl" && fileFd !== undefined && args.at(-1)?.endsWith(`/fd/${fileFd}`) && f.nodes.get(file)!.ino < 10000) {
+      if (
+        command === "getfacl" &&
+        fileFd !== undefined &&
+        args.at(-1)?.endsWith(`/fd/${fileFd}`) &&
+        f.nodes.get(file)!.ino < 10000
+      ) {
         // The pathname has changed between ACL read and the attempted mutation.
         f.nodes.set(file, { ...f.nodes.get(file)!, ino: 10000 })
       }
       return result
     }
     const result = await projectStaticAclRepair("ada", "/home/ada/projects/site/dist", f.adapter)
-    expect(result).toMatchObject({ success: false, errorMessage: `Partial ACL repair may have occurred: static path changed: ${file}` })
+    expect(result).toMatchObject({
+      success: false,
+      errorMessage: `Partial ACL repair may have occurred: static path changed: ${file}`,
+    })
     expect(f.nodes.get(file)!.acl.has("user:caddy")).toBe(false)
   })
 
@@ -374,7 +509,10 @@ describe("projectStaticAclRepair", () => {
       return result
     }
     const result = await projectStaticAclRepair("ada", "/home/ada/projects/site/dist", f.adapter)
-    expect(result).toMatchObject({ success: false, errorMessage: `Partial ACL repair may have occurred: static path changed: ${file}` })
+    expect(result).toMatchObject({
+      success: false,
+      errorMessage: `Partial ACL repair may have occurred: static path changed: ${file}`,
+    })
     expect(originalNode.acl.has("user:caddy")).toBe(false)
     expect(f.nodes.get(file)!.acl.has("user:caddy")).toBe(false)
     expect(f.calls.some(({ command, args }) => command === "setfacl" && args.includes("--set"))).toBe(true)

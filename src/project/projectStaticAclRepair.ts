@@ -84,14 +84,19 @@ function aclChanges(before: Acl, desired: number, includeDefault: boolean): stri
     const nextMask = oldMask | caddyRights
     for (const [key, value] of before) {
       if (!key.startsWith(prefix) || (prefix === "" && key.startsWith("default:"))) continue
-      if (key === `${prefix}group:` || key.startsWith(`${prefix}group:`) || (key.startsWith(`${prefix}user:`) && key !== `${prefix}user:` && key !== `${prefix}user:caddy`)) {
+      if (
+        key === `${prefix}group:` ||
+        key.startsWith(`${prefix}group:`) ||
+        (key.startsWith(`${prefix}user:`) && key !== `${prefix}user:` && key !== `${prefix}user:caddy`)
+      ) {
         if (nextMask !== oldMask) changes.push(`${key}:${mode(bits(value) & oldMask)}`)
       }
     }
     if (prefix === "default:" && !before.has("default:user:")) {
       for (const kind of ["user:", "group:", "other:"]) changes.push(`default:${kind}:${before.get(kind)}`)
     }
-    if (before.get(`${prefix}user:caddy`) !== mode(caddyRights)) changes.push(`${prefix}user:caddy:${mode(caddyRights)}`)
+    if (before.get(`${prefix}user:caddy`) !== mode(caddyRights))
+      changes.push(`${prefix}user:caddy:${mode(caddyRights)}`)
     // Supplying the mask explicitly avoids setfacl's automatic recalculation.
     if (before.get(`${prefix}mask:`) !== mode(nextMask)) changes.push(`${prefix}mask::${mode(nextMask)}`)
   }
@@ -123,7 +128,8 @@ function aclVerify(before: Acl, after: Acl, desired: number, includeDefault: boo
 function rootParts(owner: string, root: string): string[] {
   // Match the authorized project owner pattern (CLI and API), while excluding path segments.
   if (!/^[A-Za-z_][A-Za-z0-9_.-]*\$?$/.test(owner) || owner === "." || owner === "..") throw new Error("invalid owner")
-  if (!root.startsWith("/") || root.includes("\0") || root.includes("//") || root.endsWith("/")) throw new Error("invalid static root")
+  if (!root.startsWith("/") || root.includes("\0") || root.includes("//") || root.endsWith("/"))
+    throw new Error("invalid static root")
   const parts = root.slice(1).split("/")
   if (parts.some((part) => part === "." || part === ".." || !part)) throw new Error("invalid static root")
   if (parts[0] !== "home" || parts[1] !== owner) throw new Error("root does not belong to owner")
@@ -149,7 +155,10 @@ export async function projectStaticAclRepair(
     }
   }
   if (options.caddyUser !== undefined && options.caddyUser !== "caddy") {
-    return createResultError(op, `unsupported Caddy identity for ACL repair: ${options.caddyUser}; supported non-root identity is caddy`)
+    return createResultError(
+      op,
+      `unsupported Caddy identity for ACL repair: ${options.caddyUser}; supported non-root identity is caddy`,
+    )
   }
   let handle: Handle | undefined
   const openedHandles: Handle[] = []
@@ -163,7 +172,14 @@ export async function projectStaticAclRepair(
     const flags = linuxOPath | constants.O_NOFOLLOW
     handle = await adapter.open("/", flags | constants.O_DIRECTORY)
     const filesystemMount = await adapter.mountId(handle.fd)
-    const filesystemRoot: Entry = { path: "/", descriptor: `/proc/${process.pid}/fd/${handle.fd}`, directory: true, executable: true, stat: await handle.stat(), mountId: filesystemMount }
+    const filesystemRoot: Entry = {
+      path: "/",
+      descriptor: `/proc/${process.pid}/fd/${handle.fd}`,
+      directory: true,
+      executable: true,
+      stat: await handle.stat(),
+      mountId: filesystemMount,
+    }
     let parent = handle
     let current = ""
     for (let i = 0; i < parts.length; i++) {
@@ -179,7 +195,17 @@ export async function projectStaticAclRepair(
       }
       parent = child
       current = path
-      opened.push({ entry: { path, descriptor: `/proc/${process.pid}/fd/${child.fd}`, directory: stat.isDirectory(), executable: (stat.mode & 0o111) !== 0, stat, mountId }, handle: child })
+      opened.push({
+        entry: {
+          path,
+          descriptor: `/proc/${process.pid}/fd/${child.fd}`,
+          directory: stat.isDirectory(),
+          executable: (stat.mode & 0o111) !== 0,
+          stat,
+          mountId,
+        },
+        handle: child,
+      })
     }
     // Keep the root descriptor open until all descendants have been processed.
     const rootHandle = parent
@@ -197,16 +223,23 @@ export async function projectStaticAclRepair(
     async function checkPath(entry: Entry): Promise<void> {
       let parent = await adapter.open("/", flags | constants.O_DIRECTORY)
       try {
-        if (await adapter.mountId(parent.fd) !== filesystemMount) throw new Error(`static path changed: ${entry.path}`)
+        if ((await adapter.mountId(parent.fd)) !== filesystemMount)
+          throw new Error(`static path changed: ${entry.path}`)
         for (const part of entry.path === "/" ? [] : entry.path.slice(1).split("/")) {
           const child = await adapter.open(`/proc/self/fd/${parent.fd}/${part}`, flags)
           await parent.close()
           parent = child
           const stat = await child.stat()
-          if (stat.isSymbolicLink() || await adapter.mountId(child.fd) !== filesystemMount) throw new Error(`static path changed: ${entry.path}`)
+          if (stat.isSymbolicLink() || (await adapter.mountId(child.fd)) !== filesystemMount)
+            throw new Error(`static path changed: ${entry.path}`)
         }
         const stat = await parent.stat()
-        if (stat.dev !== entry.stat.dev || stat.ino !== entry.stat.ino || await adapter.mountId(parent.fd) !== entry.mountId) throw new Error(`static path changed: ${entry.path}`)
+        if (
+          stat.dev !== entry.stat.dev ||
+          stat.ino !== entry.stat.ino ||
+          (await adapter.mountId(parent.fd)) !== entry.mountId
+        )
+          throw new Error(`static path changed: ${entry.path}`)
       } finally {
         await parent.close()
       }
@@ -237,13 +270,23 @@ export async function projectStaticAclRepair(
           try {
             // A rename between the last check and setfacl cannot be made atomic with
             // external ACL tools. Best-effort restore prevents a persistent off-root grant.
-            await run("setfacl", ["--no-mask", "--set", [...before].map(([key, value]) => `${key}:${value}`).join(","), "--", entry.descriptor])
-            const restored = aclParse(await run("getfacl", ["--absolute-names", "--omit-header", "--", entry.descriptor]))
+            await run("setfacl", [
+              "--no-mask",
+              "--set",
+              [...before].map(([key, value]) => `${key}:${value}`).join(","),
+              "--",
+              entry.descriptor,
+            ])
+            const restored = aclParse(
+              await run("getfacl", ["--absolute-names", "--omit-header", "--", entry.descriptor]),
+            )
             if (restored.size !== before.size || [...before].some(([key, value]) => restored.get(key) !== value)) {
               throw new Error("ACL rollback verification failed")
             }
           } catch (rollbackError) {
-            throw new Error(`${error instanceof Error ? error.message : error}; ACL rollback failed: ${rollbackError instanceof Error ? rollbackError.message : rollbackError}`)
+            throw new Error(
+              `${error instanceof Error ? error.message : error}; ACL rollback failed: ${rollbackError instanceof Error ? rollbackError.message : rollbackError}`,
+            )
           }
         }
         throw error
@@ -284,10 +327,21 @@ export async function projectStaticAclRepair(
           if (mountId !== filesystemMount) throw new Error(`mount crossing: ${join(entry.path, name)}`)
           // Symlinks are deliberately never traversed or modified.
           if (stat.isSymbolicLink()) continue
-          if (!stat.isDirectory() && !stat.isFile()) throw new Error(`unsupported static entry: ${join(entry.path, name)}`)
+          if (!stat.isDirectory() && !stat.isFile())
+            throw new Error(`unsupported static entry: ${join(entry.path, name)}`)
           // A file with another hardlink might also be served outside this root.
           if (stat.isFile() && stat.nlink !== 1) throw new Error(`hardlinked static entry: ${join(entry.path, name)}`)
-          await walk({ path: join(entry.path, name), descriptor: `/proc/${process.pid}/fd/${child.fd}`, directory: stat.isDirectory(), executable: (stat.mode & 0o111) !== 0, stat, mountId }, child)
+          await walk(
+            {
+              path: join(entry.path, name),
+              descriptor: `/proc/${process.pid}/fd/${child.fd}`,
+              directory: stat.isDirectory(),
+              executable: (stat.mode & 0o111) !== 0,
+              stat,
+              mountId,
+            },
+            child,
+          )
         } finally {
           await child.close()
         }
@@ -297,7 +351,11 @@ export async function projectStaticAclRepair(
     return createResult({ root, entries: count })
   } catch (error) {
     const message = error instanceof Error ? error.message : "ACL repair failed"
-    return createResultError(op, aclMutationAttempted ? `Partial ACL repair may have occurred: ${message}` : message, root)
+    return createResultError(
+      op,
+      aclMutationAttempted ? `Partial ACL repair may have occurred: ${message}` : message,
+      root,
+    )
   } finally {
     // Keep all ancestor descriptors pinned during the complete traversal.
     for (const child of openedHandles) await child.close()
