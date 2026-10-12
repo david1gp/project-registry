@@ -51,6 +51,7 @@ type ApiHandlerOptions = {
   projectCreateAfterPersistence?: (project: Project, options: { noDns: boolean }) => void
   projectEditAfterPersistence?: (previous: Project, project: Project) => void
   projectDeleteAfterPersistence?: (project: Project) => void
+  projectOrganizeAfterPersistence?: () => void
 }
 
 type ApiRoute =
@@ -911,6 +912,11 @@ export function projectRegistryApiHandlerCreate(options: ApiHandlerOptions): Pro
       )
       if (!mutationR.success) return resultErrorResponse(mutationR, false, "projects")
       if (mutationR.data.changed) {
+        try {
+          options.projectOrganizeAfterPersistence?.()
+        } catch {
+          // Background integrations must not turn a successful persistence into a failed organization.
+        }
         const applicationR = await options.caddyApplication.projectChange()
         if (!applicationR.success) return resultErrorResponse(applicationR, false, "caddy")
       }

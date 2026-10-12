@@ -7,6 +7,7 @@ export type ProjectRegistryDaemonConfig = {
   localDomains?: LocalDomainsOptions
   repositoryPath: string
   docsPublicationDirectory: string
+  wikiRoot?: string
   repositoryBranch: string
   mappedUsers: readonly string[]
   defaultUserDomains: Readonly<Record<string, string>>

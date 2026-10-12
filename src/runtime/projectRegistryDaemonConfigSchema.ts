@@ -153,6 +153,7 @@ export const projectRegistryDaemonConfigSchema = a.strictObject({
   localDomains: a.optional(localDomainsOptionsSchema),
   repositoryPath: absolutePathSchema,
   docsPublicationDirectory: a.optional(absolutePathSchema, "/var/lib/project-registry-docs"),
+  wikiRoot: a.optional(absolutePathSchema),
   repositoryBranch: a.optional(branchSchema, "main"),
   mappedUsers: a.optional(
     a.pipe(

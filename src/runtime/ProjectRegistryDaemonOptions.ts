@@ -20,6 +20,7 @@ import type { ProjectRegistryDaemonServerIpFilesystem } from "./ProjectRegistryD
 import type { ProjectRegistryDaemonServerIpLogger } from "./ProjectRegistryDaemonServerIpLogger.js"
 import type { ProjectRegistryDaemonSignals } from "./ProjectRegistryDaemonSignals.js"
 import type { ProjectRegistryDaemonSocketAccessResolve } from "./ProjectRegistryDaemonSocketAccessResolve.js"
+import type { ProjectRegistryDaemonWikiReconcile } from "./ProjectRegistryDaemonWikiReconcile.js"
 
 export type ProjectRegistryDaemonOptions = {
   config: unknown
@@ -47,5 +48,6 @@ export type ProjectRegistryDaemonOptions = {
   cloudflareDnsFetch?: CloudflareDnsFetch
   cloudflareDnsTrackingFilesystem?: ProjectRegistryDaemonCloudflareDnsTrackingFilesystem
   cloudflareDnsCredentialsFilesystem?: ProjectRegistryDaemonCloudflareCredentialsFilesystem
+  wikiReconcile?: ProjectRegistryDaemonWikiReconcile
   requireRoot?: boolean
 }

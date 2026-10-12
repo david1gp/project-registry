@@ -36,6 +36,7 @@ import { projectRegistryDaemonServerDefault } from "./projectRegistryDaemonServe
 import { projectRegistryDaemonServerIpCreate } from "./projectRegistryDaemonServerIpCreate.js"
 import { projectRegistryDaemonServerIpFilesystemDefault } from "./projectRegistryDaemonServerIpFilesystemDefault.js"
 import { projectRegistryDaemonSignalsDefault } from "./projectRegistryDaemonSignalsDefault.js"
+import { projectRegistryWikiSyncCreate } from "./projectRegistryWikiSyncCreate.js"
 
 const socketMode = 0o600
 const directoryMode = 0o755
@@ -219,6 +220,7 @@ export function projectRegistryDaemonCreate(options: ProjectRegistryDaemonOption
   let cloudflareDnsFetchOption: ProjectRegistryDaemonOptions["cloudflareDnsFetch"]
   let cloudflareDnsTrackingFilesystemOption: ProjectRegistryDaemonOptions["cloudflareDnsTrackingFilesystem"]
   let cloudflareDnsCredentialsFilesystemOption: ProjectRegistryDaemonOptions["cloudflareDnsCredentialsFilesystem"]
+  let wikiReconcileOption: ProjectRegistryDaemonOptions["wikiReconcile"]
   let requireRootOption: ProjectRegistryDaemonOptions["requireRoot"]
   try {
     configInput = options.config
@@ -241,6 +243,7 @@ export function projectRegistryDaemonCreate(options: ProjectRegistryDaemonOption
     cloudflareDnsFetchOption = options.cloudflareDnsFetch
     cloudflareDnsTrackingFilesystemOption = options.cloudflareDnsTrackingFilesystem
     cloudflareDnsCredentialsFilesystemOption = options.cloudflareDnsCredentialsFilesystem
+    wikiReconcileOption = options.wikiReconcile
     requireRootOption = options.requireRoot
   } catch (error) {
     return createResultError(op, error instanceof Error ? error.message : "invalid daemon options")
@@ -302,6 +305,18 @@ export function projectRegistryDaemonCreate(options: ProjectRegistryDaemonOption
   })
   if (!cloudflareDnsR.success) return cloudflareDnsR
   const cloudflareDns = cloudflareDnsR.data
+  const wikiSyncR = projectRegistryWikiSyncCreate({
+    ...(config.wikiRoot === undefined ? {} : { wikiRoot: config.wikiRoot }),
+    repositoryProjectsCurrent: async () => {
+      const snapshotR = await repository.read()
+      return snapshotR.success ? createResult(snapshotR.data.projects) : snapshotR
+    },
+    ...(wikiReconcileOption === undefined ? {} : { reconcile: wikiReconcileOption }),
+    ...(serverIpLoggerOption === undefined ? {} : { logger: serverIpLoggerOption }),
+  })
+  if (!wikiSyncR.success) return wikiSyncR
+  const wikiSync = wikiSyncR.data
+  const wikiSyncEnabled = config.wikiRoot !== undefined
   const mappedUsersResolve = mappedUsersResolveOption
   const socketRecords = new Map<string, SocketRecord>()
   const cleanupRecords = new Map<string, SocketRecord>()
@@ -1212,11 +1227,52 @@ export function projectRegistryDaemonCreate(options: ProjectRegistryDaemonOption
       portRange: config.portRange,
       defaultUserDomains: config.defaultUserDomains,
       cloudflareCredentials: cloudflareCredentialsR.data,
-      ...(config.cloudflareDns.enabled
-        ? { projectCreateAfterPersistence: cloudflareDns.projectCreateAfterPersistence }
+      ...(config.cloudflareDns.enabled || wikiSyncEnabled
+        ? {
+            projectCreateAfterPersistence: (project, createOptions) => {
+              if (config.cloudflareDns.enabled) {
+                try {
+                  cloudflareDns.projectCreateAfterPersistence(project, createOptions)
+                } catch {
+                  // Post-persistence integrations must not fail the mutation or skip Wiki sync.
+                }
+              }
+              if (wikiSyncEnabled) {
+                try {
+                  wikiSync.projectCreateAfterPersistence(project, createOptions)
+                } catch {
+                  // Wiki sync scheduling must not fail the mutation.
+                }
+              }
+            },
+          }
         : {}),
-      projectEditAfterPersistence: cloudflareDns.projectEditAfterPersistence,
+      projectEditAfterPersistence: (previous, project) => {
+        try {
+          cloudflareDns.projectEditAfterPersistence(previous, project)
+        } catch {
+          // Post-persistence integrations must not fail the mutation or skip Wiki sync.
+        }
+        if (wikiSyncEnabled) {
+          try {
+            wikiSync.projectEditAfterPersistence(previous, project)
+          } catch {
+            // Wiki sync scheduling must not fail the mutation.
+          }
+        }
+      },
       projectDeleteAfterPersistence: cloudflareDns.projectDeleteAfterPersistence,
+      ...(wikiSyncEnabled
+        ? {
+            projectOrganizeAfterPersistence: () => {
+              try {
+                wikiSync.projectOrganizeAfterPersistence()
+              } catch {
+                // Wiki sync scheduling must not fail the mutation.
+              }
+            },
+          }
+        : {}),
       caddyUser: config.caddyUser,
     })
 
@@ -1377,6 +1433,11 @@ export function projectRegistryDaemonCreate(options: ProjectRegistryDaemonOption
       caddyStarted = true
       if (state !== "starting") return startupFailure("daemon shutdown started")
 
+      // Wiki sync errors are logged inside the queue and never fail startup;
+      // awaiting the initial pass keeps it ordered with later mutations.
+      await wikiSync.startup()
+      if (state !== "starting") return startupFailure("daemon shutdown started")
+
       try {
         userRefreshHandle = timer.setInterval(() => {
           if (state === "running") void refreshSockets()
@@ -1408,6 +1469,10 @@ export function projectRegistryDaemonCreate(options: ProjectRegistryDaemonOption
       cloudflareDns.shutdown().then(
         (result) => (result.success ? [] : [`Cloudflare DNS shutdown: ${result.errorMessage}`]),
         () => ["Cloudflare DNS shutdown did not complete"],
+      ),
+      wikiSync.shutdown().then(
+        (result) => (result.success ? [] : [`Wiki sync shutdown: ${result.errorMessage}`]),
+        () => ["Wiki sync shutdown did not complete"],
       ),
       gitTail.then(
         () => [],

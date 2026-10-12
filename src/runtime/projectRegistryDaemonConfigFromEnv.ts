@@ -32,6 +32,7 @@ export function projectRegistryDaemonConfigFromEnv(
     const names = [
       "PROJECT_REGISTRY_REPOSITORY_PATH",
       "PROJECT_REGISTRY_DOCS_DIRECTORY",
+      "PROJECT_REGISTRY_WIKI_ROOT",
       "XDG_DATA_HOME",
       "PROJECT_REGISTRY_MODE",
       "PROJECT_REGISTRY_LOCAL_DOMAINS_ENABLED",
@@ -132,6 +133,7 @@ export function projectRegistryDaemonConfigFromEnv(
       values.PROJECT_REGISTRY_CADDY_ACCESS_LOG_ROOT?.trim() === ""
         ? undefined
         : values.PROJECT_REGISTRY_CADDY_ACCESS_LOG_ROOT
+    const wikiRoot = values.PROJECT_REGISTRY_WIKI_ROOT?.trim() || undefined
     const caddyUser = values.CADDY_USER?.trim() === "" ? undefined : values.CADDY_USER
     const caddyGroup = values.CADDY_GROUP?.trim() === "" ? undefined : values.CADDY_GROUP
     const zitadelIssuer = values.ZITADEL_ISSUER?.trim() || oidcR.data.oidc?.issuer
@@ -185,6 +187,7 @@ export function projectRegistryDaemonConfigFromEnv(
           ? `${dataDirectory}/project-registry/docs`
           : "/var/lib/project-registry-docs"),
       repositoryBranch: values.PROJECT_REGISTRY_REPOSITORY_BRANCH,
+      ...(wikiRoot === undefined ? {} : { wikiRoot }),
       mappedUsers: (values.PROJECT_REGISTRY_USERS ?? (mode === "user" ? username : undefined))
         ?.split(",")
         .map((user) => user.trim())
