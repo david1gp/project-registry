@@ -1,3 +1,4 @@
+import { mdiChevronDown } from "@adaptive-ds/mdi/mdiChevronDown.js"
 import type { JSX } from "solid-js"
 import { Show } from "solid-js"
 import { classesInput } from "#ui/input/input/classesInput.js"
@@ -6,13 +7,17 @@ import { Label } from "#ui/input/label/Label.jsx"
 import { Button } from "#ui/interactive/button/Button.jsx"
 import { Badge } from "#ui/static/badge/Badge.jsx"
 import { CardWrapper } from "#ui/static/card/CardWrapper.jsx"
+import { Icon } from "#ui/static/icon/Icon.jsx"
 import { LoaderSpin4Square } from "#ui/static/loaders/LoaderSpin4Square.jsx"
 import type { TableColumnDef } from "#ui/table/shared/TableColumnDef.js"
 import { Table1R } from "#ui/table/table1/Table1R.jsx"
+import { classMerge } from "#ui/utils/classMerge.js"
 import type { projectServicesPanelStateCreate } from "./ProjectServicesPanelStateCreate.js"
 import type { ProjectServicesService } from "./projectServicesSchema.js"
 
 type ProjectServicesPanelState = ReturnType<typeof projectServicesPanelStateCreate>
+
+const classesSelect = classMerge(classesInput, "appearance-none pl-3 pr-10")
 
 function columnsCreate(state: ProjectServicesPanelState): TableColumnDef<ProjectServicesService>[] {
   return [
@@ -141,27 +146,39 @@ export function ProjectServicesPanelView(p: { state: ProjectServicesPanelState; 
                 </div>
                 <div class="flex flex-col gap-1">
                   <Label for="project-service-kind">Art</Label>
-                  <select
-                    class={classesInput}
-                    id="project-service-kind"
-                    value={draft().kind}
-                    onChange={(event) => p.state.draftFieldSet("kind", event.currentTarget.value)}
-                  >
-                    <option value="proxy">Proxy</option>
-                    <option value="static">Statisch</option>
-                  </select>
+                  <div class="relative w-full min-w-0">
+                    <select
+                      class={classesSelect}
+                      id="project-service-kind"
+                      value={draft().kind}
+                      onChange={(event) => p.state.draftFieldSet("kind", event.currentTarget.value)}
+                    >
+                      <option value="proxy">Proxy</option>
+                      <option value="static">Statisch</option>
+                    </select>
+                    <Icon
+                      path={mdiChevronDown}
+                      class="pointer-events-none absolute right-3 top-1/2 size-4 -translate-y-1/2"
+                    />
+                  </div>
                 </div>
                 <div class="flex flex-col gap-1">
                   <Label for="project-service-access">Zugriff</Label>
-                  <select
-                    class={classesInput}
-                    id="project-service-access"
-                    value={draft().access}
-                    onChange={(event) => p.state.draftFieldSet("access", event.currentTarget.value)}
-                  >
-                    <option value="external">Extern</option>
-                    <option value="internal">Intern</option>
-                  </select>
+                  <div class="relative w-full min-w-0">
+                    <select
+                      class={classesSelect}
+                      id="project-service-access"
+                      value={draft().access}
+                      onChange={(event) => p.state.draftFieldSet("access", event.currentTarget.value)}
+                    >
+                      <option value="external">Extern</option>
+                      <option value="internal">Intern</option>
+                    </select>
+                    <Icon
+                      path={mdiChevronDown}
+                      class="pointer-events-none absolute right-3 top-1/2 size-4 -translate-y-1/2"
+                    />
+                  </div>
                 </div>
                 <div class="flex flex-col gap-1">
                   <Label for="project-service-path">Pfad</Label>
