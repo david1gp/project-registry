@@ -44,6 +44,8 @@ Project create/edit options:
   --disabled | --enabled
   --spa | --no-spa
   --header-up <K=V>          Upstream header; repeat to provide multiple headers
+  --oidc-path <pattern>        OIDC-protected path (Caddy matcher); repeat to protect multiple paths
+  --clear-oidc-paths          Clear all OIDC-protected paths (edit only; cannot combine with --oidc-path)
   --label <KEY=VALUE>        Project label; repeat to provide multiple labels
   --remove-label <KEY>       Remove a project label; repeat (edit only)
   --clear-labels              Clear all project labels (edit only)

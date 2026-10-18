@@ -80,6 +80,9 @@ export function projectRegistryCliArgumentsParse(args: readonly string[]): Resul
   let section: string | undefined
   let hasListMetadata = false
   let json = false
+  let hasOidcPaths = false
+  let clearOidcPaths = false
+  const oidcPaths: string[] = []
   let help = false
   let version = false
   let verbose = false
@@ -111,6 +114,7 @@ export function projectRegistryCliArgumentsParse(args: readonly string[]): Resul
       "--no-spa",
       "--http",
       "--clear-labels",
+      "--clear-oidc-paths",
       "--no-dns",
       "--token-stdin",
     ]
@@ -118,6 +122,7 @@ export function projectRegistryCliArgumentsParse(args: readonly string[]): Resul
       if (booleans.has(argument)) return createResultError(op, `Option ${argument} may only be provided once.`)
       booleans.add(argument)
       if (argument === "--clear-labels") clearLabels = true
+      if (argument === "--clear-oidc-paths") clearOidcPaths = true
       if (argument === "--no-dns") noDns = true
       if (argument === "--token-stdin") tokenStdin = true
       continue
@@ -139,6 +144,7 @@ export function projectRegistryCliArgumentsParse(args: readonly string[]): Resul
       "--metadata",
       "--section",
       "--remove-label",
+      "--oidc-path",
       "--flush-interval",
       "--owner",
       "--before",
@@ -147,6 +153,7 @@ export function projectRegistryCliArgumentsParse(args: readonly string[]): Resul
     if (option !== undefined) {
       const repeatable =
         option === "--domain" ||
+        option === "--oidc-path" ||
         option === "--header-up" ||
         option === "--label" ||
         option === "--metadata" ||
@@ -202,6 +209,14 @@ export function projectRegistryCliArgumentsParse(args: readonly string[]): Resul
           return createResultError(op, "Option --domain requires a hostname.")
         }
         domains.push(value)
+        continue
+      }
+      if (option === "--oidc-path") {
+        if (value === undefined || value.length === 0 || (optionUsesNextArgument(argument) && value.startsWith("-"))) {
+          return createResultError(op, "Option --oidc-path requires a path pattern.")
+        }
+        oidcPaths.push(value)
+        hasOidcPaths = true
         continue
       }
       if (option === "--path") {
@@ -345,6 +360,11 @@ export function projectRegistryCliArgumentsParse(args: readonly string[]): Resul
       caddy.headerUp[entry.slice(0, separator)] = entry.slice(separator + 1)
     }
   }
+  if (hasOidcPaths && clearOidcPaths) {
+    return createResultError(op, "Options --oidc-path and --clear-oidc-paths cannot be combined.")
+  }
+  if (hasOidcPaths) caddy.oidcPaths = [...oidcPaths]
+  if (clearOidcPaths) caddy.oidcPaths = []
   for (const [enabled, disabled, key] of pairValues) {
     if (booleans.has(enabled) && booleans.has(disabled)) {
       return createResultError(op, `Options ${enabled} and ${disabled} cannot be combined.`)
@@ -524,6 +544,9 @@ export function projectRegistryCliArgumentsParse(args: readonly string[]): Resul
     }
     if (removeLabels.length > 0 || clearLabels) {
       return createResultError(op, "Options --remove-label and --clear-labels are only valid for project edit.")
+    }
+    if (clearOidcPaths) {
+      return createResultError(op, "Option --clear-oidc-paths is only valid for project edit.")
     }
     return createResult({
       command: {

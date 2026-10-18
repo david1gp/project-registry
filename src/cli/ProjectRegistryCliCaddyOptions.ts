@@ -9,5 +9,6 @@ export type ProjectRegistryCliCaddyOptions = {
   headerUp?: Record<string, string>
   disabled?: boolean
   spa?: boolean
+  oidcPaths?: string[]
   flushInterval?: number
 }
