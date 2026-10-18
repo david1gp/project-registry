@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
+import { tmpdir } from "node:os"
 import { basename, join, resolve } from "node:path"
 import pkg from "../../package.json" with { type: "json" }
 import { projectRegistryCliRun } from "./projectRegistryCliRun.js"
@@ -1036,7 +1037,7 @@ describe("projectRegistryCliRun", () => {
     const requests: Array<{ path: string; method: string; body?: unknown }> = []
     const stdout: string[] = []
     const originalCwd = process.cwd()
-    const cwd = await mkdtemp("/tmp/opencode/project-registry-docs-independent-")
+    const cwd = await mkdtemp(join(tmpdir(), "project-registry-docs-independent-"))
     const relativePath = "./guide/intro.md"
     const sourcePath = resolve(cwd, "guide/intro.md")
     const markdown = "# CLI docs test\n"
@@ -1094,7 +1095,7 @@ describe("projectRegistryCliRun", () => {
 
   test("publishes a parent-segment source using its normalized in-cwd page path", async () => {
     const originalCwd = process.cwd()
-    const cwd = await mkdtemp("/tmp/opencode/project-registry-docs-normalized-")
+    const cwd = await mkdtemp(join(tmpdir(), "project-registry-docs-normalized-"))
     const sourcePath = resolve(cwd, "guide.md")
     const markdown = "# Normalized guide\n"
     await writeFile(sourcePath, markdown)
@@ -1119,7 +1120,7 @@ describe("projectRegistryCliRun", () => {
   })
 
   test("publishes local docs successfully from an unregistered cwd without project lookup", async () => {
-    const cwd = await mkdtemp("/tmp/opencode/project-registry-unregistered-")
+    const cwd = await mkdtemp(join(tmpdir(), "project-registry-unregistered-"))
     const originalCwd = process.cwd()
     const sourcePath = resolve(cwd, "guide.md")
     await writeFile(sourcePath, "# Unregistered\n")
