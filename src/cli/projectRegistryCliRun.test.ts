@@ -866,6 +866,27 @@ describe("projectRegistryCliRun", () => {
     expect(stdout.join("")).toBe("unchanged david/site\n")
   })
 
+  test("sends oidc paths inside the caddy payload on edit", async () => {
+    const bodies: unknown[] = []
+    const exitCode = await projectRegistryCliRun(
+      ["project", "edit", "site", "--oidc-path", "/private/*", "--oidc-path=/admin/*"],
+      {
+        environment: { USER: "david" },
+        requestFetch: async (_input, init) => {
+          if (init?.method === "PATCH") {
+            bodies.push(typeof init.body === "string" ? JSON.parse(init.body) : undefined)
+            return Response.json({ success: true, data: mutation("edit") })
+          }
+          return Response.json({ success: true, data: { project: {}, revision: "current" } })
+        },
+        stdout: () => {},
+      },
+    )
+
+    expect(exitCode).toBe(0)
+    expect(bodies).toEqual([{ expectedRevision: "current", caddy: { oidcPaths: ["/private/*", "/admin/*"] } }])
+  })
+
   test("sends only supplied edit fields inside caddy", async () => {
     const bodies: unknown[] = []
     const exitCode = await projectRegistryCliRun(
@@ -1400,6 +1421,8 @@ describe("projectRegistryCliRun", () => {
     expect(output.join("")).toContain("--label <KEY=VALUE>")
     expect(output.join("")).toContain("--remove-label <KEY>")
     expect(output.join("")).toContain("--clear-labels")
+    expect(output.join("")).toContain("--oidc-path <pattern>")
+    expect(output.join("")).toContain("--clear-oidc-paths")
     expect(output.join("")).toContain(`project-registry ${pkg.version}`)
   })
 

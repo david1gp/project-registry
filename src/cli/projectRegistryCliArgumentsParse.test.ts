@@ -151,6 +151,39 @@ describe("projectRegistryCliArgumentsParse", () => {
     })
   })
 
+  test("parses repeated oidc paths with append semantics", () => {
+    const result = projectRegistryCliArgumentsParse([
+      "project",
+      "create",
+      "--name=site",
+      "--oidc-path",
+      "/private/*",
+      "--oidc-path=/admin/*",
+    ])
+
+    expect(result).toEqual({
+      success: true,
+      data: {
+        command: { kind: "project-create", name: "site", caddy: { oidcPaths: ["/private/*", "/admin/*"] } },
+        json: false,
+        socket: undefined,
+      },
+    })
+  })
+
+  test("clears oidc paths on edit", () => {
+    const cleared = projectRegistryCliArgumentsParse(["project", "edit", "site", "--clear-oidc-paths"])
+
+    expect(cleared).toEqual({
+      success: true,
+      data: {
+        command: { kind: "project-edit", name: "site", caddy: { oidcPaths: [] } },
+        json: false,
+        socket: undefined,
+      },
+    })
+  })
+
   test("parses repeatable label edits without unsafe key assignment", () => {
     const result = projectRegistryCliArgumentsParse([
       "project",
@@ -230,6 +263,16 @@ describe("projectRegistryCliArgumentsParse", () => {
     [["project", "edit", "site", "--label", "invalid"], "Option --label requires K=V, got: invalid."],
     [["project", "edit", "site", "--label", "=value"], "Option --label requires a non-blank key."],
     [["project", "edit", "site", "--remove-label", " "], "Option --remove-label requires a non-blank key."],
+    [["project", "edit", "site", "--oidc-path"], "Option --oidc-path requires a path pattern."],
+    [["project", "edit", "site", "--oidc-path", "--json"], "Option --oidc-path requires a path pattern."],
+    [
+      ["project", "edit", "site", "--oidc-path", "/private/*", "--clear-oidc-paths"],
+      "Options --oidc-path and --clear-oidc-paths cannot be combined.",
+    ],
+    [
+      ["project", "create", "--name", "site", "--domain", "site.example", "--clear-oidc-paths"],
+      "Option --clear-oidc-paths is only valid for project edit.",
+    ],
     [
       ["project", "create", "--name", "site", "--domain", "site.example", "--clear-labels"],
       "Options --remove-label and --clear-labels are only valid for project edit.",
