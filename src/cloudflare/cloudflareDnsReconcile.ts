@@ -4,6 +4,7 @@ import { createResult, createResultError, type PromiseResult, type Result } from
 import type { CloudflareDnsReconcileOptions } from "./CloudflareDnsReconcileOptions.js"
 import type { CloudflareDnsReconcileResult } from "./CloudflareDnsReconcileResult.js"
 import type { CloudflareDnsRecord } from "./CloudflareDnsRecord.js"
+import { cloudflareZarazAutoInjectDisable } from "./cloudflareZarazAutoInjectDisable.js"
 
 const defaultTimeoutMs = 30_000
 const defaultApiBaseUrl = "https://api.cloudflare.com/client/v4"
@@ -272,6 +273,16 @@ export async function cloudflareDnsReconcile(
       emailObfuscationResponseSchema,
     )
     if (!emailObfuscationParsedR.success) return emailObfuscationParsedR
+
+    const zarazR = await cloudflareZarazAutoInjectDisable({
+      zoneId: zone.id,
+      request: async (path, init) => {
+        const zarazResponseR = await request(path, { method: init.method ?? "GET", headers, body: init.body })
+        if (!zarazResponseR.success) return zarazResponseR
+        return createResult(zarazResponseR.data)
+      },
+    })
+    if (!zarazR.success) return zarazR
 
     const recordsUrl = new URL(`${apiBase.origin}${apiBase.pathname}/zones/${encodeURIComponent(zone.id)}/dns_records`)
     recordsUrl.searchParams.set("name", hostname)

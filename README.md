@@ -101,7 +101,8 @@ but no DNS request is made until the relevant owner's credential is available.
 
 Before reconciling records, the daemon disables email obfuscation for the resolved zone
 (`PATCH /zones/{zone_id}/settings/email_obfuscation` with `{"value":"off"}`), so owner tokens additionally require the
-Zone Settings edit permission alongside DNS edit access.
+Zone Settings edit permission alongside DNS edit access. Zaraz automatic-injection enforcement also requires Zaraz Edit
+or Zaraz Admin (both include Zaraz Read); no separate account-wide Zaraz permission is needed.
 
 ### Updating an owner token
 

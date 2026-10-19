@@ -80,6 +80,22 @@ function cloudflareFetchCreate(
     if (url.pathname.endsWith("/settings/email_obfuscation")) {
       return json({ success: true, result: { id: "email_obfuscation", value: "off" } })
     }
+    if (url.pathname.endsWith("/settings/zaraz/workflow")) {
+      return json({ success: true, result: "realtime" })
+    }
+    if (url.pathname.endsWith("/settings/zaraz/config")) {
+      return json({
+        success: true,
+        result: {
+          dataLayer: false,
+          debugKey: "debug-key",
+          settings: { autoInjectScript: false },
+          tools: {},
+          triggers: {},
+          variables: {},
+        },
+      })
+    }
     if (init.method === "GET") return json({ success: true, result: [] })
     const body = init.body === undefined ? {} : (JSON.parse(String(init.body)) as Record<string, unknown>)
     return json({

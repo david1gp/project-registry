@@ -129,6 +129,25 @@ function fetchCreate(
         status: 200,
       })
     }
+    if (url.pathname.endsWith("/settings/zaraz/workflow")) {
+      return new Response(JSON.stringify({ success: true, result: "realtime" }), { status: 200 })
+    }
+    if (url.pathname.endsWith("/settings/zaraz/config")) {
+      return new Response(
+        JSON.stringify({
+          success: true,
+          result: {
+            dataLayer: false,
+            debugKey: "debug-key",
+            settings: { autoInjectScript: false },
+            tools: {},
+            triggers: {},
+            variables: {},
+          },
+        }),
+        { status: 200 },
+      )
+    }
     if (init.method === "GET") {
       const id = url.pathname.split("/").pop()!
       if (url.searchParams.has("name")) {
