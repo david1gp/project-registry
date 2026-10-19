@@ -77,6 +77,9 @@ function cloudflareFetchCreate(
         ? json({ success: true, result: [{ id: "zone", name: "example.com", status: "active" }] })
         : json({ success: true, result: [] })
     }
+    if (url.pathname.endsWith("/settings/email_obfuscation")) {
+      return json({ success: true, result: { id: "email_obfuscation", value: "off" } })
+    }
     if (init.method === "GET") return json({ success: true, result: [] })
     const body = init.body === undefined ? {} : (JSON.parse(String(init.body)) as Record<string, unknown>)
     return json({

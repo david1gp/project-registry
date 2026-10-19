@@ -22,6 +22,10 @@ function recordList(records: Array<Record<string, unknown>>): unknown {
   return { success: true, result: records }
 }
 
+function emailObfuscationResult(value = "off"): unknown {
+  return { success: true, result: { id: "email_obfuscation", value } }
+}
+
 function record(
   id: string,
   name: string,
@@ -56,6 +60,7 @@ describe("cloudflareDnsReconcile", () => {
         if (name === "example.co.uk") return json(zoneResult("uk-zone", "example.co.uk"))
         return json({ success: true, result: [] })
       }
+      if (url.pathname.endsWith("/settings/email_obfuscation")) return json(emailObfuscationResult())
       if (url.pathname.endsWith("/dns_records") && init?.method === "GET") return json(recordList([]))
       return json(recordResult(record("new-id", "app.eu.example.co.uk", "A", "203.0.113.8")))
     })
@@ -73,7 +78,7 @@ describe("cloudflareDnsReconcile", () => {
       "eu.example.co.uk",
       "example.co.uk",
     ])
-    const createCall = mock.calls[4]
+    const createCall = mock.calls[5]
     expect(createCall?.init.method).toBe("POST")
     expect(createCall?.url.toString()).toBe("https://api.cloudflare.com/client/v4/zones/uk-zone/dns_records")
     expect(createCall?.init.headers).toMatchObject({ authorization: "Bearer secret-token" })
@@ -84,6 +89,13 @@ describe("cloudflareDnsReconcile", () => {
       ttl: 1,
       proxied: false,
     })
+    const emailObfuscationCall = mock.calls[3]
+    expect(emailObfuscationCall?.init.method).toBe("PATCH")
+    expect(emailObfuscationCall?.url.toString()).toBe(
+      "https://api.cloudflare.com/client/v4/zones/uk-zone/settings/email_obfuscation",
+    )
+    expect(emailObfuscationCall?.init.headers).toMatchObject({ authorization: "Bearer secret-token" })
+    expect(JSON.parse(String(emailObfuscationCall?.init.body))).toEqual({ value: "off" })
   })
 
   test("updates a proxied exact record to DNS-only and skips an identical record", async () => {
@@ -91,6 +103,7 @@ describe("cloudflareDnsReconcile", () => {
     let records = [existing]
     const mock = fetchCreate((url, init) => {
       if (url.pathname.endsWith("/zones")) return json(zoneResult())
+      if (url.pathname.endsWith("/settings/email_obfuscation")) return json(emailObfuscationResult())
       if (url.pathname.endsWith("/dns_records") && init.method === "GET") return json(recordList(records))
       if (init.method === "PUT") {
         const body = JSON.parse(String(init.body)) as Record<string, unknown>
@@ -118,6 +131,13 @@ describe("cloudflareDnsReconcile", () => {
     const updateCall = mock.calls.find((call) => call.init.method === "PUT")
     expect(updateCall?.url.toString()).toBe("https://api.cloudflare.com/client/v4/zones/zone-id/dns_records/record-id")
     expect(JSON.parse(String(updateCall?.init.body))).toMatchObject({ proxied: false })
+    const obfuscationCalls = mock.calls.filter((call) => call.init.method === "PATCH")
+    expect(obfuscationCalls).toHaveLength(1)
+    expect(obfuscationCalls[0]?.url.toString()).toBe(
+      "https://api.cloudflare.com/client/v4/zones/zone-id/settings/email_obfuscation",
+    )
+    expect(JSON.parse(String(obfuscationCalls[0]?.init.body))).toEqual({ value: "off" })
+    expect(mock.calls.indexOf(obfuscationCalls[0]!) < mock.calls.indexOf(updateCall!)).toBe(true)
 
     const skipped = await cloudflareDnsReconcile({
       token: "token",
@@ -132,6 +152,7 @@ describe("cloudflareDnsReconcile", () => {
   test("reconciles IPv6 as AAAA and does not mutate conflicts", async () => {
     const mock = fetchCreate((url, init) => {
       if (url.pathname.endsWith("/zones")) return json(zoneResult())
+      if (url.pathname.endsWith("/settings/email_obfuscation")) return json(emailObfuscationResult())
       if (url.pathname.endsWith("/dns_records") && init.method === "GET") {
         return json(recordList([record("cname-id", "app.example.com", "CNAME", "other.example.net")]))
       }
@@ -152,6 +173,7 @@ describe("cloudflareDnsReconcile", () => {
   test("reports ambiguous same-type records without mutation", async () => {
     const mock = fetchCreate((url, _init) => {
       if (url.pathname.endsWith("/zones")) return json(zoneResult())
+      if (url.pathname.endsWith("/settings/email_obfuscation")) return json(emailObfuscationResult())
       if (url.pathname.endsWith("/dns_records")) {
         return json(
           recordList([
@@ -172,6 +194,36 @@ describe("cloudflareDnsReconcile", () => {
     if (result.success) return
     expect(result.errorMessage).toContain("ambiguous A")
     expect(mock.calls.every((call) => call.init.method !== "POST" && call.init.method !== "PUT")).toBe(true)
+  })
+
+  test("surfaces email obfuscation failures before DNS reconciliation", async () => {
+    const failingStatus = await cloudflareDnsReconcile({
+      token: "token",
+      hostname: "app.example.com",
+      address: "203.0.113.8",
+      fetch: async (input, init) => {
+        const url = new URL(input)
+        if (url.pathname.endsWith("/zones")) return json(zoneResult())
+        if (url.pathname.endsWith("/settings/email_obfuscation")) return json({ success: false }, 500)
+        throw new Error("DNS reconciliation must not run after a settings failure")
+      },
+    })
+    expect(failingStatus.success).toBe(false)
+
+    const malformedSetting = await cloudflareDnsReconcile({
+      token: "token",
+      hostname: "app.example.com",
+      address: "203.0.113.8",
+      fetch: async (input) => {
+        const url = new URL(input)
+        if (url.pathname.endsWith("/zones")) return json(zoneResult())
+        if (url.pathname.endsWith("/settings/email_obfuscation")) return json(emailObfuscationResult("on"))
+        throw new Error("DNS reconciliation must not run after a settings failure")
+      },
+    })
+    expect(malformedSetting.success).toBe(false)
+    if (malformedSetting.success) return
+    expect(malformedSetting.errorMessage).toContain("Cloudflare API response was invalid")
   })
 
   test("rejects malformed API responses and cancels a timed-out request", async () => {

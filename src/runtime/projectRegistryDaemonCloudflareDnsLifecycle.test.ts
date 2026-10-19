@@ -124,6 +124,11 @@ function fetchCreate(
         status: 200,
       })
     }
+    if (url.pathname.endsWith("/settings/email_obfuscation")) {
+      return new Response(JSON.stringify({ success: true, result: { id: "email_obfuscation", value: "off" } }), {
+        status: 200,
+      })
+    }
     if (init.method === "GET") {
       const id = url.pathname.split("/").pop()!
       if (url.searchParams.has("name")) {

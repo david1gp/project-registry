@@ -99,6 +99,10 @@ global `CLOUDFLARE_API_TOKEN` or `CF_API_TOKEN` environment variable is not used
 Set `PROJECT_REGISTRY_CLOUDFLARE_DNS_ENABLED=false` to disable DNS reconciliation explicitly. The default is enabled,
 but no DNS request is made until the relevant owner's credential is available.
 
+Before reconciling records, the daemon disables email obfuscation for the resolved zone
+(`PATCH /zones/{zone_id}/settings/email_obfuscation` with `{"value":"off"}`), so owner tokens additionally require the
+Zone Settings edit permission alongside DNS edit access.
+
 ### Updating an owner token
 
 The supported user workflow reads the token from stdin, so the secret is not placed in process arguments or shell

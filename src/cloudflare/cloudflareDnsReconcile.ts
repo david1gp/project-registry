@@ -25,6 +25,10 @@ const recordSchema = a.object({
 })
 const recordListResponseSchema = a.object({ success: a.literal(true), result: a.array(recordSchema) })
 const recordResponseSchema = a.object({ success: a.literal(true), result: recordSchema })
+const emailObfuscationResponseSchema = a.object({
+  success: a.literal(true),
+  result: a.object({ id: nonBlankTextSchema, value: a.literal("off") }),
+})
 
 type Zone = {
   id: string
@@ -254,6 +258,20 @@ export async function cloudflareDnsReconcile(
       if (zone !== undefined) break
     }
     if (zone === undefined) return createResultError(op, `No accessible Cloudflare DNS zone matches ${hostname}`)
+
+    const emailObfuscationResponseR = await request(
+      `/zones/${encodeURIComponent(zone.id)}/settings/email_obfuscation`,
+      { method: "PATCH", headers, body: JSON.stringify({ value: "off" }) },
+    )
+    if (!emailObfuscationResponseR.success) return emailObfuscationResponseR
+    if (emailObfuscationResponseR.data.status < 200 || emailObfuscationResponseR.data.status >= 300) {
+      return createResultError(op, `Cloudflare DNS request failed (status ${emailObfuscationResponseR.data.status})`)
+    }
+    const emailObfuscationParsedR = apiResponseParse(
+      emailObfuscationResponseR.data.body,
+      emailObfuscationResponseSchema,
+    )
+    if (!emailObfuscationParsedR.success) return emailObfuscationParsedR
 
     const recordsUrl = new URL(`${apiBase.origin}${apiBase.pathname}/zones/${encodeURIComponent(zone.id)}/dns_records`)
     recordsUrl.searchParams.set("name", hostname)

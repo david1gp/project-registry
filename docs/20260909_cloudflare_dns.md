@@ -12,6 +12,7 @@ Automatically create or update Cloudflare DNS records from project lifecycle cha
 - Create missing records, update matching records, skip identical records, and report incompatible record conflicts. Managed A/AAAA records are DNS-only (`proxied: false`); existing proxied records are updated to DNS-only during reconciliation.
 - Use existing dependencies and native fetch. Parse owner credential files without executing them, and never log credentials.
 - Persist managed record identities daemon-locally; edits remove tracked removed domains and deletes remove tracked records.
+- After resolving the Cloudflare zone and before DNS record reconciliation, disable email obfuscation for that zone via `PATCH /zones/{zone_id}/settings/email_obfuscation` with `{"value":"off"}`; a settings failure surfaces as a reconciliation failure without DNS changes. Owner API tokens need the Zone Settings edit permission for this write.
 
 Owner credential files use `CLOUDFLARE_API_TOKEN` or its `CF_API_TOKEN` alias. The preferred name wins when both are
 present. Missing credentials defer create, edit, reconciliation, and deletion work for retry; pending deletions retain
