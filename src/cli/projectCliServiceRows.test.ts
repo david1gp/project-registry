@@ -66,4 +66,44 @@ describe("projectCliServiceRows", () => {
     expect(rows).toHaveLength(1)
     expect(rows[0]).not.toHaveProperty("service")
   })
+
+  test("defaults legacy rows without visibility to public independently of access", () => {
+    const rows = projectCliServiceRows(
+      project([
+        { id: "default", units: [], ownership: "registry", caddy: { ...caddy } },
+        {
+          id: "lan",
+          units: [],
+          ownership: "registry",
+          caddy: { ...caddy, port: 3001, domains: ["lan.example"], access: "internal" },
+        },
+      ]),
+    )
+
+    expect(rows.map((row) => row.networkVisibility)).toEqual(["public", "public"])
+  })
+
+  test("propagates explicit private visibility independently of access", () => {
+    const rows = projectCliServiceRows(
+      project([
+        { id: "default", units: [], ownership: "registry", caddy: { ...caddy, networkVisibility: "private" } },
+        {
+          id: "lan",
+          units: [],
+          ownership: "registry",
+          caddy: { ...caddy, port: 3001, domains: ["lan.example"], access: "internal", networkVisibility: "private" },
+        },
+      ]),
+    )
+
+    expect(rows.map((row) => row.networkVisibility)).toEqual(["private", "private"])
+  })
+
+  test("defaults a service without Caddy configuration to public visibility", () => {
+    const rows = projectCliServiceRows(
+      project([{ id: "worker", units: ["w.service"], ownership: "registry", caddy: null }]),
+    )
+
+    expect(rows[0]?.networkVisibility).toBe("public")
+  })
 })

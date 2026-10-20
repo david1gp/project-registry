@@ -83,6 +83,17 @@ describe("projectServicesPatchApply", () => {
     expect(result.data.slice(0, 2)).toEqual(services)
   })
 
+  test("preserves networkVisibility on unrelated Caddy edits", () => {
+    const withVisibility: ProjectService[] = [
+      { id: "default", units: [], ownership: "registry", caddy: { ...caddy, networkVisibility: "private" } },
+    ]
+    const result = projectServicesPatchApply(withVisibility, "default", { port: 3005 })
+
+    expect(result.success).toBe(true)
+    if (!result.success) return
+    expect(result.data[0]?.caddy).toMatchObject({ port: 3005, networkVisibility: "private" })
+  })
+
   test("rejects adding an unknown service without domains", () => {
     const result = projectServicesPatchApply(services, "docs", { spa: true })
 

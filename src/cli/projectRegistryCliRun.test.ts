@@ -605,6 +605,70 @@ describe("projectRegistryCliRun", () => {
     })
   })
 
+  test("propagates networkVisibility in versioned JSON list and get reads", async () => {
+    const legacyProject = {
+      schemaVersion: 1,
+      owner: "david",
+      name: "site",
+      labels: {},
+      caddy: { port: 4321, domains: ["site.example"], access: "internal" },
+    }
+    const privateProject = {
+      schemaVersion: 2,
+      owner: "david",
+      name: "vault",
+      labels: {},
+      services: [
+        {
+          id: "default",
+          units: [],
+          ownership: "registry",
+          caddy: { port: 4322, domains: ["vault.example"], access: "internal", networkVisibility: "private" },
+        },
+      ],
+    }
+    const requestFetch = async (input: string | URL | Request) => {
+      const path = new URL(String(input)).pathname
+      if (path.endsWith("/projects"))
+        return Response.json({ success: true, data: { projects: [legacyProject, privateProject], revision: "r" } })
+      const project = path.endsWith("/vault") ? privateProject : legacyProject
+      return Response.json({ success: true, data: { project, revision: "r" } })
+    }
+    const listOutput: string[] = []
+    const privateGetOutput: string[] = []
+    const legacyGetOutput: string[] = []
+
+    expect(
+      await projectRegistryCliRun(["project", "list", "--json"], {
+        environment: { USER: "david" },
+        requestFetch,
+        stdout: (text) => listOutput.push(text),
+      }),
+    ).toBe(0)
+    expect(
+      await projectRegistryCliRun(["project", "get", "vault", "--json"], {
+        environment: { USER: "david" },
+        requestFetch,
+        stdout: (text) => privateGetOutput.push(text),
+      }),
+    ).toBe(0)
+    expect(
+      await projectRegistryCliRun(["project", "get", "site", "--json"], {
+        environment: { USER: "david" },
+        requestFetch,
+        stdout: (text) => legacyGetOutput.push(text),
+      }),
+    ).toBe(0)
+
+    const listRows = JSON.parse(listOutput.join("")).data as Array<Record<string, unknown>>
+    expect(listRows.map((row) => [row.name, row.networkVisibility])).toEqual([
+      ["site", "public"],
+      ["vault", "private"],
+    ])
+    expect(JSON.parse(privateGetOutput.join("")).data.networkVisibility).toBe("private")
+    expect(JSON.parse(legacyGetOutput.join("")).data.networkVisibility).toBe("public")
+  })
+
   test("creates with the current revision and exact nested Caddy payload", async () => {
     const requests: Array<{ path: string; method: string; body?: unknown }> = []
     const stdout: string[] = []
