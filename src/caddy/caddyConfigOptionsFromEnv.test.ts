@@ -46,7 +46,9 @@ test("caddyConfigOptionsFromEnv keeps legacy environment names during migration"
 test("caddyConfigOptionsFromEnv disables OIDC when the issuer is missing", () => {
   const result = caddyConfigOptionsFromEnv({ PROJECT_REGISTRY_OIDC_CLIENT_ID: "orphaned" })
 
-  expect(result).toEqual({ success: true, data: { httpsListener: ":443" } })
+  expect(result).toEqual({ success: true, data: { httpsListener: ":443", networkVisibility: "public" } })
+  if (!result.success) return
+  expect(result.data.oidc).toBeUndefined()
 })
 
 test("caddyConfigOptionsFromEnv returns sanitized Results for malformed OIDC values", () => {
