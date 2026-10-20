@@ -699,6 +699,179 @@ describe("projectRegistryDaemonCloudflareDns lifecycle", () => {
     await queueR.data.shutdown()
   })
 
+  function privateCanonicalProject(name: string, owner = "leo", domains = [`${name}.example.com`]): Project {
+    const current = canonicalProject(name, "registry", owner, domains)
+    return {
+      ...current,
+      services: (current.services as unknown[]).map((service) => {
+        if (typeof service !== "object" || service === null) return service
+        const entry = service as { caddy?: unknown }
+        if (entry.caddy === undefined || entry.caddy === null) return service
+        return { ...entry, caddy: { ...(entry.caddy as Record<string, unknown>), networkVisibility: "private" } }
+      }),
+    } as unknown as Project
+  }
+
+  describe("projectRegistryDaemonCloudflareDns visibility", () => {
+    test("retires a tracked public record through verified delete when its hostname becomes private", async () => {
+      const timer = timerCreate()
+      const records = new Map<
+        string,
+        { id: string; name: string; type: string; content: string; ttl: number; proxied: boolean }
+      >()
+      const calls: string[] = []
+      const stored = trackingCreate({ version: 1, records: [] })
+      let projects: Project[] = []
+      const queueR = projectRegistryDaemonCloudflareDnsCreate({
+        enabled: true,
+        credentialResolve: async () => createResult("token"),
+        timeoutMs: 1000,
+        serverIpCurrent: () => "203.0.113.10",
+        timer: timer.timer,
+        tracking: stored.tracking,
+        repositoryProjectsCurrent: async () => createResult(projects),
+        fetch: fetchCreate(records, calls),
+      })
+      expect(queueR.success).toBe(true)
+      if (!queueR.success) return
+      queueR.data.start()
+
+      const first = canonicalProject("app", "registry")
+      projects = [first]
+      queueR.data.projectCreateAfterPersistence(first, { noDns: false })
+      await settle()
+      expect(records.size).toBe(1)
+      expect(stored.state.records.map((record) => record.name)).toEqual(["app.example.com"])
+
+      const privatized = privateCanonicalProject("app")
+      projects = [privatized]
+      queueR.data.projectEditAfterPersistence(first, privatized)
+      await settle()
+      expect(calls.some((call) => call.startsWith("DELETE "))).toBe(true)
+      expect(records.size).toBe(0)
+      expect(stored.state.records).toEqual([])
+      await queueR.data.shutdown()
+    })
+
+    test("never publishes public DNS for private-only hostnames", async () => {
+      const timer = timerCreate()
+      const records = new Map<
+        string,
+        { id: string; name: string; type: string; content: string; ttl: number; proxied: boolean }
+      >()
+      const calls: string[] = []
+      const stored = trackingCreate({ version: 1, records: [] })
+      let projects: Project[] = []
+      const queueR = projectRegistryDaemonCloudflareDnsCreate({
+        enabled: true,
+        credentialResolve: async () => createResult("token"),
+        timeoutMs: 1000,
+        serverIpCurrent: () => "203.0.113.10",
+        timer: timer.timer,
+        tracking: stored.tracking,
+        repositoryProjectsCurrent: async () => createResult(projects),
+        fetch: fetchCreate(records, calls),
+      })
+      expect(queueR.success).toBe(true)
+      if (!queueR.success) return
+      queueR.data.start()
+
+      const temp = privateCanonicalProject("temp", "leo", ["temp.example.com"])
+      projects = [temp]
+      queueR.data.projectCreateAfterPersistence(temp, { noDns: false })
+      await settle()
+      await settle()
+      expect(calls).toEqual([])
+      expect(records.size).toBe(0)
+      expect(stored.state.records).toEqual([])
+      await queueR.data.shutdown()
+    })
+
+    test("holds tracked records without publishing on conflicting public/private claims", async () => {
+      const timer = timerCreate()
+      const records = new Map<
+        string,
+        { id: string; name: string; type: string; content: string; ttl: number; proxied: boolean }
+      >()
+      const calls: string[] = []
+      const stored = trackingCreate({ version: 1, records: [] })
+      const shared = "shared.example.com"
+      const publicApp = canonicalProject("app", "registry", "leo", [shared])
+      const privateTemp = privateCanonicalProject("temp", "david", [shared])
+      let projects: Project[] = [publicApp, privateTemp]
+      const queueR = projectRegistryDaemonCloudflareDnsCreate({
+        enabled: true,
+        credentialResolve: async () => createResult("token"),
+        timeoutMs: 1000,
+        serverIpCurrent: () => "203.0.113.10",
+        timer: timer.timer,
+        tracking: stored.tracking,
+        repositoryProjectsCurrent: async () => createResult(projects),
+        fetch: fetchCreate(records, calls),
+      })
+      expect(queueR.success).toBe(true)
+      if (!queueR.success) return
+      queueR.data.start()
+      await settle()
+      await settle()
+      expect(calls).toEqual([])
+      expect(records.size).toBe(0)
+      expect(stored.state.records).toEqual([])
+
+      projects = [publicApp]
+      queueR.data.projectEditAfterPersistence(publicApp, publicApp)
+      await settle()
+      await settle()
+      expect(records.size).toBe(1)
+      expect(stored.state.records.map((record) => record.name)).toEqual([shared])
+      await queueR.data.shutdown()
+    })
+
+    test("never deletes a tracked record claimed by an externally owned service", async () => {
+      const timer = timerCreate()
+      const records = new Map<
+        string,
+        { id: string; name: string; type: string; content: string; ttl: number; proxied: boolean }
+      >()
+      const calls: string[] = []
+      const stored = trackingCreate({ version: 1, records: [] })
+      const shared = "shared.example.com"
+      let projects: Project[] = []
+      const queueR = projectRegistryDaemonCloudflareDnsCreate({
+        enabled: true,
+        credentialResolve: async () => createResult("token"),
+        timeoutMs: 1000,
+        serverIpCurrent: () => "203.0.113.10",
+        timer: timer.timer,
+        tracking: stored.tracking,
+        repositoryProjectsCurrent: async () => createResult(projects),
+        fetch: fetchCreate(records, calls),
+      })
+      expect(queueR.success).toBe(true)
+      if (!queueR.success) return
+      queueR.data.start()
+
+      const first = canonicalProject("app", "registry", "leo", [shared])
+      projects = [first]
+      queueR.data.projectCreateAfterPersistence(first, { noDns: false })
+      await settle()
+      expect(records.size).toBe(1)
+      expect(stored.state.records.map((record) => record.name)).toEqual([shared])
+      const callsAfterCreate = calls.length
+
+      const privatized = privateCanonicalProject("app", "leo", [shared])
+      const external = canonicalProject("api", "external", "david", [shared])
+      projects = [privatized, external]
+      queueR.data.projectEditAfterPersistence(first, privatized)
+      await settle()
+      await settle()
+      expect(calls.slice(callsAfterCreate).some((call) => call.startsWith("DELETE "))).toBe(false)
+      expect(records.size).toBe(1)
+      expect(stored.state.records.map((record) => record.name)).toEqual([shared])
+      await queueR.data.shutdown()
+    })
+  })
+
   test("does not overwrite corrupt ownership state", async () => {
     const timer = timerCreate()
     let writes = 0

@@ -57,7 +57,29 @@ daemon-side filesystem component for root-managed credential files, not an arbit
 users should use the authenticated CLI or API. The default filesystem adapter is
 `projectRegistryDaemonCloudflareCredentialsFilesystemDefault()`.
 
+## Public/private desired-host separation
+
+- Desired-host ownership is split into public, private, and protected hostnames by the pure plan
+  `projectDnsPlanCreate(projects)`. It preserves external-service and `pages.dev` protection: those
+  hostnames stay protected and are never created, updated, or deleted by the daemon.
+- A Caddy entry selects visibility through `caddy.networkVisibility: "public" | "private"`. An absent
+  value treats the entry as public, so existing projects reconcile exactly as before.
+- The existing public reconcile path receives public hostnames only. Private hostnames never reach the
+  Cloudflare record API, and no Tailscale address is ever published to public DNS.
+- A tracked public record whose hostname becomes private retires through the existing verified delete
+  path (single-owner scheduling, owner credential, retry). It is never silently released like an
+  external-service or `pages.dev` transition, and never left behind without deletion.
+- The same normalized hostname claimed public by one entry/project and private by another is a conflict.
+  The plan rejects it, the daemon logs
+  `cloudflare DNS reconciliation outcome=failure reason=conflicting-public-private-claims` without any
+  DNS writes, and retries with backoff until the claims agree. Ambiguous multi-owner tracked records keep
+  the existing deferral: no deletion without a single recorded owner, missing credentials defer and retry,
+  and tracking-restart orphan handling is unchanged.
+- Untracked records stay explicit infrastructure cleanup: the daemon never auto-deletes a record it did
+  not track. Project and documentation URL generation is unchanged.
+
 ## Tasks
+
 1. Complete: implement and test Cloudflare record reconciliation module (`cloudflareDnsReconcile`).
 2. Complete: integrate daemon lifecycle, creation API, CLI opt-out, environment configuration, installer and documentation; test pending-IP and nonfatal failure behavior.
 3. Complete: independent review and focused verification, then commit/push using commits skill.

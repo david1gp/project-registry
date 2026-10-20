@@ -6,6 +6,7 @@ import { cloudflareDnsDeleteById } from "../cloudflare/cloudflareDnsDeleteById.j
 import { cloudflareDnsReconcile } from "../cloudflare/cloudflareDnsReconcile.js"
 import type { Project } from "../project/Project.js"
 import { projectCaddyEntries } from "../project/projectCaddyEntries.js"
+import { projectDnsPlanCreate } from "../project/projectDnsPlanCreate.js"
 import { projectDomainIsCloudflarePages } from "../project/projectDomainIsCloudflarePages.js"
 import { projectDomainNormalize } from "../project/projectDomainNormalize.js"
 import type { ProjectKey } from "../project/projectKey.js"
@@ -48,10 +49,28 @@ function recordDomainEqual(record: CloudflareDnsTrackedRecord, hostname: string)
   return projectDomainNormalize(record.name) === hostname
 }
 
-function hostnames(project: Project): string[] {
+function caddyEntryVisibility(caddy: { networkVisibility?: unknown }): "public" | "private" {
+  return (caddy as { networkVisibility?: unknown }).networkVisibility === "private" ? "private" : "public"
+}
+
+function publicHostnames(project: Project): string[] {
   const values = new Set<string>()
   for (const entry of projectLocalCaddyEntries(project)) {
     if (entry.caddy.disabled) continue
+    if (caddyEntryVisibility(entry.caddy) !== "public") continue
+    for (const domain of entry.caddy.domains) {
+      const normalized = projectDomainNormalize(domain)
+      if (normalized !== "") values.add(normalized)
+    }
+  }
+  return [...values]
+}
+
+function privateHostnames(project: Project): string[] {
+  const values = new Set<string>()
+  for (const entry of projectLocalCaddyEntries(project)) {
+    if (entry.caddy.disabled) continue
+    if (caddyEntryVisibility(entry.caddy) !== "private") continue
     for (const domain of entry.caddy.domains) {
       const normalized = projectDomainNormalize(domain)
       if (normalized !== "") values.add(normalized)
@@ -85,7 +104,22 @@ function projectKeysForHostname(projects: ProjectSnapshot, hostname: string): Pr
   const keys: ProjectKey[] = []
   const seen = new Set<string>()
   for (const project of projects) {
-    if (!hostnames(project).includes(hostname)) continue
+    if (!publicHostnames(project).includes(hostname)) continue
+    const key = { owner: project.owner, name: project.name }
+    const value = projectKeyValue(key)
+    if (seen.has(value)) continue
+    seen.add(value)
+    keys.push(key)
+  }
+  return keys
+}
+
+function projectKeysForPrivateHostname(projects: ProjectSnapshot, hostname: string): ProjectKey[] {
+  if (projects === undefined) return []
+  const keys: ProjectKey[] = []
+  const seen = new Set<string>()
+  for (const project of projects) {
+    if (!privateHostnames(project).includes(hostname)) continue
     const key = { owner: project.owner, name: project.name }
     const value = projectKeyValue(key)
     if (seen.has(value)) continue
@@ -404,10 +438,20 @@ export function projectRegistryDaemonCloudflareDnsCreate(options: {
     const next = stateCopy(state)
     const deletionOwners = new Map<string, ProjectKey[]>()
     let changed = false
+    const planR = projectDnsPlanCreate(projects)
+    if (!planR.success) {
+      log(
+        `cloudflare DNS tracking outcome=deferred reason=conflicting-public-private-claims detail=${planR.errorMessage}`,
+      )
+      startupRetrySchedule()
+      return
+    }
     for (const record of next.records) {
       const hostname = projectDomainNormalize(record.name)
       const projectKeys = projectKeysForHostname(projects, hostname)
       const externalProjectKeys = projectKeysForExternalHostname(projects, hostname)
+      const privateProjectKeys = projectKeysForPrivateHostname(projects, hostname)
+      if (projectKeys.length > 0 && privateProjectKeys.length > 0) continue
       if (projectDomainIsCloudflarePages(hostname)) {
         next.records = next.records.filter((entry) => recordKeyValue(entry) !== recordKeyValue(record))
         changed = true
@@ -551,7 +595,8 @@ export function projectRegistryDaemonCloudflareDnsCreate(options: {
     previousExcludedHostnames: ReadonlySet<string>,
   ): Promise<QueueOutcome> {
     const key = { owner: project.owner, name: project.name }
-    const currentDomains = new Set(hostnames(project))
+    const currentDomains = new Set(publicHostnames(project))
+    const currentPrivateHostnames = new Set(privateHostnames(project))
     const currentExcludedHostnames = new Set(externalHostnames(project))
     const recordsToRemove = state.records.filter(
       (record) =>
@@ -562,10 +607,17 @@ export function projectRegistryDaemonCloudflareDnsCreate(options: {
       if (stopped) return "done"
       const hostname = projectDomainNormalize(record.name)
       const owners = currentOwners(record, key, projects)
+      if (projectDomainIsCloudflarePages(hostname)) {
+        if (owners.length === 0) {
+          if (!(await trackingRecordRelease(record))) return "failed"
+        } else if (!(await trackingRecordOwnersSet(record, owners))) {
+          return "failed"
+        }
+        continue
+      }
       if (
         previousExcludedHostnames.has(hostname) ||
         currentExcludedHostnames.has(hostname) ||
-        projectDomainIsCloudflarePages(hostname) ||
         projectKeysForExternalHostname(projects, hostname).length > 0
       ) {
         if (owners.length === 0) {
@@ -573,6 +625,20 @@ export function projectRegistryDaemonCloudflareDnsCreate(options: {
         } else if (!(await trackingRecordOwnersSet(record, owners))) {
           return "failed"
         }
+        continue
+      }
+      if (currentPrivateHostnames.has(hostname)) {
+        if (owners.length === 0) {
+          deletionSchedule(recordKeyValue(record), record.projectKeys)
+          if (
+            pendingDeletions.has(recordKeyValue(record)) &&
+            pendingDue(pendingDeletions.get(recordKeyValue(record))!)
+          ) {
+            await trackedRecordDeletionRun(recordKeyValue(record))
+          }
+          continue
+        }
+        if (!(await trackingRecordOwnersSet(record, owners))) return "failed"
         continue
       }
       if (owners.length === 0) {
@@ -607,7 +673,7 @@ export function projectRegistryDaemonCloudflareDnsCreate(options: {
     if (address === undefined || address === "") return "deferred"
     const tokenR = await tokenForOwner(project.owner)
     if (!tokenR.success || tokenR.data === undefined) return "deferred"
-    for (const hostname of hostnames(project)) {
+    for (const hostname of publicHostnames(project)) {
       if (stopped) return "done"
       let reconcileR: Awaited<ReturnType<typeof cloudflareDnsReconcile>>
       try {
@@ -663,6 +729,15 @@ export function projectRegistryDaemonCloudflareDnsCreate(options: {
     const projectsR = await currentProjects()
     if (!projectsR.success && options.repositoryProjectsCurrent !== undefined) return "failed"
     const projects = projectsR.success ? projectsR.data : undefined
+    if (projects !== undefined) {
+      const planR = projectDnsPlanCreate(projects)
+      if (!planR.success) {
+        log(
+          `cloudflare DNS reconciliation outcome=failure reason=conflicting-public-private-claims detail=${planR.errorMessage}`,
+        )
+        return "failed"
+      }
+    }
     const desired =
       projects === undefined || requested === undefined
         ? requested
@@ -678,7 +753,11 @@ export function projectRegistryDaemonCloudflareDnsCreate(options: {
         for (const record of records) {
           const hostname = projectDomainNormalize(record.name)
           const owners = currentOwners(record, projectKey, projects)
-          if (protectedHostnames.get(keyValue)?.has(hostname) === true || projectDomainIsCloudflarePages(hostname)) {
+          if (
+            protectedHostnames.get(keyValue)?.has(hostname) === true ||
+            projectDomainIsCloudflarePages(hostname) ||
+            projectKeysForExternalHostname(projects, hostname).length > 0
+          ) {
             if (owners.length === 0) {
               if (!(await trackingRecordRelease(record))) return "failed"
             } else if (!(await trackingRecordOwnersSet(record, owners))) {
