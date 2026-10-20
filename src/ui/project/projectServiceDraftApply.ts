@@ -42,6 +42,8 @@ export function projectServiceDraftApply(
   const domains = domainsParse(parsed.output.domains)
   if (domains.length === 0) return createResultError(op, "Mindestens eine Domain ist erforderlich.")
 
+  const preservedNetworkVisibility = parsed.output.networkVisibility ?? existing?.caddy?.networkVisibility
+
   const caddy = {
     denyDotfiles: false,
     headerUp: {},
@@ -55,6 +57,7 @@ export function projectServiceDraftApply(
     docs: parsed.output.docs,
     browse: parsed.output.browse,
     spa: parsed.output.spa,
+    ...(preservedNetworkVisibility === undefined ? {} : { networkVisibility: preservedNetworkVisibility }),
   }
 
   if (existing === undefined) {

@@ -6,6 +6,7 @@ const projectServiceCaddySchema = v.object({
   domains: v.array(v.string()),
   path: v.optional(v.string(), ""),
   access: v.optional(v.picklist(["internal", "external"]), "external"),
+  networkVisibility: v.optional(v.picklist(["public", "private"])),
   kind: v.optional(v.picklist(["proxy", "static"]), "proxy"),
   docs: v.optional(v.boolean(), false),
   browse: v.optional(v.boolean(), false),

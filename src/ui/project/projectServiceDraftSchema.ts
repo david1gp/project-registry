@@ -5,6 +5,7 @@ import { projectServiceOwnershipSchema } from "../../project/projectServiceOwner
 export const projectServiceDraftSchema = v.object({
   id: v.pipe(v.string(), v.regex(/^[a-z0-9][a-z0-9-]*$/, "Die Dienst-ID ist ungültig.")),
   ownership: v.optional(projectServiceOwnershipSchema),
+  networkVisibility: v.optional(v.picklist(["public", "private"])),
   port: v.string(),
   domains: v.string(),
   path: v.string(),

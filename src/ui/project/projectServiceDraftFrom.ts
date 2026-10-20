@@ -10,6 +10,7 @@ export function projectServiceDraftFrom(
   return {
     id: service?.id ?? serviceId,
     ownership: service?.ownership ?? "registry",
+    networkVisibility: caddy?.networkVisibility,
     port: caddy === null ? "" : String(caddy.port),
     domains: caddy === null ? "" : caddy.domains.join(", "),
     path: caddy?.path ?? "",

@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import * as v from "valibot"
+import { projectMigrate } from "../../project/projectMigrate.js"
 import { projectServiceDraftApply } from "./projectServiceDraftApply.js"
 import { projectServiceDraftFrom } from "./projectServiceDraftFrom.js"
 import type { ProjectServicesService } from "./projectServicesSchema.js"
@@ -101,6 +102,66 @@ describe("projectServiceDraftApply", () => {
     const result = projectServiceDraftApply(services, draft)
 
     expect(result).toMatchObject({ success: true, data: [{ id: "default" }, { id: "api", ownership: "external" }] })
+  })
+
+  test("round-trips a private placement through an unrelated draft edit into the production schema", () => {
+    const privateServices: ProjectServicesService[] = [
+      {
+        id: "default",
+        units: [],
+        ownership: "registry",
+        caddy: {
+          ...caddy,
+          port: 4108,
+          domains: ["opencode-temp.leonardomora.de"],
+          networkVisibility: "private",
+        },
+      },
+    ]
+    const draft = { ...projectServiceDraftFrom(privateServices[0], "default"), path: "/srv/changed" }
+
+    expect(draft.networkVisibility).toBe("private")
+    const result = projectServiceDraftApply(privateServices, draft)
+    expect(result.success).toBe(true)
+    if (!result.success) return
+    expect(result.data[0]?.caddy?.networkVisibility).toBe("private")
+
+    const migrated = projectMigrate({ schemaVersion: 2, owner: "leo", name: "app", services: result.data })
+    expect(migrated.success).toBe(true)
+    if (!migrated.success) return
+    expect(migrated.data.services[0]?.caddy?.networkVisibility).toBe("private")
+  })
+
+  test("preserves a private placement when a legacy draft omits networkVisibility", () => {
+    const privateServices: ProjectServicesService[] = [
+      {
+        id: "default",
+        units: [],
+        ownership: "registry",
+        caddy: { ...caddy, port: 4108, domains: ["opencode-temp.leonardomora.de"], networkVisibility: "private" },
+      },
+    ]
+    const draft = { ...projectServiceDraftFrom(privateServices[0], "default"), path: "/srv/changed" }
+    delete (draft as { networkVisibility?: string }).networkVisibility
+    const result = projectServiceDraftApply(privateServices, draft)
+
+    expect(result.success).toBe(true)
+    if (!result.success) return
+    expect(result.data[0]?.caddy?.networkVisibility).toBe("private")
+  })
+
+  test("leaves networkVisibility absent for services without an explicit choice", () => {
+    const draft = { ...projectServiceDraftFrom(services[1], "api"), port: "3007" }
+    const result = projectServiceDraftApply(services, draft)
+
+    expect(result.success).toBe(true)
+    if (!result.success) return
+    expect(result.data[1]?.caddy).not.toHaveProperty("networkVisibility")
+
+    const migrated = projectMigrate({ schemaVersion: 2, owner: "leo", name: "app", services: result.data })
+    expect(migrated.success).toBe(true)
+    if (!migrated.success) return
+    expect(migrated.data.services[1]?.caddy).not.toHaveProperty("networkVisibility")
   })
 
   test.each([
