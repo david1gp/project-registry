@@ -2,6 +2,7 @@ import { isIP } from "node:net"
 import * as a from "valibot"
 import { projectAccessLogRootSchema } from "../access-log/projectAccessLogRootSchema.js"
 import { caddyConfigOptionsSchema } from "../caddy/caddyConfigOptionsSchema.js"
+import { caddyInstanceConfigSchema } from "../caddy/caddyInstanceConfigSchema.js"
 import { localDomainsOptionsSchema } from "../local-domains/localDomainsOptionsSchema.js"
 
 const loopbackHostnameSchema = a.union([a.literal("127.0.0.1"), a.literal("::1")])
@@ -175,6 +176,7 @@ export const projectRegistryDaemonConfigSchema = a.strictObject({
   caddyGroup: a.optional(caddyServiceIdentitySchema),
   caddyAccessLogRoot: a.optional(projectAccessLogRootSchema),
   httpsListener: a.optional(httpsListenerSchema, ":443"),
+  caddyInstances: a.optional(caddyInstanceConfigSchema),
   oidc: a.optional(caddyConfigOptionsSchema.entries.oidc),
   zitadel: a.optional(zitadelSchema),
   session: a.optional(sessionSchema, {}),

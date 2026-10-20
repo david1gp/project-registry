@@ -2,6 +2,7 @@ import type { PromiseResult } from "#result"
 import type { Project } from "../project/Project.js"
 import type { ProjectRepository } from "../project-store/ProjectRepository.js"
 import type { CaddyAdminLoadOptions } from "./CaddyAdminLoadOptions.js"
+import type { CaddyApplicationTarget } from "./CaddyApplicationTarget.js"
 import type { CaddyClock } from "./CaddyClock.js"
 import type { CaddyConfig } from "./CaddyConfig.js"
 import type { CaddyConfigValidateOptions } from "./CaddyConfigValidateOptions.js"
@@ -11,6 +12,8 @@ import type { CaddyConfigOptions } from "./caddyConfigOptionsSchema.js"
 
 export type CaddyApplicationOptions = {
   repository: Pick<ProjectRepository, "read">
+  /** Cannot be combined with legacy configOptions/configReconcile/caddyBin/adminUrl. */
+  targets?: { public: CaddyApplicationTarget; private?: CaddyApplicationTarget }
   configOptions?: CaddyConfigOptions
   configReconcile?: (config: CaddyConfig, projects: readonly Project[]) => PromiseResult<CaddyConfig>
   caddyBin?: CaddyConfigValidateOptions["caddyBin"]

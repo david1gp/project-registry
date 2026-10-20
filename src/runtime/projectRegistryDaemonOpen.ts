@@ -1,10 +1,12 @@
 import { createResult, createResultError, type PromiseResult, type Result } from "#result"
 import { projectAccessCreate } from "../access/projectAccessCreate.js"
 import { caddyApplicationCreate } from "../caddy/caddyApplicationCreate.js"
+import type { CaddyApplicationOptions } from "../caddy/CaddyApplicationOptions.js"
 import type { CaddyConfig } from "../caddy/CaddyConfig.js"
 import { caddyConfigBaseMerge } from "../caddy/caddyConfigBaseMerge.js"
 import { caddyConfigBaseRead } from "../caddy/caddyConfigBaseRead.js"
 import { caddyProcessRunnerAsUser } from "../caddy/caddyProcessRunnerAsUser.js"
+import { caddyInstanceTargetsResolve } from "../caddy/caddyInstanceTargetsResolve.js"
 import { posixUserDirectoryCreate } from "../identity/posixUserDirectoryCreate.js"
 import { localDomainsCaddyConfigReconcileCreate } from "../local-domains/localDomainsCaddyConfigReconcileCreate.js"
 import { projectRepositoryOpen } from "../project-store/projectRepositoryOpen.js"
@@ -17,6 +19,7 @@ import type { ProjectRegistryDaemonConfig } from "./ProjectRegistryDaemonConfig.
 import type { ProjectRegistryDaemonOptions } from "./ProjectRegistryDaemonOptions.js"
 import { projectRegistryDaemonConfigValidate } from "./projectRegistryDaemonConfigValidate.js"
 import { projectRegistryDaemonCreate } from "./projectRegistryDaemonCreate.js"
+import { projectRegistryDaemonCaddyTargetCreate } from "./projectRegistryDaemonCaddyTargetCreate.js"
 import { projectRegistryDaemonPosixDefault } from "./projectRegistryDaemonPosixDefault.js"
 
 function identityDependenciesCreate(
@@ -107,8 +110,20 @@ export async function projectRegistryDaemonOpen(
   }
 
   const config = configR.data
+  const instances = caddyInstanceTargetsResolve(config)
+  let targets: CaddyApplicationOptions["targets"]
+  if (config.caddyInstances !== undefined) {
+    const publicR = await projectRegistryDaemonCaddyTargetCreate(instances.public, config)
+    if (!publicR.success) return publicR
+    targets = { public: publicR.data }
+    if (instances.private !== undefined) {
+      const privateR = await projectRegistryDaemonCaddyTargetCreate(instances.private, config)
+      if (!privateR.success) return privateR
+      targets.private = privateR.data
+    }
+  }
   const baseR =
-    config.caddyBaseConfigPath === undefined
+    targets !== undefined || config.caddyBaseConfigPath === undefined
       ? createResult(undefined)
       : await caddyConfigBaseRead(config.caddyBaseConfigPath)
   if (!baseR.success) return baseR
@@ -136,25 +151,29 @@ export async function projectRegistryDaemonOpen(
     options.caddyApplication === undefined
       ? caddyApplicationCreate({
           repository: repositoryR.data,
-          ...(baseR.data === undefined && localReconcile === undefined
-            ? {}
-            : {
-                configReconcile: async (generated, projects) => {
-                  // No baseline ownership is inferred from Registry/services metadata.
-                  // Runtime intentionally grants no managedHosts replacement authority.
-                  const mergedR = caddyConfigBaseMerge(generated, { baseConfig: baseR.data })
-                  if (!mergedR.success) return mergedR
-                  const merged = mergedR.data as unknown as CaddyConfig
-                  return localReconcile === undefined ? createResult(merged) : localReconcile(merged, projects)
+          ...(targets === undefined
+            ? {
+                ...(baseR.data === undefined && localReconcile === undefined
+                  ? {}
+                  : {
+                      configReconcile: async (generated, projects) => {
+                        // No baseline ownership is inferred from Registry/services metadata.
+                        // Runtime intentionally grants no managedHosts replacement authority.
+                        const mergedR = caddyConfigBaseMerge(generated, { baseConfig: baseR.data })
+                        if (!mergedR.success) return mergedR
+                        const merged = mergedR.data as unknown as CaddyConfig
+                        return localReconcile === undefined ? createResult(merged) : localReconcile(merged, projects)
+                      },
+                    }),
+                configOptions: {
+                  httpsListener: config.httpsListener,
+                  oidc: config.oidc,
+                  ...(config.caddyAccessLogRoot === undefined ? {} : { caddyAccessLogRoot: config.caddyAccessLogRoot }),
                 },
-              }),
-          configOptions: {
-            httpsListener: config.httpsListener,
-            oidc: config.oidc,
-            ...(config.caddyAccessLogRoot === undefined ? {} : { caddyAccessLogRoot: config.caddyAccessLogRoot }),
-          },
-          caddyBin: config.caddyBinary,
-          adminUrl: config.caddyAdminUrl,
+                caddyBin: config.caddyBinary,
+                adminUrl: config.caddyAdminUrl,
+              }
+            : { targets }),
           processRunner: caddyProcessRunner,
           fetch: options.caddyFetch,
           timer: options.timer,
@@ -165,7 +184,8 @@ export async function projectRegistryDaemonOpen(
           // Never assume those generated files are already loaded by Caddy.
           initializeFromGeneratedConfig:
             config.localDomains === undefined &&
-            config.caddyBaseConfigPath === undefined &&
+            instances.public.baseConfigPath === undefined &&
+            instances.private?.baseConfigPath === undefined &&
             config.initializeFromGeneratedConfig,
         })
       : createResult(options.caddyApplication)

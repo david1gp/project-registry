@@ -1,6 +1,9 @@
 import * as a from "valibot"
 import { createResult, createResultError, type Result } from "#result"
 import { projectAccessLogRootValidate } from "../access-log/projectAccessLogRootValidate.js"
+import type { CaddyInstanceConfig } from "../caddy/caddyInstanceConfigSchema.js"
+import { caddyInstanceTargetsResolve } from "../caddy/caddyInstanceTargetsResolve.js"
+import { caddyInstanceTargetsValidate } from "../caddy/caddyInstanceTargetsValidate.js"
 import { projectDomainValidate } from "../project/projectDomainValidate.js"
 import type { ProjectRegistryDaemonConfig } from "./ProjectRegistryDaemonConfig.js"
 import { projectRegistryDaemonConfigSchema } from "./projectRegistryDaemonConfigSchema.js"
@@ -16,6 +19,24 @@ function defaultUserDomainsNormalize(domains: Readonly<Record<string, string>>):
     normalized[username] = domainR.data
   }
   return createResult(normalized)
+}
+
+function caddyInstancesClone(instances: CaddyInstanceConfig): CaddyInstanceConfig {
+  return {
+    ...(instances.public === undefined
+      ? {}
+      : {
+          public: {
+            ...instances.public,
+            ...(instances.public.httpsListeners === undefined
+              ? {}
+              : { httpsListeners: [...instances.public.httpsListeners] }),
+          },
+        }),
+    ...(instances.private === undefined
+      ? {}
+      : { private: { ...instances.private, httpsListeners: [...instances.private.httpsListeners] } }),
+  }
 }
 
 export function projectRegistryDaemonConfigValidate(input: unknown): Result<ProjectRegistryDaemonConfig> {
@@ -70,9 +91,38 @@ export function projectRegistryDaemonConfigValidate(input: unknown): Result<Proj
       if (!accessLogRootR.success) return createResultError(op, accessLogRootR.errorMessage)
     }
 
+    if (parsed.output.caddyInstances !== undefined) {
+      if (parsed.output.localDomains !== undefined && parsed.output.caddyInstances.private !== undefined) {
+        return createResultError(op, "local mkcert/hosts automation does not support dual Caddy targets")
+      }
+      const targets = caddyInstanceTargetsResolve({
+        caddyAdminUrl: parsed.output.caddyAdminUrl,
+        httpsListener: parsed.output.httpsListener,
+        ...(parsed.output.caddyBaseConfigPath === undefined
+          ? {}
+          : { caddyBaseConfigPath: parsed.output.caddyBaseConfigPath }),
+        ...(parsed.output.caddyUser === undefined ? {} : { caddyUser: parsed.output.caddyUser }),
+        ...(parsed.output.caddyGroup === undefined ? {} : { caddyGroup: parsed.output.caddyGroup }),
+        ...(parsed.output.caddyAccessLogRoot === undefined
+          ? {}
+          : { caddyAccessLogRoot: parsed.output.caddyAccessLogRoot }),
+        caddyInstances: parsed.output.caddyInstances,
+      })
+      const targetsR = caddyInstanceTargetsValidate(targets)
+      if (!targetsR.success) return createResultError(op, targetsR.errorMessage)
+      for (const target of [targets.public, targets.private] as const) {
+        if (target?.accessLogRoot !== undefined) {
+          const instanceRootR = projectAccessLogRootValidate(target.accessLogRoot, parsed.output.repositoryPath)
+          if (!instanceRootR.success) return createResultError(op, instanceRootR.errorMessage)
+        }
+      }
+    }
+
     return createResult({
       ...parsed.output,
       mappedUsers: [...parsed.output.mappedUsers],
+      caddyInstances:
+        parsed.output.caddyInstances === undefined ? undefined : caddyInstancesClone(parsed.output.caddyInstances),
       defaultUserDomains: { ...defaultUserDomainsR.data },
       oidc:
         parsed.output.oidc === undefined

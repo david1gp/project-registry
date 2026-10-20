@@ -1,8 +1,10 @@
 import { types } from "node:util"
+import * as a from "valibot"
 import { createResult, createResultError, type PromiseResult, type Result } from "#result"
 import { projectAccessLogId } from "../access-log/projectAccessLogId.js"
 import { projectAccessLogRetentionMaximumActiveProjectIds } from "../access-log/projectAccessLogRetentionMaximumActiveProjectIds.js"
 import { projectAccessLogRetentionReconcile } from "../access-log/projectAccessLogRetentionReconcile.js"
+import { projectDomainNormalize } from "../project/projectDomainNormalize.js"
 import { projectLocalCaddyEntries } from "../project/projectLocalCaddyEntries.js"
 import { projectMigrate } from "../project/projectMigrate.js"
 import type { ProjectRepositorySnapshot } from "../project-store/ProjectRepositorySnapshot.js"
@@ -10,10 +12,14 @@ import type { CaddyApplication } from "./CaddyApplication.js"
 import type { CaddyApplicationOptions } from "./CaddyApplicationOptions.js"
 import type { CaddyApplicationResult } from "./CaddyApplicationResult.js"
 import type { CaddyApplicationStatus } from "./CaddyApplicationStatus.js"
+import type { CaddyApplicationTarget } from "./CaddyApplicationTarget.js"
+import type { CaddyConfig } from "./CaddyConfig.js"
 import type { CaddyTimer } from "./CaddyTimer.js"
 import { caddyAdminLoad } from "./caddyAdminLoad.js"
 import { caddyApplicationQueueCreate } from "./caddyApplicationQueueCreate.js"
 import { caddyConfigGenerate } from "./caddyConfigGenerate.js"
+import { caddyConfigHostnames } from "./caddyConfigHostnames.js"
+import { caddyConfigOptionsSchema } from "./caddyConfigOptionsSchema.js"
 import { caddyConfigSerialize } from "./caddyConfigSerialize.js"
 import { caddyConfigValidate } from "./caddyConfigValidate.js"
 
@@ -80,7 +86,10 @@ type CaddyApplicationProperty = {
 
 type CaddyApplicationCallable = (...args: never[]) => unknown
 
-function caddyApplicationOptionsValues(options: unknown): CaddyApplicationOptionValues {
+function caddyApplicationOptionsValues(
+  options: unknown,
+  allowedNames?: readonly string[],
+): CaddyApplicationOptionValues {
   if (
     typeof options !== "object" ||
     options === null ||
@@ -92,8 +101,9 @@ function caddyApplicationOptionsValues(options: unknown): CaddyApplicationOption
   }
 
   const values: CaddyApplicationOptionValues = Object.create(null) as CaddyApplicationOptionValues
-  const names = [
+  const names = allowedNames ?? [
     "repository",
+    "targets",
     "configOptions",
     "configReconcile",
     "caddyBin",
@@ -324,8 +334,43 @@ function caddyApplicationOptionsValidate(options: unknown): Result<CaddyApplicat
     return createResultError(op, "configReconcile must be a function")
   }
 
+  let targets: CaddyApplicationOptions["targets"]
+  if (values.targets !== undefined) {
+    try {
+      const targetValues = caddyApplicationOptionsValues(values.targets, ["public", "private"])
+      const normalizeTarget = (value: unknown): CaddyApplicationTarget => {
+        const target = caddyApplicationOptionsValues(value, [
+          "adminUrl",
+          "configOptions",
+          "configReconcile",
+          "caddyBin",
+        ])
+        if (typeof target.adminUrl !== "string" || target.adminUrl.trim() === "") throw new Error("invalid target")
+        if (target.caddyBin !== undefined && typeof target.caddyBin !== "string") throw new Error("invalid target")
+        if (target.configReconcile !== undefined && !caddyApplicationCallable(target.configReconcile)) {
+          throw new Error("invalid target")
+        }
+        return target as CaddyApplicationTarget
+      }
+      targets = { public: normalizeTarget(targetValues.public) }
+      if (targetValues.private !== undefined) targets.private = normalizeTarget(targetValues.private)
+      const adminUrls = Object.values(targets).map((target) => {
+        const url = new URL(target.adminUrl)
+        if (!["http:", "https:"].includes(url.protocol)) throw new Error("invalid target admin URL")
+        return url.href.replace(/\/+$/, "")
+      })
+      if (new Set(adminUrls).size !== adminUrls.length) throw new Error("duplicate target admin URL")
+    } catch {
+      return createResultError(op, "Caddy application targets are invalid")
+    }
+    if (["configOptions", "configReconcile", "caddyBin", "adminUrl"].some((key) => values[key] !== undefined)) {
+      return createResultError(op, "Explicit Caddy targets cannot be combined with legacy target options")
+    }
+  }
+
   return createResult({
     repository,
+    targets,
     configOptions: values.configOptions as CaddyApplicationOptions["configOptions"],
     configReconcile: values.configReconcile as CaddyApplicationOptions["configReconcile"],
     caddyBin: values.caddyBin as CaddyApplicationOptions["caddyBin"],
@@ -359,7 +404,16 @@ export function caddyApplicationCreate(options: unknown): Result<CaddyApplicatio
   const intervalMs = applicationOptions.intervalMs ?? defaultIntervalMs
   const initializeFromGeneratedConfig = applicationOptions.initializeFromGeneratedConfig ?? false
   let status: CaddyApplicationStatus = { pending: false }
-  let lastAppliedSerialized: string | undefined
+  const targets = (
+    applicationOptions.targets === undefined
+      ? [{ visibility: "public" as const, options: applicationOptions }]
+      : [
+          { visibility: "public" as const, options: applicationOptions.targets.public },
+          ...(applicationOptions.targets.private === undefined
+            ? []
+            : [{ visibility: "private" as const, options: applicationOptions.targets.private }]),
+        ]
+  ).map((target) => ({ ...target, lastAppliedSerialized: undefined as string | undefined, reloadRequired: false }))
   let reloadRequired = false
   let pending: QueuedSnapshot | undefined
   let running: PromiseResult<CaddyApplicationResult> | undefined
@@ -413,6 +467,7 @@ export function caddyApplicationCreate(options: unknown): Result<CaddyApplicatio
     sequence: number,
   ): Result<CaddyApplicationResult> {
     reloadRequired = true
+    if (applicationOptions.targets === undefined) targets[0]!.reloadRequired = true
     if (statusSequence === sequence) {
       status = {
         ...status,
@@ -479,25 +534,85 @@ export function caddyApplicationCreate(options: unknown): Result<CaddyApplicatio
       lastAttempt: clock(),
       error: statusSequence === sequence ? undefined : status.error,
     }
-    let generatedR = caddyConfigGenerate(snapshot.projects, applicationOptions.configOptions)
-    if (stopped) return stoppedResult()
-    if (!generatedR.success) {
-      return statusError(generatedR.errorMessage, snapshot, sequence)
+    const claims = new Map<string, "public" | "private">()
+    for (const project of snapshot.projects) {
+      for (const { caddy } of projectLocalCaddyEntries(project)) {
+        if (caddy.disabled) continue
+        const visibility = caddy.networkVisibility ?? "public"
+        if (visibility === "private" && !targets.some((target) => target.visibility === "private")) {
+          return statusError("Private Caddy routes require a private target", snapshot, sequence)
+        }
+        for (const domain of caddy.domains) {
+          const hostname = projectDomainNormalize(domain)
+          const previous = claims.get(hostname)
+          if (previous !== undefined && previous !== visibility) {
+            return statusError(`Conflicting public/private Caddy hostname claim: ${hostname}`, snapshot, sequence)
+          }
+          claims.set(hostname, visibility)
+        }
+      }
     }
 
-    if (applicationOptions.configReconcile !== undefined) {
-      generatedR = await applicationOptions.configReconcile(generatedR.data, snapshot.projects)
-      if (stopped) return stoppedResult()
+    const candidates: Array<{
+      target: (typeof targets)[number]
+      config: CaddyConfig
+      serialized: string
+      required: boolean
+    }> = []
+    const accessLogRoots = new Set<string>()
+    for (const target of targets) {
+      const configOptionsR = a.safeParse(
+        caddyConfigOptionsSchema,
+        target.options.configOptions === undefined ? {} : target.options.configOptions,
+      )
+      if (!configOptionsR.success)
+        return statusError("invalid options: Caddy configuration options are invalid", snapshot, sequence)
+      if (
+        target.options.configOptions?.networkVisibility !== undefined &&
+        configOptionsR.output.networkVisibility !== target.visibility
+      ) {
+        return statusError("Caddy target networkVisibility must match its target key", snapshot, sequence)
+      }
+      const accessLogRoot = configOptionsR.output.caddyAccessLogRoot
+      if (accessLogRoot !== undefined) {
+        if (accessLogRoots.has(accessLogRoot)) {
+          return statusError("Caddy targets must use distinct access-log roots", snapshot, sequence)
+        }
+        accessLogRoots.add(accessLogRoot)
+      }
+      let generatedR = caddyConfigGenerate(snapshot.projects, {
+        ...configOptionsR.output,
+        networkVisibility: target.visibility,
+      })
       if (!generatedR.success) return statusError(generatedR.errorMessage, snapshot, sequence)
+      if (target.options.configReconcile !== undefined) {
+        generatedR = await target.options.configReconcile(generatedR.data, snapshot.projects)
+        if (stopped) return stoppedResult()
+        if (!generatedR.success) return statusError(generatedR.errorMessage, snapshot, sequence)
+      }
+      const serializedR = caddyConfigSerialize(generatedR.data)
+      if (!serializedR.success) return statusError(serializedR.errorMessage, snapshot, sequence)
+      candidates.push({
+        target,
+        config: generatedR.data,
+        serialized: serializedR.data,
+        required: initialize || force || target.reloadRequired || target.lastAppliedSerialized !== serializedR.data,
+      })
     }
 
-    const serializedR = caddyConfigSerialize(generatedR.data)
-    if (stopped) return stoppedResult()
-    if (!serializedR.success) {
-      return statusError(serializedR.errorMessage, snapshot, sequence)
+    // Imported baselines can introduce claims absent from the repository. Check
+    // final reconciled configs too, before validating or loading either target.
+    for (const candidate of candidates) {
+      for (const hostname of caddyConfigHostnames(candidate.config)) {
+        const previous = claims.get(hostname)
+        if (previous !== undefined && previous !== candidate.target.visibility) {
+          return statusError(`Conflicting public/private Caddy hostname claim: ${hostname}`, snapshot, sequence)
+        }
+        claims.set(hostname, candidate.target.visibility)
+      }
     }
 
-    if (!initialize && !force && !reloadRequired && lastAppliedSerialized === serializedR.data) {
+    if (candidates.every((candidate) => !candidate.required)) {
       if (statusSequence === sequence) {
         status = {
           ...status,
@@ -508,6 +623,7 @@ export function caddyApplicationCreate(options: unknown): Result<CaddyApplicatio
           error: undefined,
         }
       }
+      reloadRequired = false
       if (periodic || retentionReconciliationDirty) successfulCaddyLoad(snapshot, clock(), sequence)
       return createResult({ revision: snapshot.revision, changed: false, applied: true, attempts: 0 })
     }
@@ -523,17 +639,26 @@ export function caddyApplicationCreate(options: unknown): Result<CaddyApplicatio
         error: statusSequence === sequence ? undefined : status.error,
       }
 
-      const validateR = await caddyConfigValidate(generatedR.data, {
-        caddyBin: applicationOptions.caddyBin,
-        processRunner: applicationOptions.processRunner,
-        timeoutMs: applicationOptions.validationTimeoutMs,
-        signal: stopController.signal,
-        timer,
-      })
-      if (stopped) return stoppedResult()
-      if (!validateR.success) {
-        lastError = validateR.errorMessage
-      } else if (initialize) {
+      let failed = false
+      // Validate the entire candidate set before the first load, including an
+      // unchanged target: no invalid sibling may allow a partial publication.
+      for (const candidate of candidates) {
+        const validateR = await caddyConfigValidate(candidate.config, {
+          caddyBin: candidate.target.options.caddyBin,
+          processRunner: applicationOptions.processRunner,
+          timeoutMs: applicationOptions.validationTimeoutMs,
+          signal: stopController.signal,
+          timer,
+        })
+        if (stopped) return stoppedResult()
+        if (!validateR.success) {
+          lastError = validateR.errorMessage
+          if (candidate.required) candidate.target.reloadRequired = true
+          failed = true
+          break
+        }
+      }
+      if (!failed && initialize) {
         const now = clock()
         status = {
           ...status,
@@ -544,27 +669,45 @@ export function caddyApplicationCreate(options: unknown): Result<CaddyApplicatio
           lastSuccess: now,
           error: undefined,
         }
-        lastAppliedSerialized = serializedR.data
+        for (const candidate of candidates) {
+          candidate.target.lastAppliedSerialized = candidate.serialized
+          candidate.target.reloadRequired = false
+        }
         reloadRequired = false
         successfulCaddyLoad(snapshot, now, sequence)
         return createResult({ revision: snapshot.revision, changed: false, applied: true, attempts: retry + 1 })
-      } else {
-        // A client cancellation is not an acknowledgement from Caddy. Keep the
-        // existing running work alive through /load; its own timeout is a drain
-        // failure, never evidence that the server finished applying the config.
-        const previousLoadDrainR = loadDrainR
-        loadDrainR = createResultError("caddyApplicationStop", "Caddy admin load completion was not acknowledged")
-        const loadR = await caddyAdminLoad(generatedR.data, {
-          adminUrl: applicationOptions.adminUrl,
-          fetch: applicationOptions.fetch,
-          timeoutMs: applicationOptions.loadTimeoutMs,
-          timer,
-        })
-        // Retain earlier failures too: an unacknowledged request can still apply
-        // after a later request succeeds. A successful retry cannot prove drain.
-        loadDrainR = loadR.success ? previousLoadDrainR : createResultError("caddyApplicationStop", loadR.errorMessage)
-        if (stopped) return stoppedResult()
-        if (loadR.success) {
+      }
+      if (!failed) {
+        for (const candidate of candidates) {
+          if (!candidate.required) continue
+          // A client cancellation is not an acknowledgement from Caddy. Keep the
+          // existing running work alive through /load; its own timeout is a drain
+          // failure, never evidence that the server finished applying the config.
+          const previousLoadDrainR = loadDrainR
+          loadDrainR = createResultError("caddyApplicationStop", "Caddy admin load completion was not acknowledged")
+          const loadR = await caddyAdminLoad(candidate.config, {
+            adminUrl: candidate.target.options.adminUrl,
+            fetch: applicationOptions.fetch,
+            timeoutMs: applicationOptions.loadTimeoutMs,
+            timer,
+          })
+          // Retain earlier failures too: an unacknowledged request can still apply
+          // after a later request succeeds. A successful retry cannot prove drain.
+          loadDrainR = loadR.success
+            ? previousLoadDrainR
+            : createResultError("caddyApplicationStop", loadR.errorMessage)
+          if (stopped) return stoppedResult()
+          if (!loadR.success) {
+            candidate.target.reloadRequired = true
+            lastError = loadR.errorMessage
+            failed = true
+            break
+          }
+          candidate.target.lastAppliedSerialized = candidate.serialized
+          candidate.target.reloadRequired = false
+          candidate.required = false
+        }
+        if (!failed) {
           const now = clock()
           if (statusSequence === sequence) {
             status = {
@@ -587,12 +730,10 @@ export function caddyApplicationCreate(options: unknown): Result<CaddyApplicatio
               lastSuccess: now,
             }
           }
-          lastAppliedSerialized = serializedR.data
           reloadRequired = false
           successfulCaddyLoad(snapshot, now, sequence)
           return createResult({ revision: snapshot.revision, changed: true, applied: true, attempts: retry + 1 })
         }
-        lastError = loadR.errorMessage
       }
 
       if (statusSequence === sequence) status = { ...status, error: lastError }
@@ -656,10 +797,9 @@ export function caddyApplicationCreate(options: unknown): Result<CaddyApplicatio
         pending = undefined
         return stoppedResult()
       }
-      const accessLogRoot = applicationOptions.configOptions?.caddyAccessLogRoot
       const successfulRevision = latestSuccessfulCaddyLoad?.snapshot.revision
       const successfulSequence = latestSuccessfulCaddyLoad?.sequence
-      if (result.success && latestSuccessfulCaddyLoad !== undefined && accessLogRoot !== undefined) {
+      if (result.success && latestSuccessfulCaddyLoad !== undefined) {
         const stillCurrent = () =>
           !stopped &&
           latestTrigger?.sequence === successfulSequence &&
@@ -668,28 +808,37 @@ export function caddyApplicationCreate(options: unknown): Result<CaddyApplicatio
           status.desiredRevision === successfulRevision &&
           status.appliedRevision === successfulRevision
         if (stillCurrent()) {
-          try {
-            const activeProjectIds = latestSuccessfulCaddyLoad.snapshot.projects
-              .filter((project) => projectLocalCaddyEntries(project).some((entry) => !entry.caddy.disabled))
-              .map(projectAccessLogId)
-            // An over-limit snapshot is not reconciled. Never truncate it: a partial active set could delete live logs.
-            if (activeProjectIds.length <= projectAccessLogRetentionMaximumActiveProjectIds) {
+          let retentionFailed = false
+          for (const target of targets) {
+            const accessLogRoot = target.options.configOptions?.caddyAccessLogRoot
+            if (accessLogRoot === undefined || !stillCurrent()) continue
+            try {
+              const activeProjectIds = latestSuccessfulCaddyLoad.snapshot.projects
+                .filter((project) =>
+                  projectLocalCaddyEntries(project).some(
+                    (entry) =>
+                      !entry.caddy.disabled && (entry.caddy.networkVisibility ?? "public") === target.visibility,
+                  ),
+                )
+                .map(projectAccessLogId)
+              // An over-limit snapshot is not reconciled. Never truncate it: a partial active set could delete live logs.
+              if (activeProjectIds.length > projectAccessLogRetentionMaximumActiveProjectIds) {
+                retentionFailed ||= retentionReconciliationDirty
+                continue
+              }
               const reconciliationR = await projectAccessLogRetentionReconcile({
                 root: accessLogRoot,
                 activeProjectIds,
                 now: latestSuccessfulCaddyLoad.now,
                 stillCurrent,
               })
-              if (reconciliationR.success) {
-                if (stillCurrent()) retentionReconciliationDirty = false
-              } else if (stillCurrent()) {
-                retentionReconciliationDirty = true
-              }
+              if (!reconciliationR.success) retentionFailed = true
+            } catch {
+              retentionFailed = true
+              // Caddy has already accepted the configuration; retention is best effort and must not change that result.
             }
-          } catch {
-            if (stillCurrent()) retentionReconciliationDirty = true
-            // Caddy has already accepted the configuration; retention is best effort and must not change that result.
           }
+          if (stillCurrent()) retentionReconciliationDirty = retentionFailed
         }
       }
       if (pending === undefined) return result

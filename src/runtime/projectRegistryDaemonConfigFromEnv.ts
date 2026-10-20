@@ -51,6 +51,7 @@ export function projectRegistryDaemonConfigFromEnv(
       "CADDY_GROUP",
       "PROJECT_REGISTRY_CADDY_ACCESS_LOG_ROOT",
       "PROJECT_REGISTRY_HTTPS_LISTENER",
+      "PROJECT_REGISTRY_CADDY_INSTANCES",
       "ZITADEL_ISSUER",
       "ZITADEL_ORG_ID",
       "ZITADEL_PROJECT_ID",
@@ -127,6 +128,15 @@ export function projectRegistryDaemonConfigFromEnv(
         defaultUserDomains = JSON.parse(defaultUserDomainsValue)
       } catch {
         return createResultError(op, "PROJECT_REGISTRY_DEFAULT_USER_DOMAINS must be valid JSON")
+      }
+    }
+    let caddyInstances: unknown
+    const caddyInstancesValue = values.PROJECT_REGISTRY_CADDY_INSTANCES?.trim()
+    if (caddyInstancesValue !== undefined && caddyInstancesValue !== "") {
+      try {
+        caddyInstances = JSON.parse(caddyInstancesValue)
+      } catch {
+        return createResultError(op, "PROJECT_REGISTRY_CADDY_INSTANCES must be valid JSON")
       }
     }
     const caddyAccessLogRoot =
@@ -207,6 +217,7 @@ export function projectRegistryDaemonConfigFromEnv(
       caddyGroup,
       caddyAccessLogRoot,
       httpsListener: values.PROJECT_REGISTRY_HTTPS_LISTENER,
+      caddyInstances,
       oidc: oidcR.data.oidc,
       ...(zitadelConfigured
         ? {
