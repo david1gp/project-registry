@@ -39,6 +39,7 @@ Project create/edit options:
   --no-dns                    Skip automatic Cloudflare DNS reconciliation for this create
   --kind <proxy|static>      Caddy route kind
   --access <internal|external>
+  --network-visibility <public|private>
   --docs | --no-docs
   --browse | --no-browse
   --disabled | --enabled

@@ -3,9 +3,9 @@ import { createResult, createResultError, type Result } from "#result"
 import { projectAccessLogCaddyRetention } from "../access-log/projectAccessLogCaddyRetention.js"
 import { projectAccessLogId } from "../access-log/projectAccessLogId.js"
 import { projectAccessLogPath } from "../access-log/projectAccessLogPath.js"
-import { projectLocalCaddyEntries } from "../project/projectLocalCaddyEntries.js"
 import type { ProjectCaddy } from "../project/projectCaddySchema.js"
 import type { ProjectCanonical } from "../project/projectCanonicalSchema.js"
+import { projectLocalCaddyEntries } from "../project/projectLocalCaddyEntries.js"
 import { projectMigrate } from "../project/projectMigrate.js"
 import type { CaddyConfig } from "./CaddyConfig.js"
 import type { CaddyConfigOptions, OidcOptions } from "./caddyConfigOptionsSchema.js"
@@ -46,14 +46,25 @@ function projectRouteIsActive(route: CaddyProjectRoute): boolean {
   return !route.caddy.disabled
 }
 
+function projectRouteNetworkVisibility(route: CaddyProjectRoute): "public" | "private" {
+  return route.caddy.networkVisibility ?? "public"
+}
+
+function projectRouteIsVisible(route: CaddyProjectRoute, networkVisibility: "public" | "private"): boolean {
+  return projectRouteNetworkVisibility(route) === networkVisibility
+}
+
 function projectRouteDomain(route: CaddyProjectRoute): string {
   return route.caddy.domains[0] ?? route.project.name
 }
 
-function activeProjectRoutes(projects: readonly CaddyProject[]): CaddyProjectRoute[] {
+function activeProjectRoutes(
+  projects: readonly CaddyProject[],
+  networkVisibility: "public" | "private",
+): CaddyProjectRoute[] {
   return projects
     .flatMap(projectRoutes)
-    .filter(projectRouteIsActive)
+    .filter((route) => projectRouteIsActive(route) && projectRouteIsVisible(route, networkVisibility))
     .sort((left, right) => {
       const domainOrder = projectRouteDomain(left).localeCompare(projectRouteDomain(right))
       if (domainOrder !== 0) return domainOrder
@@ -66,9 +77,13 @@ function activeProjectRoutes(projects: readonly CaddyProject[]): CaddyProjectRou
     })
 }
 
-function activeProjects(projects: readonly CaddyProject[]): CaddyProject[] {
+function activeProjects(projects: readonly CaddyProject[], networkVisibility: "public" | "private"): CaddyProject[] {
   return projects
-    .filter((project) => projectRoutes(project).some(projectRouteIsActive))
+    .filter((project) =>
+      projectRoutes(project).some(
+        (route) => projectRouteIsActive(route) && projectRouteIsVisible(route, networkVisibility),
+      ),
+    )
     .sort((left, right) => {
       const leftRoute = projectRoutes(left).find(projectRouteIsActive)
       const rightRoute = projectRoutes(right).find(projectRouteIsActive)
@@ -337,6 +352,7 @@ function projectAccessLogEncoder(): Record<string, unknown> {
 function projectAccessLogConfig(
   projects: readonly CaddyProject[],
   root: string,
+  networkVisibility: "public" | "private",
 ): Result<{
   logging: { logs: Record<string, unknown> }
   serverLogs: { logger_names: Record<string, string[]>; should_log_credentials: true }
@@ -347,7 +363,9 @@ function projectAccessLogConfig(
   const exclusions: string[] = []
 
   for (const project of projects) {
-    const routes = projectRoutes(project).filter(projectRouteIsActive)
+    const routes = projectRoutes(project).filter(
+      (route) => projectRouteIsActive(route) && projectRouteIsVisible(route, networkVisibility),
+    )
     if (routes.length === 0) continue
 
     const id = projectAccessLogId(project)
@@ -410,7 +428,7 @@ export function caddyConfigGenerate(projects: unknown, options: unknown = {}): R
     const optionsParsed = a.safeParse(caddyConfigOptionsSchema, options)
     if (!optionsParsed.success) return createResultError(op, `invalid options: ${a.summarize(optionsParsed.issues)}`)
 
-    const active = activeProjectRoutes(projectsParsed.data)
+    const active = activeProjectRoutes(projectsParsed.data, optionsParsed.output.networkVisibility)
     const domainsResult = projectDomainsValidate(active)
     if (!domainsResult.success) return domainsResult
 
@@ -419,7 +437,7 @@ export function caddyConfigGenerate(projects: unknown, options: unknown = {}): R
         http: {
           servers: {
             srv0: {
-              listen: [optionsParsed.output.httpsListener],
+              listen: optionsParsed.output.httpsListeners ?? [optionsParsed.output.httpsListener],
               routes: active.map((route) => projectRoute(route, optionsParsed.output)),
             },
           },
@@ -429,8 +447,9 @@ export function caddyConfigGenerate(projects: unknown, options: unknown = {}): R
 
     if (optionsParsed.output.caddyAccessLogRoot !== undefined && active.length > 0) {
       const accessLogR = projectAccessLogConfig(
-        activeProjects(projectsParsed.data),
+        activeProjects(projectsParsed.data, optionsParsed.output.networkVisibility),
         optionsParsed.output.caddyAccessLogRoot,
+        optionsParsed.output.networkVisibility,
       )
       if (!accessLogR.success) return accessLogR
       config.apps.http.servers.srv0.logs = accessLogR.data.serverLogs

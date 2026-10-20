@@ -107,7 +107,16 @@ function caddyNormalize(
   const path = stringValue(record.path)
   if (path !== undefined) caddy.path = path
 
-  for (const key of ["access", "kind", "docs", "browse", "disabled", "denyDotfiles", "spa"] as const) {
+  for (const key of [
+    "access",
+    "networkVisibility",
+    "kind",
+    "docs",
+    "browse",
+    "disabled",
+    "denyDotfiles",
+    "spa",
+  ] as const) {
     if (record[key] !== undefined) caddy[key] = record[key]
   }
 

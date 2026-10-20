@@ -13,6 +13,7 @@ const projectCaddyInputSchema = a.object({
   domains: a.pipe(a.array(nonEmptyTextSchema), a.minLength(1)),
   path: a.optional(a.string(), ""),
   access: a.optional(a.picklist(["internal", "external"]), "external"),
+  networkVisibility: a.optional(a.picklist(["public", "private"])),
   kind: a.optional(a.picklist(["proxy", "static"]), "proxy"),
   docs: a.optional(a.boolean(), false),
   browse: a.optional(a.boolean(), false),

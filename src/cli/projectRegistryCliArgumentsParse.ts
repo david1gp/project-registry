@@ -76,6 +76,7 @@ export function projectRegistryCliArgumentsParse(args: readonly string[]): Resul
   let before: string | undefined
   let kind: "proxy" | "static" | undefined
   let access: "internal" | "external" | undefined
+  let networkVisibility: "public" | "private" | undefined
   let flushInterval: number | undefined
   let section: string | undefined
   let hasListMetadata = false
@@ -139,6 +140,7 @@ export function projectRegistryCliArgumentsParse(args: readonly string[]): Resul
       "--path",
       "--kind",
       "--access",
+      "--network-visibility",
       "--header-up",
       "--label",
       "--metadata",
@@ -257,6 +259,13 @@ export function projectRegistryCliArgumentsParse(args: readonly string[]): Resul
         access = value
         continue
       }
+      if (option === "--network-visibility") {
+        if (value !== "public" && value !== "private") {
+          return createResultError(op, "Option --network-visibility must be public or private.")
+        }
+        networkVisibility = value
+        continue
+      }
       if (option === "--header-up") {
         if (value === undefined || !value.includes("=")) {
           if (cloudflareTokenSetPositionalsMatch(positionals))
@@ -352,6 +361,7 @@ export function projectRegistryCliArgumentsParse(args: readonly string[]): Resul
   if (path !== undefined) caddy.path = path
   if (kind !== undefined) caddy.kind = kind
   if (access !== undefined) caddy.access = access
+  if (networkVisibility !== undefined) caddy.networkVisibility = networkVisibility
   if (flushInterval !== undefined) caddy.flushInterval = flushInterval
   if (headerUpEntries.length > 0) {
     caddy.headerUp = {}

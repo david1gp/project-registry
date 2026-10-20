@@ -4,6 +4,7 @@ export type ProjectRegistryCliCaddyOptions = {
   path?: string
   kind?: "proxy" | "static"
   access?: "internal" | "external"
+  networkVisibility?: "public" | "private"
   docs?: boolean
   browse?: boolean
   headerUp?: Record<string, string>

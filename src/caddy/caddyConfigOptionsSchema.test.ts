@@ -46,5 +46,49 @@ test("caddyConfigOptionsSchema allows OIDC to be missing", () => {
 
   expect(result.success).toBe(true)
   if (!result.success) return
-  expect(result.output).toEqual({ httpsListener: ":443" })
+  expect(result.output).toEqual({ httpsListener: ":443", networkVisibility: "public" })
+})
+
+test("caddyConfigOptionsSchema keeps legacy httpsListener on the :port form", () => {
+  expect(a.safeParse(caddyConfigOptionsSchema, { httpsListener: ":8443" }).success).toBe(true)
+  expect(a.safeParse(caddyConfigOptionsSchema, { httpsListener: "127.0.0.1:8443" }).success).toBe(false)
+  expect(a.safeParse(caddyConfigOptionsSchema, { httpsListener: "[::1]:8443" }).success).toBe(false)
+  expect(a.safeParse(caddyConfigOptionsSchema, { httpsListener: ":0" }).success).toBe(false)
+})
+
+test("caddyConfigOptionsSchema accepts explicit IPv4 and bracketed IPv6 httpsListeners", () => {
+  const result = a.safeParse(caddyConfigOptionsSchema, {
+    httpsListeners: [":443", "203.0.113.10:443", "100.122.200.114:443", "[::1]:443"],
+  })
+
+  expect(result.success).toBe(true)
+  if (!result.success) return
+  expect(result.output.httpsListeners).toEqual([":443", "203.0.113.10:443", "100.122.200.114:443", "[::1]:443"])
+})
+
+test("caddyConfigOptionsSchema rejects malformed httpsListeners", () => {
+  const invalid = [
+    [],
+    ["8443"],
+    [""],
+    [":0"],
+    [":65536"],
+    [":abc"],
+    [":443 "],
+    ["999.999.999.999:443"],
+    ["example.com:443"],
+    ["*:443"],
+    ["127.0.0.1"],
+    ["127.0.0.1:0"],
+    ["127.0.0.1:65536"],
+    ["::1:443"],
+    ["[::1]"],
+    ["[::1]:0"],
+    ["[::1]:65536"],
+    ["[not-an-ip]:443"],
+  ]
+
+  for (const httpsListeners of invalid) {
+    expect(a.safeParse(caddyConfigOptionsSchema, { httpsListeners }).success).toBe(false)
+  }
 })
