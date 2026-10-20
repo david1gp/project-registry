@@ -1,8 +1,10 @@
 import * as a from "valibot"
-import { createResult, createResultError, type PromiseResult, type Result } from "#result"
+import { createResult, createResultError, type PromiseResult, type Result, type ResultErr } from "#result"
 import type { CloudflareDnsDeleteByIdOptions } from "./CloudflareDnsDeleteByIdOptions.js"
 import type { CloudflareDnsDeleteByIdResult } from "./CloudflareDnsDeleteByIdResult.js"
 import type { CloudflareDnsRecord } from "./CloudflareDnsRecord.js"
+import type { CloudflareDnsOperation } from "./cloudflareDnsOperationSchema.js"
+import { cloudflareDnsErrorDataCreate } from "./cloudflareDnsErrorDataCreate.js"
 import { cloudflareDnsTrackedRecordSchema } from "./CloudflareDnsTrackedRecord.js"
 
 const defaultTimeoutMs = 30_000
@@ -29,6 +31,27 @@ type RequestCancellation = typeof requestCancellation
 
 const requestCancellation = Symbol("cloudflare DNS delete request cancellation")
 
+function dnsFailureCreate(
+  op: string,
+  operation: CloudflareDnsOperation,
+  message: string,
+  status?: number,
+  body?: unknown,
+): ResultErr {
+  const error = createResultError(op, message, cloudflareDnsErrorDataCreate({ operation, statusCode: status, body }))
+  if (typeof status === "number" && Number.isInteger(status) && status >= 100 && status <= 599) {
+    error.statusCode = status
+  }
+  return error
+}
+
+function dnsHttpMessageFor(status: number): string {
+  if (status === 401) return "Cloudflare API token is invalid or expired (status 401)"
+  if (status === 403) return "Cloudflare API token lacks Zone Read or DNS Edit permission (status 403)"
+  if (status === 429) return "Cloudflare API rate limit exceeded; retry later (status 429)"
+  return `Cloudflare DNS request failed (status ${status})`
+}
+
 function hostnameNormalize(value: string): string {
   return value.endsWith(".") ? value.slice(0, -1).toLowerCase() : value.toLowerCase()
 }
@@ -47,10 +70,9 @@ function responseIsValid(response: unknown): response is Response {
   )
 }
 
-function apiResponseIsSuccessful(body: unknown, schema: a.BaseSchema<unknown, unknown, a.BaseIssue<unknown>>): boolean {
+function envelopeIsSuccessful(body: unknown): boolean {
   const envelopeR = a.safeParse(apiEnvelopeSchema, body)
-  if (!envelopeR.success || !envelopeR.output.success) return false
-  return a.safeParse(schema, body).success
+  return envelopeR.success && envelopeR.output.success === true
 }
 
 function trackedRecordMatches(current: CloudflareDnsRecord, tracked: CloudflareDnsRecord): boolean {
@@ -73,6 +95,8 @@ export async function cloudflareDnsDeleteById(
   if (typeof options.token !== "string" || options.token.length === 0 || options.token.trim() !== options.token) {
     return createResultError(op, "Cloudflare API token is invalid")
   }
+  if (options.beforeDelete !== undefined && typeof options.beforeDelete !== "function")
+    return createResultError(op, "Cloudflare DNS deletion guard is invalid")
   const trackedR = a.safeParse(cloudflareDnsTrackedRecordSchema, options.record)
   if (!trackedR.success) return createResultError(op, "Cloudflare tracked DNS record is invalid")
   const tracked = trackedR.output
@@ -117,9 +141,17 @@ export async function cloudflareDnsDeleteById(
     controller.abort()
   }, timeoutMs)
 
-  async function request(path: string, init: RequestInit): Promise<Result<RequestResponse>> {
+  async function request(
+    path: string,
+    init: RequestInit,
+    operation: CloudflareDnsOperation,
+  ): Promise<Result<RequestResponse>> {
     if (controller.signal.aborted) {
-      return createResultError(op, timedOut ? "Cloudflare DNS deletion timed out" : "Cloudflare DNS deletion cancelled")
+      return dnsFailureCreate(
+        op,
+        operation,
+        timedOut ? "Cloudflare DNS deletion timed out" : "Cloudflare DNS deletion cancelled",
+      )
     }
     const requestPromise = Promise.resolve()
       .then(() => fetcher(`${apiBase.origin}${apiBase.pathname}${path}`, { ...init, signal: controller.signal }))
@@ -131,8 +163,7 @@ export async function cloudflareDnsDeleteById(
         try {
           body = JSON.parse(text)
         } catch {
-          if (response.status === 404) return { status: response.status, body: undefined }
-          throw new Error("invalid JSON")
+          return { status: response.status, body: undefined }
         }
         return { status: response.status, body }
       })
@@ -150,14 +181,15 @@ export async function cloudflareDnsDeleteById(
     try {
       const response = await Promise.race([requestPromise, cancellationPromise])
       if (response === requestCancellation) {
-        return createResultError(
+        return dnsFailureCreate(
           op,
+          operation,
           timedOut ? "Cloudflare DNS deletion timed out" : "Cloudflare DNS deletion cancelled",
         )
       }
       return createResult(response)
     } catch {
-      return createResultError(op, "Cloudflare DNS request failed")
+      return dnsFailureCreate(op, operation, "Cloudflare DNS request failed")
     } finally {
       cancellationCleanup()
     }
@@ -171,35 +203,107 @@ export async function cloudflareDnsDeleteById(
   const recordPath = `/zones/${encodeURIComponent(tracked.zoneId)}/dns_records/${encodeURIComponent(tracked.id)}`
 
   try {
-    const currentResponseR = await request(recordPath, { method: "GET", headers })
+    const currentResponseR = await request(recordPath, { method: "GET", headers }, "record-verify")
     if (!currentResponseR.success) return currentResponseR
     if (currentResponseR.data.status === 404) return createResult({ action: "absent", recordId: tracked.id })
     if (currentResponseR.data.status < 200 || currentResponseR.data.status >= 300) {
-      return createResultError(op, `Cloudflare DNS request failed (status ${currentResponseR.data.status})`)
+      return dnsFailureCreate(
+        op,
+        "record-verify",
+        dnsHttpMessageFor(currentResponseR.data.status),
+        currentResponseR.data.status,
+        currentResponseR.data.body,
+      )
     }
-    if (!apiResponseIsSuccessful(currentResponseR.data.body, recordResponseSchema)) {
-      return createResultError(op, "Cloudflare DNS verification response was invalid")
+    if (!envelopeIsSuccessful(currentResponseR.data.body)) {
+      return dnsFailureCreate(
+        op,
+        "record-verify",
+        "Cloudflare API reported an error during DNS record verification",
+        currentResponseR.data.status,
+        currentResponseR.data.body,
+      )
     }
     const currentBodyR = a.safeParse(recordResponseSchema, currentResponseR.data.body)
-    if (!currentBodyR.success) return createResultError(op, "Cloudflare DNS verification response was invalid")
+    if (!currentBodyR.success)
+      return dnsFailureCreate(
+        op,
+        "record-verify",
+        "Cloudflare DNS verification response was invalid",
+        currentResponseR.data.status,
+      )
     const currentBody = currentBodyR.output
     if (!trackedRecordMatches(currentBody.result, tracked)) {
-      return createResultError(op, "Cloudflare DNS tracked record verification failed")
+      return dnsFailureCreate(
+        op,
+        "record-verify",
+        "Cloudflare DNS tracked record verification failed",
+        currentResponseR.data.status,
+      )
     }
 
-    const deleteResponseR = await request(recordPath, { method: "DELETE", headers })
+    if (options.beforeDelete !== undefined) {
+      let cancellationCleanup = () => {}
+      const cancellation = new Promise<RequestCancellation>((resolve) => {
+        const onAbort = () => resolve(requestCancellation)
+        if (controller.signal.aborted) return onAbort()
+        controller.signal.addEventListener("abort", onAbort, { once: true })
+        cancellationCleanup = () => controller.signal.removeEventListener("abort", onAbort)
+      })
+      try {
+        const guard = await Promise.race([Promise.resolve().then(options.beforeDelete), cancellation])
+        if (guard === requestCancellation)
+          return dnsFailureCreate(
+            op,
+            "record-delete",
+            timedOut ? "Cloudflare DNS deletion timed out" : "Cloudflare DNS deletion cancelled",
+          )
+        if (!guard?.success || guard.data !== true)
+          return dnsFailureCreate(
+            op,
+            "record-delete",
+            "Cloudflare DNS deletion deferred: desired state changed or unavailable",
+          )
+      } catch {
+        return dnsFailureCreate(op, "record-delete", "Cloudflare DNS deletion guard failed")
+      } finally {
+        cancellationCleanup()
+      }
+    }
+
+    const deleteResponseR = await request(recordPath, { method: "DELETE", headers }, "record-delete")
     if (!deleteResponseR.success) return deleteResponseR
     if (deleteResponseR.data.status === 404) return createResult({ action: "absent", recordId: tracked.id })
     if (deleteResponseR.data.status < 200 || deleteResponseR.data.status >= 300) {
-      return createResultError(op, `Cloudflare DNS request failed (status ${deleteResponseR.data.status})`)
+      return dnsFailureCreate(
+        op,
+        "record-delete",
+        dnsHttpMessageFor(deleteResponseR.data.status),
+        deleteResponseR.data.status,
+        deleteResponseR.data.body,
+      )
     }
     if (deleteResponseR.data.status === 204) return createResult({ action: "deleted", recordId: tracked.id })
-    if (!apiResponseIsSuccessful(deleteResponseR.data.body, deleteResponseSchema)) {
-      return createResultError(op, "Cloudflare DNS delete response was invalid")
+    if (!envelopeIsSuccessful(deleteResponseR.data.body)) {
+      return dnsFailureCreate(
+        op,
+        "record-delete",
+        "Cloudflare API reported an error during DNS record deletion",
+        deleteResponseR.data.status,
+        deleteResponseR.data.body,
+      )
+    }
+    if (!a.safeParse(deleteResponseSchema, deleteResponseR.data.body).success) {
+      return dnsFailureCreate(
+        op,
+        "record-delete",
+        "Cloudflare DNS delete response was invalid",
+        deleteResponseR.data.status,
+      )
     }
     return createResult({ action: "deleted", recordId: tracked.id })
   } catch {
-    return createResultError(op, "Cloudflare DNS request failed")
+    return dnsFailureCreate(op, "request", "Cloudflare DNS request failed")
   } finally {
     globalThis.clearTimeout(timeoutHandle)
     options.signal?.removeEventListener("abort", onExternalAbort)

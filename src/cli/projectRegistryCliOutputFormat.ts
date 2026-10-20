@@ -4,6 +4,10 @@ import { projectLabelsSchema } from "../project/projectLabelsSchema.js"
 import { projectFilter } from "../project/projectFilter.js"
 import { projectServiceOwnershipSchema } from "../project/projectServiceOwnershipSchema.js"
 import { projectRegistryVersion } from "../projectRegistryVersion.js"
+import {
+  projectRegistryDaemonCloudflareDnsStatusSchema,
+  type ProjectRegistryDaemonCloudflareDnsStatus,
+} from "../runtime/projectRegistryDaemonCloudflareDnsStatusSchema.js"
 import type { ProjectRegistryCliInvocation } from "./ProjectRegistryCliInvocation.js"
 
 const projectSchema = a.looseObject({
@@ -35,6 +39,7 @@ const statusSchema = a.looseObject({
   lastAttempt: a.optional(a.number()),
   lastSuccess: a.optional(a.number()),
   error: a.optional(a.string()),
+  cloudflareDns: a.optional(projectRegistryDaemonCloudflareDnsStatusSchema),
 })
 const mutationSchema = a.looseObject({
   action: a.picklist(["create", "edit", "delete"]),
@@ -110,6 +115,30 @@ function dataParse<TSchema extends a.BaseSchema<unknown, unknown, a.BaseIssue<un
   const parsed = a.safeParse(schema, data)
   if (!parsed.success) return createResultError(op, `project-registryd returned malformed ${label} data.`)
   return createResult(parsed.output)
+}
+
+function cloudflareDnsStatusLines(dns: ProjectRegistryDaemonCloudflareDnsStatus | undefined): string[] {
+  if (dns === undefined) return ["Cloudflare DNS: unavailable (older/degraded daemon; not healthy)"]
+  if (!dns.enabled) return ["Cloudflare DNS: disabled"]
+  const queued = dns.pendingProjects + dns.pendingDeletions
+  const health = dns.trackingBlocked || dns.errors.length > 0 ? "error" : queued > 0 ? "pending" : "healthy"
+  const lines = [
+    `Cloudflare DNS: ${health} (pending projects: ${dns.pendingProjects}, pending deletions: ${dns.pendingDeletions})`,
+  ]
+  if (dns.trackingBlocked) lines.push("Tracking: blocked (state unavailable)")
+  for (const error of dns.errors.slice(0, 5)) lines.push(cloudflareDnsErrorLine(error))
+  if (dns.errors.length > 5) lines.push(`... and ${dns.errors.length - 5} more DNS errors`)
+  return lines
+}
+
+function cloudflareDnsErrorLine(error: ProjectRegistryDaemonCloudflareDnsStatus["errors"][number]): string {
+  const identity = [error.owner, error.project].filter((part) => part !== undefined).join("/")
+  const location = error.hostname ?? (error.recordId === undefined ? undefined : `record ${error.recordId}`)
+  const subject = [identity === "" ? undefined : identity, location].filter((part) => part !== undefined).join(" ")
+  const status = error.statusCode === undefined ? "" : ` status=${error.statusCode}`
+  const code = error.cloudflareCode === undefined ? "" : ` cf=${error.cloudflareCode}`
+  const retry = error.nextRetryAt === undefined ? "" : ` retry=${new Date(error.nextRetryAt).toISOString()}`
+  return `DNS error [${error.operation}]${subject === "" ? "" : ` ${subject}`}: ${error.errorMessage} (attempts: ${error.attempts}${status}${code}${retry})`
 }
 
 function projectServiceCell(project: a.InferOutput<typeof projectSchema>): string {
@@ -260,13 +289,16 @@ export function projectRegistryCliOutputFormat(
     if (status.appliedRevision !== undefined) lines.push(`Applied: ${status.appliedRevision}`)
     if (status.pendingRevision !== undefined) lines.push(`Pending: ${status.pendingRevision}`)
     if (status.error !== undefined) lines.push(`Error: ${status.error}`)
+    lines.push(...cloudflareDnsStatusLines(status.cloudflareDns))
     return createResult(`${lines.join("\n")}\n`)
   }
   if (command.kind === "project-create" || command.kind === "project-edit" || command.kind === "project-delete") {
     const mutation = parsedData as a.InferOutput<typeof mutationSchema>
     const verb = mutation.action === "create" ? "created" : mutation.action === "delete" ? "deleted" : "updated"
     if (!mutation.changed) return createResult(`unchanged ${mutation.key.owner}/${mutation.key.name}\n`)
-    return createResult(`${verb} ${mutation.key.owner}/${mutation.key.name}\n`)
+    return createResult(
+      `${verb} ${mutation.key.owner}/${mutation.key.name}\nRegistry saved; DNS changes, when enabled, run asynchronously. Use project-registry status to check DNS.\n`,
+    )
   }
   if (command.kind === "user-default-domain-get") {
     const defaultDomain = parsedData as a.InferOutput<typeof userDefaultDomainSchema>

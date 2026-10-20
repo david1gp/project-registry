@@ -76,12 +76,19 @@ function configurationsMatch(current: unknown, exported: unknown, secretVariable
       const exportedVariables = exported[key]
       const currentNames = Object.keys(currentVariables).sort()
       const exportedNames = Object.keys(exportedVariables).sort()
-      if (currentNames.length !== exportedNames.length || currentNames.some((name, index) => name !== exportedNames[index])) {
+      if (
+        currentNames.length !== exportedNames.length ||
+        currentNames.some((name, index) => name !== exportedNames[index])
+      ) {
         return false
       }
       return currentNames.every((name) => {
         const variable = currentVariables[name]
-        return configurationsMatch(variable, exportedVariables[name], recordIsObject(variable) && variable["type"] === "secret")
+        return configurationsMatch(
+          variable,
+          exportedVariables[name],
+          recordIsObject(variable) && variable["type"] === "secret",
+        )
       })
     }
     return configurationsMatch(current[key], exported[key])

@@ -1227,6 +1227,15 @@ export function projectRegistryDaemonCreate(options: ProjectRegistryDaemonOption
       portRange: config.portRange,
       defaultUserDomains: config.defaultUserDomains,
       cloudflareCredentials: cloudflareCredentialsR.data,
+      cloudflareDnsStatus: () => {
+        try {
+          return cloudflareDns.status()
+        } catch {
+          // A failing DNS queue must not break Caddy status reads; the CLI
+          // reports missing DNS data as unavailable instead of healthy.
+          return undefined
+        }
+      },
       ...(config.cloudflareDns.enabled || wikiSyncEnabled
         ? {
             projectCreateAfterPersistence: (project, createOptions) => {

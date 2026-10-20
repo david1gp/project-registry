@@ -872,6 +872,401 @@ describe("projectRegistryDaemonCloudflareDns lifecycle", () => {
     })
   })
 
+  test("retains old DNS and per-host errors after partial replacement failure, then creates before deleting on retry", async () => {
+    const timer = timerCreate()
+    const records = new Map<
+      string,
+      { id: string; name: string; type: string; content: string; ttl: number; proxied: boolean }
+    >()
+    const calls: string[] = []
+    const logs: string[] = []
+    const stored = trackingCreate({ version: 1, records: [] })
+    const first = project("app", ["old.example.com"])
+    let projects = [first]
+    let now = 0
+    let failing = true
+    const fetch = fetchCreate(records, calls)
+    const queue = projectRegistryDaemonCloudflareDnsCreate({
+      enabled: true,
+      credentialResolve: async () => createResult("secret-token"),
+      timeoutMs: 1000,
+      serverIpCurrent: () => "203.0.113.10",
+      timer: timer.timer,
+      clock: () => now,
+      tracking: stored.tracking,
+      repositoryProjectsCurrent: async () => createResult(projects),
+      logger: (line) => logs.push(line),
+      fetch: async (input, init) => {
+        if (init.method === "POST" && JSON.parse(String(init.body)).name === "broken.example.com" && failing)
+          return new Response(
+            JSON.stringify({ success: false, errors: [{ code: 10000, message: "secret-token upstream" }] }),
+            { status: 403 },
+          )
+        return fetch(input, init)
+      },
+    })
+    if (!queue.success) throw new Error("queue setup failed")
+    queue.data.start()
+    await settle()
+    const oldId = stored.state.records[0]!.id
+    const replacement = project("app", ["broken.example.com", "good.example.com"])
+    projects = [replacement]
+    queue.data.projectEditAfterPersistence(first, replacement)
+    await settle()
+    expect(records.has(oldId)).toBe(true)
+    expect([...records.values()].some((record) => record.name === "good.example.com")).toBe(true)
+    expect(calls.some((call) => call.startsWith("DELETE "))).toBe(false)
+    expect(queue.data.status().errors).toMatchObject([
+      { hostname: "broken.example.com", statusCode: 403, cloudflareCode: 10000, nextRetryAt: 2000 },
+    ])
+    expect(JSON.stringify(queue.data.status())).not.toContain("secret-token")
+    expect(logs.join("\n")).not.toContain("upstream")
+    calls.length = 0
+    failing = false
+    now = 5000
+    timer.tick()
+    await settle()
+    expect(records.has(oldId)).toBe(false)
+    const creation = calls.findIndex((call) => call.startsWith("POST "))
+    const deletion = calls.findIndex((call) => call.startsWith("DELETE "))
+    expect(creation).toBeGreaterThanOrEqual(0)
+    expect(deletion).toBeGreaterThan(creation)
+    expect(queue.data.status().errors).toEqual([])
+    await queue.data.shutdown()
+  })
+
+  test("does not delete old DNS until replacement tracking is durably written", async () => {
+    const timer = timerCreate()
+    const records = new Map<
+      string,
+      { id: string; name: string; type: string; content: string; ttl: number; proxied: boolean }
+    >()
+    const calls: string[] = []
+    const stored = trackingCreate({ version: 1, records: [] })
+    const tracking = stored.tracking
+    const first = project("app", ["old.example.com"])
+    let projects = [first]
+    let now = 0
+    let failWrites = false
+    const queue = projectRegistryDaemonCloudflareDnsCreate({
+      enabled: true,
+      credentialResolve: async () => createResult("token"),
+      timeoutMs: 1000,
+      serverIpCurrent: () => "203.0.113.10",
+      timer: timer.timer,
+      clock: () => now,
+      tracking: {
+        read: tracking.read,
+        write: async (state) => (failWrites ? createResultError("tracking", "secret-token") : tracking.write(state)),
+      },
+      repositoryProjectsCurrent: async () => createResult(projects),
+      fetch: fetchCreate(records, calls),
+      logger: () => {},
+    })
+    if (!queue.success) throw new Error("queue setup failed")
+    queue.data.start()
+    await settle()
+    const oldId = stored.state.records[0]!.id
+    const replacement = project("app", ["new.example.com"])
+    projects = [replacement]
+    failWrites = true
+    queue.data.projectEditAfterPersistence(first, replacement)
+    await settle()
+    expect([...records.values()].some((record) => record.name === "new.example.com")).toBe(true)
+    expect(records.has(oldId)).toBe(true)
+    expect(calls.some((call) => call.startsWith("DELETE "))).toBe(false)
+    expect(queue.data.status().errors).toMatchObject([{ operation: "tracking", errorMessage: "tracking-write-failed" }])
+    expect(JSON.stringify(queue.data.status())).not.toContain("secret-token")
+    failWrites = false
+    now = 5000
+    timer.tick()
+    await settle()
+    expect(records.has(oldId)).toBe(false)
+    expect(stored.state.records.map((record) => record.name)).toEqual(["new.example.com"])
+    await queue.data.shutdown()
+  })
+
+  test("restart during a failed rename retains the old record until the replacement succeeds", async () => {
+    const timer = timerCreate()
+    const old = { id: "old", name: "old.example.com", type: "A", content: "203.0.113.10", ttl: 1, proxied: false }
+    const records = new Map([[old.id, old]])
+    const stored = trackingCreate({
+      version: 1,
+      records: [{ ...old, zoneId: "zone", zoneName: "example.com", projectKeys: [{ owner: "leo", name: "app" }] }],
+    })
+    const calls: string[] = []
+    const fetch = fetchCreate(records, calls)
+    let now = 0
+    let failing = true
+    const replacement = project("app", ["new.example.com"])
+    const queue = projectRegistryDaemonCloudflareDnsCreate({
+      enabled: true,
+      credentialResolve: async () => createResult("token"),
+      timeoutMs: 1000,
+      serverIpCurrent: () => "203.0.113.10",
+      timer: timer.timer,
+      clock: () => now,
+      tracking: stored.tracking,
+      repositoryProjectsCurrent: async () => createResult([replacement]),
+      logger: () => {},
+      fetch: async (input, init) =>
+        init.method === "POST" && failing ? new Response("failure", { status: 503 }) : fetch(input, init),
+    })
+    if (!queue.success) throw new Error("queue setup failed")
+    queue.data.start()
+    await settle()
+    expect(records.has(old.id)).toBe(true)
+    expect(calls.some((call) => call.startsWith("DELETE "))).toBe(false)
+    now = 5000
+    failing = false
+    timer.tick()
+    await settle()
+    expect(records.has(old.id)).toBe(false)
+    expect(stored.state.records.map((record) => record.name)).toEqual(["new.example.com"])
+    await queue.data.shutdown()
+  })
+
+  test("rechecks a reclaimed hostname after remote verification before issuing DELETE", async () => {
+    const timer = timerCreate()
+    const records = new Map<
+      string,
+      { id: string; name: string; type: string; content: string; ttl: number; proxied: boolean }
+    >()
+    const calls: string[] = []
+    const stored = trackingCreate({ version: 1, records: [] })
+    const first = project("app", ["old.example.com"])
+    const replacement = project("app", ["new.example.com"])
+    let projects = [first]
+    let reclaim = false
+    let oldId = ""
+    const fetch = fetchCreate(records, calls)
+    const queue = projectRegistryDaemonCloudflareDnsCreate({
+      enabled: true,
+      credentialResolve: async () => createResult("token"),
+      timeoutMs: 1000,
+      serverIpCurrent: () => "203.0.113.10",
+      timer: timer.timer,
+      tracking: stored.tracking,
+      repositoryProjectsCurrent: async () => createResult(projects),
+      logger: () => {},
+      fetch: async (input, init) => {
+        const response = await fetch(input, init)
+        if (reclaim && init.method === "GET" && new URL(input).pathname.endsWith(`/dns_records/${oldId}`)) {
+          reclaim = false
+          projects = [first]
+          if (queue.success) queue.data.projectEditAfterPersistence(replacement, first)
+        }
+        return response
+      },
+    })
+    if (!queue.success) throw new Error("queue setup failed")
+    queue.data.start()
+    await settle()
+    oldId = stored.state.records[0]!.id
+    projects = [replacement]
+    reclaim = true
+    queue.data.projectEditAfterPersistence(first, replacement)
+    await settle()
+    await settle()
+    expect(records.has(oldId)).toBe(true)
+    expect(calls.some((call) => call.startsWith("DELETE ") && call.endsWith(`/${oldId}`))).toBe(false)
+    await queue.data.shutdown()
+  })
+
+  test("reclaiming an orphan does not clear the new owner's failed hostname reconciliation", async () => {
+    const timer = timerCreate()
+    const records = new Map<
+      string,
+      { id: string; name: string; type: string; content: string; ttl: number; proxied: boolean }
+    >()
+    const stored = trackingCreate({ version: 1, records: [] })
+    const first = project("app", ["old.example.com"])
+    const replacement = project("app", ["new.example.com"])
+    const claimant = project("other", ["old.example.com"], "david")
+    let projects = [first]
+    const fetch = fetchCreate(records, [])
+    const queue = projectRegistryDaemonCloudflareDnsCreate({
+      enabled: true,
+      credentialResolve: async (owner) => createResult(`${owner}-token`),
+      timeoutMs: 1000,
+      serverIpCurrent: () => "203.0.113.10",
+      timer: timer.timer,
+      clock: () => 0,
+      tracking: stored.tracking,
+      repositoryProjectsCurrent: async () => createResult(projects),
+      logger: () => {},
+      fetch: async (input, init) => {
+        if (new Headers(init.headers).get("authorization") === "Bearer david-token")
+          return new Response("denied", { status: 403 })
+        const response = await fetch(input, init)
+        if (init.method === "POST" && JSON.parse(String(init.body)).name === "new.example.com")
+          projects = [replacement, claimant]
+        return response
+      },
+    })
+    if (!queue.success) throw new Error("queue setup failed")
+    queue.data.start()
+    await settle()
+    projects = [first, claimant]
+    queue.data.projectCreateAfterPersistence(claimant, { noDns: false })
+    await settle()
+    expect(
+      queue.data.status().errors.some((error) => error.owner === "david" && error.hostname === "old.example.com"),
+    ).toBe(true)
+    // The claimant disappears from the initial edit snapshot and returns while
+    // its replacement is created, without a successful claimant DNS attempt.
+    projects = [replacement]
+    queue.data.projectEditAfterPersistence(first, replacement)
+    await settle()
+    expect(stored.state.records.find((record) => record.name === "old.example.com")?.projectKeys).toEqual([
+      { owner: "david", name: "other" },
+    ])
+    expect(
+      queue.data.status().errors.some((error) => error.owner === "david" && error.hostname === "old.example.com"),
+    ).toBe(true)
+    await queue.data.shutdown()
+  })
+
+  test("repository changes without hooks cannot authorize cleanup using obsolete replacement success", async () => {
+    const timer = timerCreate()
+    const records = new Map<
+      string,
+      { id: string; name: string; type: string; content: string; ttl: number; proxied: boolean }
+    >()
+    const calls: string[] = []
+    const stored = trackingCreate({ version: 1, records: [] })
+    const first = project("app", ["old.example.com"])
+    const intermediate = project("app", ["intermediate.example.com"])
+    const latest = project("app", ["latest.example.com"])
+    let projects = [first]
+    const fetch = fetchCreate(records, calls)
+    const queue = projectRegistryDaemonCloudflareDnsCreate({
+      enabled: true,
+      credentialResolve: async () => createResult("token"),
+      timeoutMs: 1000,
+      serverIpCurrent: () => "203.0.113.10",
+      timer: timer.timer,
+      tracking: stored.tracking,
+      repositoryProjectsCurrent: async () => createResult(projects),
+      logger: () => {},
+      fetch: async (input, init) => {
+        const name = init.method === "POST" ? JSON.parse(String(init.body)).name : ""
+        if (name === "latest.example.com") return new Response("failure", { status: 503 })
+        const response = await fetch(input, init)
+        if (name === "intermediate.example.com") projects = [latest]
+        return response
+      },
+    })
+    if (!queue.success) throw new Error("queue setup failed")
+    queue.data.start()
+    await settle()
+    const oldId = stored.state.records[0]!.id
+    projects = [intermediate]
+    queue.data.projectEditAfterPersistence(first, intermediate)
+    await settle()
+    await settle()
+    expect(records.has(oldId)).toBe(true)
+    expect(calls.some((call) => call.startsWith("DELETE "))).toBe(false)
+    expect(queue.data.status().errors.some((error) => error.hostname === "latest.example.com")).toBe(true)
+    await queue.data.shutdown()
+  })
+
+  test("a due orphan snapshot failure backs off instead of spinning and recovers on retry", async () => {
+    const timer = timerCreate()
+    const old = { id: "old", name: "old.example.com", type: "A", content: "203.0.113.10", ttl: 1, proxied: false }
+    const records = new Map([[old.id, old]])
+    const stored = trackingCreate({
+      version: 1,
+      records: [{ ...old, zoneId: "zone", zoneName: "example.com", projectKeys: [{ owner: "leo", name: "deleted" }] }],
+    })
+    let reads = 0
+    let failing = true
+    let now = 0
+    const queue = projectRegistryDaemonCloudflareDnsCreate({
+      enabled: true,
+      credentialResolve: async () => createResult("token"),
+      timeoutMs: 1000,
+      serverIpCurrent: () => undefined,
+      timer: timer.timer,
+      clock: () => now,
+      tracking: stored.tracking,
+      repositoryProjectsCurrent: async () =>
+        ++reads >= 3 && failing ? createResultError("snapshot", "secret-token") : createResult([]),
+      fetch: fetchCreate(records, []),
+      logger: () => {},
+    })
+    if (!queue.success) throw new Error("queue setup failed")
+    queue.data.start()
+    await settle()
+    expect(reads).toBeLessThan(6)
+    expect(records.has(old.id)).toBe(true)
+    expect(JSON.stringify(queue.data.status())).not.toContain("secret-token")
+    now = 5000
+    failing = false
+    timer.tick()
+    await settle()
+    expect(records.size).toBe(0)
+    expect(queue.data.status().errors).toEqual([])
+    await queue.data.shutdown()
+  })
+
+  test("credential deferrals recover on an in-sync record without unchanged-success log spam", async () => {
+    const timer = timerCreate()
+    const current = {
+      id: "current",
+      name: "app.example.com",
+      type: "A",
+      content: "203.0.113.10",
+      ttl: 1,
+      proxied: false,
+    }
+    const records = new Map([[current.id, current]])
+    const stored = trackingCreate({ version: 1, records: [] })
+    const logs: string[] = []
+    let now = 0
+    let token: string | undefined
+    const queue = projectRegistryDaemonCloudflareDnsCreate({
+      enabled: true,
+      credentialResolve: async () => createResult(token),
+      timeoutMs: 1000,
+      serverIpCurrent: () => "203.0.113.10",
+      timer: timer.timer,
+      clock: () => now,
+      tracking: stored.tracking,
+      repositoryProjectsCurrent: async () => createResult([project("app", [current.name])]),
+      fetch: fetchCreate(records, []),
+      logger: (line) => logs.push(line),
+    })
+    if (!queue.success) throw new Error("queue setup failed")
+    queue.data.start()
+    await settle()
+    expect(queue.data.status().errors).toMatchObject([
+      { owner: "leo", project: "app", errorMessage: "owner-credential-missing", nextRetryAt: 1000 },
+    ])
+    now = 1000
+    timer.tick()
+    await settle()
+    expect(logs).toHaveLength(1)
+    token = "token"
+    now = 2000
+    timer.tick()
+    await settle()
+    expect(queue.data.status().errors).toEqual([])
+    expect(queue.data.status().lastSuccess).toBe(2000)
+    expect(logs.some((line) => line.includes("action=skipped"))).toBe(true)
+    const recoveredLogs = logs.length
+    now = 3000
+    timer.tick()
+    await settle()
+    expect(logs).toHaveLength(recoveredLogs)
+    token = undefined
+    now = 4000
+    timer.tick()
+    await settle()
+    expect(logs).toHaveLength(recoveredLogs + 1)
+    await queue.data.shutdown()
+  })
+
   test("does not overwrite corrupt ownership state", async () => {
     const timer = timerCreate()
     let writes = 0

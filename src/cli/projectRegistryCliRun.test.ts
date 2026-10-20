@@ -502,7 +502,12 @@ describe("projectRegistryCliRun", () => {
       { args: ["project", "list"], data: [project], output: "site\tproxy\t4321\tsite.example\n" },
       { args: ["project", "get", "site"], data: project, output: "site\tdavid\tproxy\t4321\tsite.example\n" },
       { args: ["history"], data: history, output: "12345678\t2026-08-20T12:00:00Z\tRegistry\tcreated\n" },
-      { args: ["status"], data: status, output: "Caddy: pending\nDesired: new\nApplied: old\nPending: new\n" },
+      {
+        args: ["status"],
+        data: status,
+        output:
+          "Caddy: pending\nDesired: new\nApplied: old\nPending: new\nCloudflare DNS: unavailable (older/degraded daemon; not healthy)\n",
+      },
       {
         args: ["version"],
         data: version,
@@ -726,7 +731,9 @@ describe("projectRegistryCliRun", () => {
         },
       },
     ])
-    expect(stdout.join("")).toBe("created david/site\n")
+    expect(stdout.join("")).toBe(
+      "created david/site\nRegistry saved; DNS changes, when enabled, run asynchronously. Use project-registry status to check DNS.\n",
+    )
   })
 
   test("creates a selected service with persistent external ownership", async () => {
@@ -1044,7 +1051,9 @@ describe("projectRegistryCliRun", () => {
       { method: "GET", body: undefined },
       { method: "DELETE", body: { expectedRevision: "current" } },
     ])
-    expect(stdout.join("")).toBe("deleted david/site\n")
+    expect(stdout.join("")).toBe(
+      "deleted david/site\nRegistry saved; DNS changes, when enabled, run asynchronously. Use project-registry status to check DNS.\n",
+    )
   })
 
   test("deletes the current owner's project by port through the legacy API route", async () => {
@@ -1289,7 +1298,9 @@ describe("projectRegistryCliRun", () => {
         },
       },
     ])
-    expect(stdout.join("")).toBe("created david/site\n")
+    expect(stdout.join("")).toBe(
+      "created david/site\nRegistry saved; DNS changes, when enabled, run asynchronously. Use project-registry status to check DNS.\n",
+    )
   })
 
   test.each([
@@ -1572,5 +1583,338 @@ describe("projectRegistryCliRun", () => {
 
     expect(exitCode).toBe(1)
     expect(stderr.join("")).toBe("error: project-registryd returned malformed project list data.\n")
+  })
+
+  test("reports healthy Cloudflare DNS status alongside Caddy status", async () => {
+    const stdout: string[] = []
+    const exitCode = await projectRegistryCliRun(
+      ["status"],
+      runOptions(
+        {
+          ...status,
+          cloudflareDns: {
+            enabled: true,
+            pendingProjects: 0,
+            pendingDeletions: 0,
+            trackingBlocked: false,
+            lastSuccess: 1_700_000_000_000,
+            errors: [],
+          },
+        },
+        [],
+        stdout,
+        [],
+      ),
+    )
+
+    expect(exitCode).toBe(0)
+    expect(stdout.join("")).toBe(
+      "Caddy: pending\nDesired: new\nApplied: old\nPending: new\nCloudflare DNS: healthy (pending projects: 0, pending deletions: 0)\n",
+    )
+  })
+
+  test("reports disabled Cloudflare DNS status without queue detail", async () => {
+    const stdout: string[] = []
+    const exitCode = await projectRegistryCliRun(
+      ["status"],
+      runOptions(
+        {
+          ...status,
+          cloudflareDns: {
+            enabled: false,
+            pendingProjects: 0,
+            pendingDeletions: 0,
+            trackingBlocked: false,
+            errors: [],
+          },
+        },
+        [],
+        stdout,
+        [],
+      ),
+    )
+
+    expect(exitCode).toBe(0)
+    expect(stdout.join("")).toBe("Caddy: pending\nDesired: new\nApplied: old\nPending: new\nCloudflare DNS: disabled\n")
+  })
+
+  test("reports pending, failed, and deferred DNS entries with identity, hostname, and retry time", async () => {
+    const stdout: string[] = []
+    const exitCode = await projectRegistryCliRun(
+      ["status"],
+      runOptions(
+        {
+          ...status,
+          cloudflareDns: {
+            enabled: true,
+            pendingProjects: 2,
+            pendingDeletions: 1,
+            trackingBlocked: true,
+            errors: [
+              {
+                owner: "david",
+                project: "site",
+                hostname: "site.example",
+                operation: "reconcile",
+                errorMessage: "Cloudflare DNS request failed",
+                attempts: 3,
+                occurredAt: 1_700_000_000_000,
+                nextRetryAt: 1_700_000_060_000,
+                statusCode: 503,
+                cloudflareCode: 10000,
+              },
+              {
+                owner: "david",
+                project: "site",
+                recordId: "record-id",
+                operation: "delete",
+                errorMessage: "Cloudflare DNS delete failed",
+                attempts: 1,
+                occurredAt: 1_700_000_001_000,
+              },
+            ],
+          },
+        },
+        [],
+        stdout,
+        [],
+      ),
+    )
+
+    expect(exitCode).toBe(0)
+    expect(stdout.join("")).toBe(
+      "Caddy: pending\n" +
+        "Desired: new\n" +
+        "Applied: old\n" +
+        "Pending: new\n" +
+        "Cloudflare DNS: error (pending projects: 2, pending deletions: 1)\n" +
+        "Tracking: blocked (state unavailable)\n" +
+        "DNS error [reconcile] david/site site.example: Cloudflare DNS request failed (attempts: 3 status=503 cf=10000 retry=2023-11-14T22:14:20.000Z)\n" +
+        "DNS error [delete] david/site record record-id: Cloudflare DNS delete failed (attempts: 1)\n",
+    )
+  })
+
+  test("summarizes DNS errors beyond the first five", async () => {
+    const stdout: string[] = []
+    const errors = Array.from({ length: 7 }, (_, index) => ({
+      owner: "david",
+      project: "site",
+      hostname: `site-${index}.example`,
+      operation: "reconcile",
+      errorMessage: "Cloudflare DNS request failed",
+      attempts: 1,
+      occurredAt: 1_700_000_000_000 + index,
+    }))
+    const exitCode = await projectRegistryCliRun(
+      ["status"],
+      runOptions(
+        {
+          ...status,
+          cloudflareDns: {
+            enabled: true,
+            pendingProjects: 7,
+            pendingDeletions: 0,
+            trackingBlocked: false,
+            errors,
+          },
+        },
+        [],
+        stdout,
+        [],
+      ),
+    )
+
+    expect(exitCode).toBe(0)
+    const output = stdout.join("")
+    expect(output).toContain("Cloudflare DNS: error (pending projects: 7, pending deletions: 0)\n")
+    expect(output).toContain("DNS error [reconcile] david/site site-0.example")
+    expect(output).toContain("DNS error [reconcile] david/site site-4.example")
+    expect(output).not.toContain("site-5.example")
+    expect(output).toContain("... and 2 more DNS errors\n")
+  })
+
+  test("rejects malformed Cloudflare DNS status, code, and time values", async () => {
+    const cases = [
+      {
+        cloudflareDns: {
+          enabled: true,
+          pendingProjects: -1,
+          pendingDeletions: 0,
+          trackingBlocked: false,
+          errors: [],
+        },
+      },
+      {
+        cloudflareDns: {
+          enabled: true,
+          pendingProjects: 0,
+          pendingDeletions: 0,
+          trackingBlocked: false,
+          errors: [
+            {
+              operation: "reconcile",
+              errorMessage: "Cloudflare DNS request failed",
+              attempts: 1.5,
+              occurredAt: 1_700_000_000_000,
+            },
+          ],
+        },
+      },
+      {
+        cloudflareDns: {
+          enabled: true,
+          pendingProjects: 0,
+          pendingDeletions: 0,
+          trackingBlocked: false,
+          errors: [
+            {
+              operation: "reconcile",
+              errorMessage: "Cloudflare DNS request failed",
+              attempts: 1,
+              occurredAt: 1_700_000_000_000,
+              statusCode: 99,
+            },
+          ],
+        },
+      },
+      {
+        cloudflareDns: {
+          enabled: true,
+          pendingProjects: 0,
+          pendingDeletions: 0,
+          trackingBlocked: false,
+          errors: [
+            {
+              operation: "reconcile",
+              errorMessage: "Cloudflare DNS request failed",
+              attempts: 1,
+              occurredAt: 1_700_000_000_000,
+              nextRetryAt: -5,
+            },
+          ],
+        },
+      },
+    ]
+
+    for (const data of cases) {
+      const stderr: string[] = []
+      const exitCode = await projectRegistryCliRun(["status"], runOptions({ ...status, ...data }, [], [], stderr))
+      expect(exitCode).toBe(1)
+      expect(stderr.join("")).toBe("error: project-registryd returned malformed status data.\n")
+    }
+  })
+
+  test("accepts additive DNS fields from a newer daemon and preserves them in JSON", async () => {
+    const cloudflareDns = {
+      enabled: true,
+      pendingProjects: 0,
+      pendingDeletions: 0,
+      trackingBlocked: false,
+      lastChecked: 42,
+      errors: [
+        {
+          operation: "reconcile",
+          errorMessage: "denied",
+          attempts: 1,
+          occurredAt: 42,
+          futureHint: "check permissions",
+        },
+      ],
+    }
+    const human: string[] = []
+    expect(await projectRegistryCliRun(["status"], runOptions({ ...status, cloudflareDns }, [], human, []))).toBe(0)
+    expect(human.join("")).toContain("Caddy: pending")
+    expect(human.join("")).toContain("Cloudflare DNS: error")
+    const output: string[] = []
+    expect(
+      await projectRegistryCliRun(["status", "--json"], runOptions({ ...status, cloudflareDns }, [], output, [])),
+    ).toBe(0)
+    expect(JSON.parse(output.join(""))).toEqual({ success: true, data: { ...status, cloudflareDns } })
+  })
+
+  test("rejects out-of-range retry timestamps and invalid Cloudflare codes without throwing", async () => {
+    for (const invalid of [{ nextRetryAt: Number.MAX_SAFE_INTEGER }, { cloudflareCode: -5 }, { cloudflareCode: 0 }]) {
+      const stderr: string[] = []
+      const cloudflareDns = {
+        enabled: true,
+        pendingProjects: 1,
+        pendingDeletions: 0,
+        trackingBlocked: false,
+        errors: [{ operation: "reconcile", errorMessage: "denied", attempts: 1, occurredAt: 42, ...invalid }],
+      }
+      expect(await projectRegistryCliRun(["status"], runOptions({ ...status, cloudflareDns }, [], [], stderr))).toBe(1)
+      expect(stderr.join("")).toContain("malformed status data")
+    }
+  })
+
+  test("preserves Cloudflare DNS status verbatim in JSON output", async () => {
+    const cloudflareDns = {
+      enabled: true,
+      pendingProjects: 1,
+      pendingDeletions: 0,
+      trackingBlocked: false,
+      errors: [
+        {
+          owner: "david",
+          project: "site",
+          hostname: "site.example",
+          operation: "reconcile",
+          errorMessage: "Cloudflare DNS request failed",
+          attempts: 2,
+          occurredAt: 1_700_000_000_000,
+        },
+      ],
+    }
+    const stdout: string[] = []
+    const exitCode = await projectRegistryCliRun(
+      ["status", "--json"],
+      runOptions({ ...status, cloudflareDns }, [], stdout, []),
+    )
+
+    expect(exitCode).toBe(0)
+    expect(JSON.parse(stdout.join(""))).toEqual({ success: true, data: { ...status, cloudflareDns } })
+  })
+
+  test("keeps mutation JSON output free of the human DNS note", async () => {
+    const stdout: string[] = []
+    const exitCode = await projectRegistryCliRun(["project", "create", "--name", "site", "--json"], {
+      environment: { USER: "david" },
+      requestFetch: async (_input, init) => {
+        if (init?.method === "POST") return Response.json({ success: true, data: mutation("create") })
+        return Response.json({ success: true, data: { projects: [], revision: "current-revision" } })
+      },
+      stdout: (text) => stdout.push(text),
+    })
+
+    expect(exitCode).toBe(0)
+    expect(JSON.parse(stdout.join(""))).toEqual({ success: true, data: mutation("create") })
+  })
+
+  test("notes asynchronous DNS handling on human project edit and delete output", async () => {
+    const dnsNote =
+      "Registry saved; DNS changes, when enabled, run asynchronously. Use project-registry status to check DNS.\n"
+    const editStdout: string[] = []
+    const editExit = await projectRegistryCliRun(["project", "edit", "site", "--docs"], {
+      environment: { USER: "david" },
+      requestFetch: async (_input, init) => {
+        if (init?.method === "PATCH") return Response.json({ success: true, data: mutation("edit") })
+        return Response.json({ success: true, data: { project: {}, revision: "current" } })
+      },
+      stdout: (text) => editStdout.push(text),
+    })
+    const deleteStdout: string[] = []
+    const deleteExit = await projectRegistryCliRun(["project", "delete", "site"], {
+      environment: { USER: "david" },
+      requestFetch: async (_input, init) => {
+        if (init?.method === "DELETE") return Response.json({ success: true, data: mutation("delete") })
+        return Response.json({ success: true, data: { project: {}, revision: "current" } })
+      },
+      stdout: (text) => deleteStdout.push(text),
+    })
+
+    expect(editExit).toBe(0)
+    expect(editStdout.join("")).toBe(`updated david/site\n${dnsNote}`)
+    expect(deleteExit).toBe(0)
+    expect(deleteStdout.join("")).toBe(`deleted david/site\n${dnsNote}`)
   })
 })

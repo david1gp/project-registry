@@ -1,4 +1,6 @@
+import * as a from "valibot"
 import { createResult, createResultError, type PromiseResult, type Result } from "#result"
+import { cloudflareDnsErrorDetailsRead } from "../cloudflare/cloudflareDnsErrorDetailsRead.js"
 import type { CloudflareDnsFetch } from "../cloudflare/CloudflareDnsFetch.js"
 import type { CloudflareDnsReconcileResult } from "../cloudflare/CloudflareDnsReconcileResult.js"
 import type { CloudflareDnsTrackedRecord } from "../cloudflare/CloudflareDnsTrackedRecord.js"
@@ -14,10 +16,15 @@ import { projectLocalCaddyEntries } from "../project/projectLocalCaddyEntries.js
 import type { ProjectService } from "../project/projectServiceSchema.js"
 import type { ProjectRegistryDaemonCloudflareDnsTracking } from "./ProjectRegistryDaemonCloudflareDnsTracking.js"
 import type { ProjectRegistryDaemonCloudflareDnsTrackingState } from "./ProjectRegistryDaemonCloudflareDnsTrackingState.js"
+import {
+  projectRegistryDaemonCloudflareDnsStatusSchema,
+  type ProjectRegistryDaemonCloudflareDnsStatus,
+} from "./projectRegistryDaemonCloudflareDnsStatusSchema.js"
 
 const reconcileIntervalMs = 1_000
 const retryBaseMs = 1_000
 const retryMaximumMs = 60_000
+const maxStatusErrors = 20
 
 type ProjectCreateOptions = {
   noDns: boolean
@@ -33,8 +40,28 @@ type ProjectSnapshot = readonly Project[] | undefined
 
 type QueueOutcome = "done" | "deferred" | "failed"
 
+type StatusErrorEntry = {
+  owner?: string
+  project?: string
+  hostname?: string
+  recordId?: string
+  operation: string
+  errorMessage: string
+  attempts: number
+  occurredAt: number
+  nextRetryAt?: number
+  statusCode?: number
+  cloudflareCode?: number
+}
+
 function projectKeyValue(project: ProjectKey): string {
   return `${project.owner}\u0000${project.name}`
+}
+
+function projectKeyParse(value: string): ProjectKey {
+  const separator = value.indexOf("\u0000")
+  if (separator < 0) return { owner: value, name: "" }
+  return { owner: value.slice(0, separator), name: value.slice(separator + 1) }
 }
 
 function recordKeyValue(record: Pick<CloudflareDnsTrackedRecord, "zoneId" | "id">): string {
@@ -186,6 +213,10 @@ function trackedRecordCreate(
   }
 }
 
+function fieldEscape(value: string): string {
+  return value.replace(/[\s=]+/g, "_")
+}
+
 export function projectRegistryDaemonCloudflareDnsCreate(options: {
   enabled: boolean
   credentialResolve?: (owner: string) => PromiseResult<string | undefined>
@@ -203,6 +234,7 @@ export function projectRegistryDaemonCloudflareDnsCreate(options: {
 }): Result<{
   start(): Result<void>
   shutdown(): PromiseResult<void>
+  status(): ProjectRegistryDaemonCloudflareDnsStatus
   projectCreateAfterPersistence(project: Project, options: ProjectCreateOptions): void
   projectEditAfterPersistence(previous: Project, project: Project): void
   projectDeleteAfterPersistence(project: Project): void
@@ -234,8 +266,11 @@ export function projectRegistryDaemonCloudflareDnsCreate(options: {
   const controller = new AbortController()
   const logger = options.logger ?? ((message: string) => console.info(message))
   const clock = options.clock ?? Date.now
+  const statusErrors = new Map<string, StatusErrorEntry>()
+  const lastLogEvents = new Map<string, string>()
   let state = stateEmpty()
   let trackingBlocked = false
+  let lastSuccessAt: number | undefined
   let started = false
   let stopped = false
   let intervalHandle: unknown
@@ -254,6 +289,116 @@ export function projectRegistryDaemonCloudflareDnsCreate(options: {
     }
   }
 
+  function logEvent(
+    event: "reconciliation" | "deletion" | "tracking" | "snapshot" | "credential" | "recovery",
+    outcome: "success" | "failure" | "deferred",
+    fields: {
+      owner?: string
+      project?: string
+      hostname?: string
+      zone?: string
+      recordId?: string
+      operation?: string
+      action?: string
+      attempt?: number
+      nextRetryMs?: number
+      statusCode?: number
+      cloudflareCode?: number
+      reason?: string
+      detail?: string
+    },
+  ): void {
+    const parts = [`cloudflare DNS ${event} outcome=${outcome}`]
+    if (fields.owner !== undefined) parts.push(`owner=${fieldEscape(fields.owner)}`)
+    if (fields.project !== undefined) parts.push(`project=${fieldEscape(fields.project)}`)
+    if (fields.hostname !== undefined) parts.push(`hostname=${fieldEscape(fields.hostname)}`)
+    if (fields.zone !== undefined) parts.push(`zone=${fieldEscape(fields.zone)}`)
+    if (fields.recordId !== undefined) parts.push(`recordId=${fieldEscape(fields.recordId)}`)
+    if (fields.operation !== undefined) parts.push(`operation=${fieldEscape(fields.operation)}`)
+    if (fields.action !== undefined) parts.push(`action=${fieldEscape(fields.action)}`)
+    if (fields.attempt !== undefined) parts.push(`attempt=${fields.attempt}`)
+    if (fields.nextRetryMs !== undefined) parts.push(`nextRetryMs=${fields.nextRetryMs}`)
+    if (fields.statusCode !== undefined) parts.push(`status=${fields.statusCode}`)
+    if (fields.cloudflareCode !== undefined) parts.push(`cfCode=${fields.cloudflareCode}`)
+    if (fields.reason !== undefined) parts.push(`reason=${fieldEscape(fields.reason)}`)
+    if (fields.detail !== undefined) parts.push(`detail=${fieldEscape(fields.detail)}`)
+    const message = parts.join(" ")
+    const key = [event, fields.owner, fields.project, fields.hostname, fields.recordId].join("\u0000")
+    const alreadyReported = [...statusErrors.values()].some(
+      (entry) =>
+        entry.owner === fields.owner &&
+        entry.project === fields.project &&
+        entry.hostname === fields.hostname &&
+        entry.recordId === fields.recordId,
+    )
+    if (lastLogEvents.get(key) === message && (outcome === "success" || alreadyReported)) return
+    lastLogEvents.delete(key)
+    lastLogEvents.set(key, message)
+    if (lastLogEvents.size > 1000) lastLogEvents.delete(lastLogEvents.keys().next().value!)
+    log(message)
+  }
+
+  function statusErrorKey(
+    entry: Pick<StatusErrorEntry, "operation" | "owner" | "project" | "hostname" | "recordId">,
+  ): string {
+    return [entry.operation, entry.owner ?? "", entry.project ?? "", entry.hostname ?? "", entry.recordId ?? ""].join(
+      "\u0000",
+    )
+  }
+
+  function statusErrorUpsert(entry: StatusErrorEntry): void {
+    statusErrors.set(statusErrorKey(entry), { ...entry })
+    while (statusErrors.size > maxStatusErrors) {
+      let oldestKey: string | undefined
+      let oldestAt = Number.POSITIVE_INFINITY
+      for (const [key, value] of statusErrors) {
+        if (value.occurredAt < oldestAt) {
+          oldestAt = value.occurredAt
+          oldestKey = key
+        }
+      }
+      if (oldestKey === undefined) break
+      statusErrors.delete(oldestKey)
+    }
+  }
+
+  function statusErrorsClear(predicate: (entry: StatusErrorEntry) => boolean): void {
+    for (const [key, value] of [...statusErrors]) {
+      if (predicate(value)) statusErrors.delete(key)
+    }
+  }
+
+  function successRecord(): void {
+    lastSuccessAt = clock()
+  }
+
+  function successClearHostname(hostname: string, owner?: string, project?: string): void {
+    statusErrorsClear(
+      (entry) =>
+        entry.hostname === hostname &&
+        (owner === undefined || entry.owner === owner) &&
+        (project === undefined || entry.project === project),
+    )
+  }
+
+  function successClearRecord(recordId: string): void {
+    statusErrorsClear((entry) => entry.recordId === recordId)
+  }
+
+  function successClearOperation(operation: string): void {
+    statusErrorsClear((entry) => entry.operation === operation)
+  }
+
+  function successClearProject(owner: string, project: string): void {
+    statusErrorsClear(
+      (entry) =>
+        entry.owner === owner &&
+        entry.project === project &&
+        entry.hostname === undefined &&
+        entry.recordId === undefined,
+    )
+  }
+
   function deletionStateRetry(key: string): RetryState {
     return pendingDeletions.get(key) ?? { attempts: 0, nextAt: 0, sequence: nextSequence++ }
   }
@@ -268,10 +413,12 @@ export function projectRegistryDaemonCloudflareDnsCreate(options: {
     })
   }
 
-  function retryDeletion(key: string): void {
+  function retryDeletion(key: string): { attempts: number; nextRetryMs: number } {
     const retry = deletionStateRetry(key)
     const attempts = retry.attempts + 1
-    pendingDeletions.set(key, { attempts, nextAt: clock() + retryDelay(attempts), sequence: retry.sequence })
+    const nextRetryMs = retryDelay(attempts)
+    pendingDeletions.set(key, { attempts, nextAt: clock() + nextRetryMs, sequence: retry.sequence })
+    return { attempts, nextRetryMs }
   }
 
   function deletionOwnerSet(key: string, projectKeys: readonly ProjectKey[]): string | undefined {
@@ -294,6 +441,16 @@ export function projectRegistryDaemonCloudflareDnsCreate(options: {
     pendingDeletionOwners.delete(key)
   }
 
+  function deletionOwnerOf(record: CloudflareDnsTrackedRecord): string | undefined {
+    const owners = [...new Set(record.projectKeys.map((project) => project.owner))]
+    if (owners.length === 1) return owners[0]
+    return pendingDeletionOwners.get(recordKeyValue(record))
+  }
+
+  function runIsCurrent(keyValue: string, sequence: number): boolean {
+    return pendingProjects.get(keyValue)?.sequence === sequence
+  }
+
   async function tokenForOwner(owner: string): Promise<Result<string | undefined>> {
     if (options.credentialResolve === undefined) return createResult(undefined)
     try {
@@ -301,7 +458,7 @@ export function projectRegistryDaemonCloudflareDnsCreate(options: {
       if (typeof result !== "object" || result === null || typeof result.success !== "boolean") {
         return createResultError(
           "projectRegistryDaemonCloudflareDnsCredentialResolve",
-          "Cloudflare credentials are invalid",
+          "Cloudflare credentials could not be loaded",
         )
       }
       if (!result.success)
@@ -342,7 +499,13 @@ export function projectRegistryDaemonCloudflareDnsCreate(options: {
         void recurringReconcile()
       }, reconcileIntervalMs)
     } catch {
-      log("cloudflare DNS timer setup failed")
+      logEvent("reconciliation", "failure", { operation: "timer", reason: "retry-timer-unavailable" })
+      statusErrorUpsert({
+        operation: "timer",
+        errorMessage: "DNS retry timer unavailable",
+        attempts: 0,
+        occurredAt: clock(),
+      })
     }
   }
 
@@ -360,12 +523,25 @@ export function projectRegistryDaemonCloudflareDnsCreate(options: {
     try {
       const result = await options.repositoryProjectsCurrent()
       if (!result.success) {
-        log(`cloudflare DNS repository snapshot outcome=failure reason=${result.errorMessage}`)
+        logEvent("snapshot", "failure", { reason: "repository-snapshot-unavailable" })
+        statusErrorUpsert({
+          operation: "snapshot",
+          errorMessage: "repository-snapshot-unavailable",
+          attempts: 0,
+          occurredAt: clock(),
+        })
         return createResultError("projectRegistryDaemonCloudflareDnsSnapshot", result.errorMessage)
       }
+      successClearOperation("snapshot")
       return createResult(result.data)
     } catch {
-      log("cloudflare DNS repository snapshot outcome=failure reason=unexpected-error")
+      logEvent("snapshot", "failure", { reason: "repository-snapshot-unavailable" })
+      statusErrorUpsert({
+        operation: "snapshot",
+        errorMessage: "repository-snapshot-unavailable",
+        attempts: 0,
+        occurredAt: clock(),
+      })
       return createResultError("projectRegistryDaemonCloudflareDnsSnapshot", "repository snapshot failed")
     }
   }
@@ -395,14 +571,27 @@ export function projectRegistryDaemonCloudflareDnsCreate(options: {
     try {
       const result = await options.tracking.write(next)
       if (!result.success) {
-        log(`cloudflare DNS tracking outcome=failure operation=write reason=${result.errorMessage}`)
+        logEvent("tracking", "failure", { operation: "write", reason: "tracking-write-failed" })
+        statusErrorUpsert({
+          operation: "tracking",
+          errorMessage: "tracking-write-failed",
+          attempts: 0,
+          occurredAt: clock(),
+        })
         return false
       }
       if (stopped) return false
       state = next
+      successClearOperation("tracking")
       return true
     } catch {
-      log("cloudflare DNS tracking outcome=failure operation=write reason=unexpected-error")
+      logEvent("tracking", "failure", { operation: "write", reason: "tracking-write-failed" })
+      statusErrorUpsert({
+        operation: "tracking",
+        errorMessage: "tracking-write-failed",
+        attempts: 0,
+        occurredAt: clock(),
+      })
       return false
     }
   }
@@ -414,15 +603,28 @@ export function projectRegistryDaemonCloudflareDnsCreate(options: {
       readR = await options.tracking.read()
     } catch {
       trackingBlocked = true
-      log("cloudflare DNS tracking outcome=failure operation=read reason=unexpected-error")
+      logEvent("tracking", "failure", { operation: "read", reason: "tracking-read-failed" })
+      statusErrorUpsert({
+        operation: "tracking",
+        errorMessage: "tracking-read-failed",
+        attempts: 0,
+        occurredAt: clock(),
+      })
       return
     }
     if (!readR.success) {
       trackingBlocked = true
-      log(`cloudflare DNS tracking outcome=failure operation=read reason=${readR.errorMessage}`)
+      logEvent("tracking", "failure", { operation: "read", reason: "tracking-read-failed" })
+      statusErrorUpsert({
+        operation: "tracking",
+        errorMessage: "tracking-read-failed",
+        attempts: 0,
+        occurredAt: clock(),
+      })
       return
     }
     state = readR.data
+    successClearOperation("tracking")
     if (stopped) return
 
     const projectsR = await currentProjects()
@@ -440,9 +642,16 @@ export function projectRegistryDaemonCloudflareDnsCreate(options: {
     let changed = false
     const planR = projectDnsPlanCreate(projects)
     if (!planR.success) {
-      log(
-        `cloudflare DNS tracking outcome=deferred reason=conflicting-public-private-claims detail=${planR.errorMessage}`,
-      )
+      logEvent("tracking", "deferred", {
+        operation: "startup",
+        reason: "conflicting-public-private-claims",
+      })
+      statusErrorUpsert({
+        operation: "startup",
+        errorMessage: "conflicting-public-private-claims",
+        attempts: startupRetry?.attempts ?? 0,
+        occurredAt: clock(),
+      })
       startupRetrySchedule()
       return
     }
@@ -478,7 +687,16 @@ export function projectRegistryDaemonCloudflareDnsCreate(options: {
       startupRetrySchedule()
       return
     }
+    if (changed) {
+      successRecord()
+      logEvent("recovery", "success", { operation: "startup", detail: "stale-tracking-reconciled" })
+    }
+    successClearOperation("startup")
     startupRetry = undefined
+    // Orphan deletions stay scheduled until their owning projects finish
+    // reconciling replacements; the deletion path defers while an owner has
+    // pending project work so a restart during a failed rename cannot remove
+    // the old record before the replacement exists.
     for (const [recordKey, projectKeys] of deletionOwners) {
       deletionSchedule(recordKey, projectKeys)
     }
@@ -526,51 +744,241 @@ export function projectRegistryDaemonCloudflareDnsCreate(options: {
     return record.projectKeys.filter((key) => !projectKeyEqual(key, project))
   }
 
-  async function deletionRun(record: CloudflareDnsTrackedRecord): Promise<QueueOutcome> {
-    if (stopped) return "done"
-    if (!active) {
-      deletionPendingClear(recordKeyValue(record))
+  type DeletionExpectation = { keyValue: string; sequence: number; project?: Project }
+
+  function projectDnsSignature(project: Project | undefined): string {
+    if (project === undefined) return "deleted"
+    return JSON.stringify([
+      publicHostnames(project).sort(),
+      privateHostnames(project).sort(),
+      externalHostnames(project).sort(),
+    ])
+  }
+
+  async function deletionAllowed(
+    record: CloudflareDnsTrackedRecord,
+    expected?: DeletionExpectation,
+  ): PromiseResult<boolean> {
+    if (stopped) return createResult(false)
+    const freshR = await currentProjects()
+    if (!freshR.success) return createResultError(op, "DNS deletion deferred: repository snapshot unavailable")
+    const projects = freshR.data ?? [...desiredProjects.values()]
+    const hostname = projectDomainNormalize(record.name)
+    if (!projectDnsPlanCreate(projects).success) return createResult(false)
+    if (
+      projectKeysForHostname(projects, hostname).length > 0 ||
+      projectKeysForExternalHostname(projects, hostname).length > 0
+    )
+      return createResult(false)
+    if (expected !== undefined) {
+      if (!runIsCurrent(expected.keyValue, expected.sequence)) return createResult(false)
+      const latest = projects.find((project) => projectKeyValue(project) === expected.keyValue)
+      if (projectDnsSignature(latest) !== projectDnsSignature(expected.project)) {
+        if (latest !== undefined) projectQueueSet(latest)
+        return createResult(false)
+      }
+    }
+    for (const key of record.projectKeys) {
+      const keyValue = projectKeyValue(key)
+      if (pendingProjects.has(keyValue) && keyValue !== expected?.keyValue) return createResult(false)
+      const latest = projects.find((project) => projectKeyValue(project) === keyValue)
+      if (latest === undefined) continue
+      if (publicHostnames(latest).some((target) => trackingRecordFind(target, key) === undefined)) {
+        projectQueueSet(latest)
+        return createResult(false)
+      }
+    }
+    return createResult(!stopped)
+  }
+
+  async function deletionAttempt(
+    recordKey: string,
+    projects: ProjectSnapshot,
+    expected?: DeletionExpectation,
+  ): Promise<QueueOutcome> {
+    const record = state.records.find((entry) => recordKeyValue(entry) === recordKey)
+    if (record === undefined) {
+      deletionPendingClear(recordKey)
       return "done"
     }
-    const deletionOwner = pendingDeletionOwners.get(recordKeyValue(record))
+    const hostname = projectDomainNormalize(record.name)
+    if (projectDomainIsCloudflarePages(hostname)) {
+      if (!(await trackingRecordRelease(record))) return "failed"
+      successRecord()
+      logEvent("recovery", "success", {
+        hostname,
+        recordId: record.id,
+        operation: "record-delete",
+        detail: "released-pages-dev",
+      })
+      return "done"
+    }
+    // Revalidate against the latest snapshot before touching DNS: a concurrent
+    // edit may have reclaimed this hostname for the same or another project.
+    const claimants = projectKeysForHostname(projects, hostname)
+    if (claimants.length > 0) {
+      if (!(await trackingRecordOwnersSet(record, claimants))) return "failed"
+      deletionPendingClear(recordKey)
+      successRecord()
+      // Reassigning ownership does not mean the new claimant's DNS attempt
+      // succeeded; only its own reconciliation may clear hostname failures.
+      successClearRecord(record.id)
+      logEvent("recovery", "success", {
+        hostname,
+        recordId: record.id,
+        operation: "record-delete",
+        detail: "hostname-reclaimed",
+      })
+      return "done"
+    }
+    if (projectKeysForExternalHostname(projects, hostname).length > 0) {
+      if (!(await trackingRecordRelease(record))) return "failed"
+      successRecord()
+      logEvent("recovery", "success", {
+        hostname,
+        recordId: record.id,
+        operation: "record-delete",
+        detail: "released-external",
+      })
+      return "done"
+    }
+    const deletionOwner = deletionOwnerOf(record)
     if (deletionOwner === undefined) {
-      log(`cloudflare DNS deletion outcome=deferred recordId=${record.id} reason=owner-credential-unavailable`)
-      retryDeletion(recordKeyValue(record))
-      return "failed"
+      deletionPendingClear(recordKey)
+      return "done"
     }
     const tokenR = await tokenForOwner(deletionOwner)
-    if (!tokenR.success || tokenR.data === undefined) {
-      log(`cloudflare DNS deletion outcome=deferred recordId=${record.id} reason=owner-credential-unavailable`)
-      retryDeletion(recordKeyValue(record))
+    if (!tokenR.success) {
+      const { attempts, nextRetryMs } = retryDeletion(recordKey)
+      logEvent("credential", "deferred", {
+        owner: deletionOwner,
+        hostname,
+        recordId: record.id,
+        attempt: attempts,
+        nextRetryMs,
+        reason:
+          tokenR.errorMessage === "Cloudflare credentials are invalid"
+            ? "owner-credential-invalid"
+            : "owner-credential-unavailable",
+      })
+      statusErrorUpsert({
+        owner: deletionOwner,
+        hostname,
+        recordId: record.id,
+        operation: "delete",
+        errorMessage:
+          tokenR.errorMessage === "Cloudflare credentials are invalid"
+            ? "owner-credential-invalid"
+            : "owner-credential-unavailable",
+        attempts,
+        occurredAt: clock(),
+        nextRetryAt: clock() + nextRetryMs,
+      })
       return "failed"
     }
+    if (tokenR.data === undefined) {
+      const { attempts, nextRetryMs } = retryDeletion(recordKey)
+      logEvent("credential", "deferred", {
+        owner: deletionOwner,
+        hostname,
+        recordId: record.id,
+        attempt: attempts,
+        nextRetryMs,
+        reason: "owner-credential-missing",
+      })
+      statusErrorUpsert({
+        owner: deletionOwner,
+        hostname,
+        recordId: record.id,
+        operation: "delete",
+        errorMessage: "owner-credential-missing",
+        attempts,
+        occurredAt: clock(),
+        nextRetryAt: clock() + nextRetryMs,
+      })
+      return "failed"
+    }
+    let deleteR: Awaited<ReturnType<typeof cloudflareDnsDeleteById>>
     try {
-      const result = await cloudflareDnsDeleteById({
+      deleteR = await cloudflareDnsDeleteById({
         token: tokenR.data,
         record,
+        beforeDelete: () => deletionAllowed(record, expected),
         timeoutMs: options.timeoutMs,
         signal: controller.signal,
         ...(options.fetch === undefined ? {} : { fetch: options.fetch }),
       })
-      if (!result.success) {
-        log(`cloudflare DNS deletion outcome=failure recordId=${record.id} reason=${result.errorMessage}`)
-        retryDeletion(recordKeyValue(record))
-        return "failed"
-      }
-      if (stopped) return "done"
-      const next = stateCopy(state)
-      next.records = next.records.filter((entry) => recordKeyValue(entry) !== recordKeyValue(record))
-      if (!(await trackingStateWrite(next))) {
-        retryDeletion(recordKeyValue(record))
-        return "failed"
-      }
-      deletionPendingClear(recordKeyValue(record))
-      return "done"
     } catch {
-      log(`cloudflare DNS deletion outcome=failure recordId=${record.id} reason=unexpected-error`)
-      retryDeletion(recordKeyValue(record))
+      const { attempts, nextRetryMs } = retryDeletion(recordKey)
+      logEvent("deletion", "failure", {
+        owner: deletionOwner,
+        hostname,
+        recordId: record.id,
+        operation: "record-delete",
+        attempt: attempts,
+        nextRetryMs,
+        reason: "cloudflare-request-failed",
+      })
+      statusErrorUpsert({
+        owner: deletionOwner,
+        hostname,
+        recordId: record.id,
+        operation: "delete",
+        errorMessage: "cloudflare-request-failed",
+        attempts,
+        occurredAt: clock(),
+        nextRetryAt: clock() + nextRetryMs,
+      })
       return "failed"
     }
+    if (!deleteR.success) {
+      const details = cloudflareDnsErrorDetailsRead(deleteR)
+      const { attempts, nextRetryMs } = retryDeletion(recordKey)
+      logEvent("deletion", "failure", {
+        owner: deletionOwner,
+        hostname,
+        recordId: record.id,
+        operation: details.operation ?? "record-delete",
+        attempt: attempts,
+        nextRetryMs,
+        ...(details.statusCode === undefined ? {} : { statusCode: details.statusCode }),
+        ...(details.cloudflareCode === undefined ? {} : { cloudflareCode: details.cloudflareCode }),
+        reason: deleteR.errorMessage,
+      })
+      statusErrorUpsert({
+        owner: deletionOwner,
+        hostname,
+        recordId: record.id,
+        operation: details.operation ?? "record-delete",
+        errorMessage: deleteR.errorMessage,
+        attempts,
+        occurredAt: clock(),
+        nextRetryAt: clock() + nextRetryMs,
+        ...(details.statusCode === undefined ? {} : { statusCode: details.statusCode }),
+        ...(details.cloudflareCode === undefined ? {} : { cloudflareCode: details.cloudflareCode }),
+      })
+      return "failed"
+    }
+    if (stopped) return "done"
+    const next = stateCopy(state)
+    next.records = next.records.filter((entry) => recordKeyValue(entry) !== recordKeyValue(record))
+    if (!(await trackingStateWrite(next))) {
+      retryDeletion(recordKey)
+      return "failed"
+    }
+    deletionPendingClear(recordKey)
+    successRecord()
+    successClearHostname(hostname)
+    successClearRecord(record.id)
+    logEvent("deletion", "success", {
+      owner: deletionOwner,
+      hostname,
+      zone: record.zoneName,
+      recordId: record.id,
+      operation: "record-delete",
+      action: deleteR.data.action,
+    })
+    return "done"
   }
 
   async function trackedRecordDeletionRun(recordKey: string): Promise<QueueOutcome> {
@@ -586,13 +994,32 @@ export function projectRegistryDaemonCloudflareDnsCreate(options: {
       deletionPendingClear(recordKey)
       return "done"
     }
-    return deletionRun(record)
+    // An owner with pending project work may still reconcile a replacement
+    // hostname; wait for that run instead of deleting based on stale state.
+    if (record.projectKeys.some((key) => pendingProjects.has(projectKeyValue(key)))) {
+      const retry = deletionStateRetry(recordKey)
+      pendingDeletions.set(recordKey, {
+        attempts: retry.attempts,
+        nextAt: clock() + retryBaseMs,
+        sequence: retry.sequence,
+      })
+      return "failed"
+    }
+    const projectsR = await currentProjects()
+    const outcome =
+      !projectsR.success && options.repositoryProjectsCurrent !== undefined
+        ? "failed"
+        : await deletionAttempt(recordKey, projectsR.success ? projectsR.data : undefined)
+    if (outcome === "failed" && pendingDeletions.has(recordKey) && pendingDue(pendingDeletions.get(recordKey)!))
+      retryDeletion(recordKey)
+    return outcome
   }
 
   async function projectOwnershipReconcile(
     project: Project,
     projects: ProjectSnapshot,
     previousExcludedHostnames: ReadonlySet<string>,
+    orphans: string[],
   ): Promise<QueueOutcome> {
     const key = { owner: project.owner, name: project.name }
     const currentDomains = new Set(publicHostnames(project))
@@ -629,23 +1056,20 @@ export function projectRegistryDaemonCloudflareDnsCreate(options: {
       }
       if (currentPrivateHostnames.has(hostname)) {
         if (owners.length === 0) {
+          // Verified deletion runs only after this project's public
+          // replacements reconcile; schedule here, delete later.
           deletionSchedule(recordKeyValue(record), record.projectKeys)
-          if (
-            pendingDeletions.has(recordKeyValue(record)) &&
-            pendingDue(pendingDeletions.get(recordKeyValue(record))!)
-          ) {
-            await trackedRecordDeletionRun(recordKeyValue(record))
-          }
+          orphans.push(recordKeyValue(record))
           continue
         }
         if (!(await trackingRecordOwnersSet(record, owners))) return "failed"
         continue
       }
       if (owners.length === 0) {
+        // Create-before-delete: keep the old record until every public
+        // replacement for this project reconciles and persists.
         deletionSchedule(recordKeyValue(record), record.projectKeys)
-        if (pendingDeletions.has(recordKeyValue(record)) && pendingDue(pendingDeletions.get(recordKeyValue(record))!)) {
-          await trackedRecordDeletionRun(recordKeyValue(record))
-        }
+        orphans.push(recordKeyValue(record))
         continue
       }
       if (!(await trackingRecordOwnersSet(record, owners))) return "failed"
@@ -668,12 +1092,81 @@ export function projectRegistryDaemonCloudflareDnsCreate(options: {
     return "done"
   }
 
-  async function projectRemoteReconcile(project: Project, projects: ProjectSnapshot): Promise<QueueOutcome> {
+  async function projectRemoteReconcile(
+    project: Project,
+    projects: ProjectSnapshot,
+    attempts: number,
+  ): Promise<QueueOutcome> {
+    const projectKey = { owner: project.owner, name: project.name }
+    const hostnames = publicHostnames(project)
+    if (hostnames.length === 0) return "done"
     const address = options.serverIpCurrent()
-    if (address === undefined || address === "") return "deferred"
+    if (address === undefined || address === "") {
+      logEvent("reconciliation", "deferred", {
+        owner: project.owner,
+        project: project.name,
+        attempt: attempts,
+        nextRetryMs: retryBaseMs,
+        reason: "server-ip-unavailable",
+      })
+      statusErrorUpsert({
+        owner: project.owner,
+        project: project.name,
+        operation: "reconcile",
+        errorMessage: "server-ip-unavailable",
+        attempts,
+        occurredAt: clock(),
+        nextRetryAt: clock() + retryBaseMs,
+      })
+      return "deferred"
+    }
     const tokenR = await tokenForOwner(project.owner)
-    if (!tokenR.success || tokenR.data === undefined) return "deferred"
-    for (const hostname of publicHostnames(project)) {
+    if (!tokenR.success) {
+      logEvent("credential", "deferred", {
+        owner: project.owner,
+        project: project.name,
+        attempt: attempts,
+        nextRetryMs: retryBaseMs,
+        reason:
+          tokenR.errorMessage === "Cloudflare credentials are invalid"
+            ? "owner-credential-invalid"
+            : "owner-credential-unavailable",
+      })
+      statusErrorUpsert({
+        owner: project.owner,
+        project: project.name,
+        operation: "reconcile",
+        errorMessage:
+          tokenR.errorMessage === "Cloudflare credentials are invalid"
+            ? "owner-credential-invalid"
+            : "owner-credential-unavailable",
+        attempts,
+        occurredAt: clock(),
+        nextRetryAt: clock() + retryBaseMs,
+      })
+      return "deferred"
+    }
+    if (tokenR.data === undefined) {
+      logEvent("credential", "deferred", {
+        owner: project.owner,
+        project: project.name,
+        attempt: attempts,
+        nextRetryMs: retryBaseMs,
+        reason: "owner-credential-missing",
+      })
+      statusErrorUpsert({
+        owner: project.owner,
+        project: project.name,
+        operation: "reconcile",
+        errorMessage: "owner-credential-missing",
+        attempts,
+        occurredAt: clock(),
+        nextRetryAt: clock() + retryBaseMs,
+      })
+      return "deferred"
+    }
+    let allOk = true
+    for (const hostname of hostnames) {
       if (stopped) return "done"
       let reconcileR: Awaited<ReturnType<typeof cloudflareDnsReconcile>>
       try {
@@ -686,18 +1179,60 @@ export function projectRegistryDaemonCloudflareDnsCreate(options: {
           ...(options.fetch === undefined ? {} : { fetch: options.fetch }),
         })
       } catch {
-        log(`cloudflare DNS reconciliation outcome=failure hostname=${hostname} reason=unexpected-error`)
-        return "failed"
+        allOk = false
+        logEvent("reconciliation", "failure", {
+          owner: project.owner,
+          project: project.name,
+          hostname,
+          operation: "request",
+          attempt: attempts + 1,
+          nextRetryMs: retryDelay(attempts + 1),
+          reason: "cloudflare-request-failed",
+        })
+        statusErrorUpsert({
+          owner: project.owner,
+          project: project.name,
+          hostname,
+          operation: "request",
+          errorMessage: "cloudflare-request-failed",
+          attempts: attempts + 1,
+          occurredAt: clock(),
+          nextRetryAt: clock() + retryDelay(attempts + 1),
+        })
+        continue
       }
       if (!reconcileR.success) {
-        log(`cloudflare DNS reconciliation outcome=failure hostname=${hostname} reason=${reconcileR.errorMessage}`)
-        return "failed"
+        allOk = false
+        const details = cloudflareDnsErrorDetailsRead(reconcileR)
+        logEvent("reconciliation", "failure", {
+          owner: project.owner,
+          project: project.name,
+          hostname,
+          operation: details.operation ?? "request",
+          attempt: attempts + 1,
+          nextRetryMs: retryDelay(attempts + 1),
+          ...(details.statusCode === undefined ? {} : { statusCode: details.statusCode }),
+          ...(details.cloudflareCode === undefined ? {} : { cloudflareCode: details.cloudflareCode }),
+          reason: reconcileR.errorMessage,
+        })
+        statusErrorUpsert({
+          owner: project.owner,
+          project: project.name,
+          hostname,
+          operation: details.operation ?? "request",
+          errorMessage: reconcileR.errorMessage,
+          attempts: attempts + 1,
+          occurredAt: clock(),
+          nextRetryAt: clock() + retryDelay(attempts + 1),
+          ...(details.statusCode === undefined ? {} : { statusCode: details.statusCode }),
+          ...(details.cloudflareCode === undefined ? {} : { cloudflareCode: details.cloudflareCode }),
+        })
+        continue
       }
       if (stopped) return "done"
       const existing = state.records.find(
         (record) => record.zoneId === reconcileR.data.zone.id && record.id === reconcileR.data.record.id,
       )
-      const projectKey = { owner: project.owner, name: project.name }
       const snapshotOwners = projects === undefined ? [] : projectKeysForHostname(projects, hostname)
       const projectKeys =
         projects === undefined
@@ -714,10 +1249,33 @@ export function projectRegistryDaemonCloudflareDnsCreate(options: {
       const index = next.records.findIndex((record) => recordKeyValue(record) === recordKeyValue(tracked))
       if (index < 0) next.records.push(tracked)
       else next.records[index] = tracked
-      if (!(await trackingStateWrite(next))) return "failed"
+      if (!(await trackingStateWrite(next))) {
+        allOk = false
+        continue
+      }
       deletionPendingClear(recordKeyValue(tracked))
+      const recovered = [...statusErrors.values()].some(
+        (entry) =>
+          entry.owner === project.owner &&
+          entry.project === project.name &&
+          (entry.hostname === undefined || entry.hostname === hostname),
+      )
+      successClearHostname(hostname, project.owner, project.name)
+      successClearProject(project.owner, project.name)
+      successRecord()
+      if (reconcileR.data.action !== "skipped" || recovered) {
+        logEvent("reconciliation", "success", {
+          owner: project.owner,
+          project: project.name,
+          hostname,
+          zone: reconcileR.data.zone.name,
+          recordId: reconcileR.data.record.id,
+          operation: "record-reconcile",
+          action: reconcileR.data.action,
+        })
+      }
     }
-    return "done"
+    return allOk ? "done" : "failed"
   }
 
   async function projectRun(keyValue: string, sequence: number): Promise<QueueOutcome> {
@@ -732,11 +1290,20 @@ export function projectRegistryDaemonCloudflareDnsCreate(options: {
     if (projects !== undefined) {
       const planR = projectDnsPlanCreate(projects)
       if (!planR.success) {
-        log(
-          `cloudflare DNS reconciliation outcome=failure reason=conflicting-public-private-claims detail=${planR.errorMessage}`,
-        )
+        logEvent("reconciliation", "failure", {
+          reason: "conflicting-public-private-claims",
+        })
+        statusErrorUpsert({
+          operation: "reconcile",
+          errorMessage: "conflicting-public-private-claims",
+          attempts: pendingProjects.get(keyValue)?.attempts ?? 0,
+          occurredAt: clock(),
+        })
         return "failed"
       }
+      statusErrorsClear(
+        (entry) => entry.owner === undefined && entry.errorMessage === "conflicting-public-private-claims",
+      )
     }
     const desired =
       projects === undefined || requested === undefined
@@ -746,64 +1313,115 @@ export function projectRegistryDaemonCloudflareDnsCreate(options: {
       if (projectsR.success && projects === undefined && options.repositoryProjectsCurrent !== undefined)
         return "failed"
       if (options.tracking !== undefined) {
-        const projectKey = { owner: keyValue.split("\u0000")[0]!, name: keyValue.split("\u0000")[1]! }
-        const records = state.records.filter((record) =>
-          record.projectKeys.some((key) => projectKeyEqual(key, projectKey)),
-        )
-        for (const record of records) {
-          const hostname = projectDomainNormalize(record.name)
-          const owners = currentOwners(record, projectKey, projects)
-          if (
-            protectedHostnames.get(keyValue)?.has(hostname) === true ||
-            projectDomainIsCloudflarePages(hostname) ||
-            projectKeysForExternalHostname(projects, hostname).length > 0
-          ) {
-            if (owners.length === 0) {
-              if (!(await trackingRecordRelease(record))) return "failed"
-            } else if (!(await trackingRecordOwnersSet(record, owners))) {
-              return "failed"
-            }
-            continue
-          }
-          if (owners.length === 0) {
-            deletionSchedule(
-              recordKeyValue(record),
-              record.projectKeys.length === 0 ? [projectKey] : record.projectKeys,
-            )
-            if (
-              pendingDeletions.has(recordKeyValue(record)) &&
-              pendingDue(pendingDeletions.get(recordKeyValue(record))!)
-            ) {
-              await trackedRecordDeletionRun(recordKeyValue(record))
-            }
-            continue
-          }
-          if (!(await trackingRecordOwnersSet(record, owners))) return "failed"
-        }
+        const projectKey = projectKeyParse(keyValue)
+        const outcome = await projectOrphansCleanup(projectKey, keyValue, sequence, projects)
+        if (outcome !== "done") return outcome
       }
+      const deletedKey = projectKeyParse(keyValue)
+      statusErrorsClear((entry) => entry.owner === deletedKey.owner && entry.project === deletedKey.name)
       if (pendingProjects.get(keyValue)?.sequence === sequence) pendingProjects.delete(keyValue)
       return "done"
     }
 
     if (options.tracking !== undefined) {
+      const orphans: string[] = []
       const ownershipOutcome = await projectOwnershipReconcile(
         desired,
         projects,
         protectedHostnames.get(keyValue) ?? new Set<string>(),
+        orphans,
       )
       if (ownershipOutcome !== "done") return ownershipOutcome
+      const attempts = pendingProjects.get(keyValue)?.attempts ?? 0
+      const remoteOutcome = await projectRemoteReconcile(desired, projects, attempts)
+      if (remoteOutcome !== "done") {
+        // A failing or partial replacement must leave the old DNS records in
+        // place; orphan deletions run only after every public hostname
+        // reconciles and persists.
+        return remoteOutcome
+      }
+      // No public replacements means no server IP is needed. Otherwise every
+      // replacement is durably tracked before cleanup can pass its final guard.
+      if (!runIsCurrent(keyValue, sequence)) return "done"
+      const cleanupOutcome = await projectOrphansAttempt(orphans, keyValue, sequence, desired)
+      if (cleanupOutcome !== "done") return cleanupOutcome
+    } else {
+      const attempts = pendingProjects.get(keyValue)?.attempts ?? 0
+      const remoteOutcome = await projectRemoteReconcile(desired, projects, attempts)
+      if (remoteOutcome !== "done") return remoteOutcome
     }
-    const remoteOutcome = await projectRemoteReconcile(desired, projects)
-    if (remoteOutcome !== "done") return remoteOutcome
-    protectedHostnames.delete(keyValue)
-    if (pendingProjects.get(keyValue)?.sequence === sequence) pendingProjects.delete(keyValue)
+    if (runIsCurrent(keyValue, sequence)) {
+      statusErrorsClear((entry) => entry.owner === desired.owner && entry.project === desired.name)
+      protectedHostnames.delete(keyValue)
+      pendingProjects.delete(keyValue)
+    }
     return "done"
+  }
+
+  async function projectOrphansAttempt(
+    orphans: string[],
+    keyValue: string,
+    sequence: number,
+    project?: Project,
+  ): Promise<QueueOutcome> {
+    if (orphans.length === 0) return "done"
+    const freshR = await currentProjects()
+    if (!freshR.success && options.repositoryProjectsCurrent !== undefined) return "failed"
+    const fresh = freshR.success ? freshR.data : undefined
+    let allOk = true
+    for (const orphanKey of orphans) {
+      if (stopped) return "done"
+      if (!runIsCurrent(keyValue, sequence)) return "done"
+      const outcome = await deletionAttempt(orphanKey, fresh, { keyValue, sequence, project })
+      if (outcome !== "done") {
+        allOk = false
+        if (pendingDeletions.has(orphanKey) && pendingDue(pendingDeletions.get(orphanKey)!)) retryDeletion(orphanKey)
+      }
+    }
+    return allOk ? "done" : "failed"
+  }
+
+  async function projectOrphansCleanup(
+    projectKey: ProjectKey,
+    keyValue: string,
+    sequence: number,
+    projects: ProjectSnapshot,
+  ): Promise<QueueOutcome> {
+    const records = state.records.filter((record) => record.projectKeys.some((key) => projectKeyEqual(key, projectKey)))
+    const orphans: string[] = []
+    for (const record of records) {
+      if (stopped) return "done"
+      const hostname = projectDomainNormalize(record.name)
+      const owners = currentOwners(record, projectKey, projects)
+      if (
+        protectedHostnames.get(keyValue)?.has(hostname) === true ||
+        projectDomainIsCloudflarePages(hostname) ||
+        projectKeysForExternalHostname(projects, hostname).length > 0
+      ) {
+        if (owners.length === 0) {
+          if (!(await trackingRecordRelease(record))) return "failed"
+        } else if (!(await trackingRecordOwnersSet(record, owners))) {
+          return "failed"
+        }
+        continue
+      }
+      if (owners.length === 0) {
+        deletionSchedule(recordKeyValue(record), record.projectKeys.length === 0 ? [projectKey] : record.projectKeys)
+        orphans.push(recordKeyValue(record))
+        continue
+      }
+      if (!(await trackingRecordOwnersSet(record, owners))) return "failed"
+    }
+    // Project deletion and projects without public replacements clean up
+    // without waiting for the server IP.
+    return projectOrphansAttempt(orphans, keyValue, sequence)
   }
 
   async function drain(force: boolean): Promise<void> {
     if (!started || stopped || (!active && options.tracking === undefined)) return
     if (startupPromise !== undefined) await startupPromise
     if (stopped || trackingBlocked) return
+    const forcedProjects = new Set<string>()
 
     while (!stopped) {
       if (startupRetry !== undefined && pendingDue(startupRetry)) {
@@ -813,9 +1431,10 @@ export function projectRegistryDaemonCloudflareDnsCreate(options: {
       }
       const dueDeletion = [...pendingDeletions.entries()].find(([, retry]) => pendingDue(retry))
       const dueProject = [...pendingProjects.entries()].find(
-        ([, retry]) =>
+        ([key, retry]) =>
           pendingDue(retry) ||
           (force &&
+            !forcedProjects.has(key) &&
             retry.attempts === 0 &&
             options.serverIpCurrent() !== undefined &&
             options.serverIpCurrent() !== ""),
@@ -826,6 +1445,9 @@ export function projectRegistryDaemonCloudflareDnsCreate(options: {
         continue
       }
       const retry = dueProject![1]
+      // Force wakes each deferred project once, not repeatedly within this
+      // drain: missing credentials must still honor their retry deadline.
+      forcedProjects.add(dueProject![0])
       const outcome = await projectRun(dueProject![0], retry.sequence)
       if (outcome === "failed" && pendingProjects.get(dueProject![0])?.sequence === retry.sequence)
         retryProject(dueProject![0], retry, false)
@@ -855,7 +1477,17 @@ export function projectRegistryDaemonCloudflareDnsCreate(options: {
     forceDrain = false
     const current = Promise.resolve()
       .then(() => drain(requestedForce))
-      .catch(() => undefined)
+      .catch(() => {
+        // Unexpected queue failures must be visible and must not hot-loop.
+        trackingBlocked = true
+        logEvent("reconciliation", "failure", { operation: "queue", reason: "unexpected-error" })
+        statusErrorUpsert({
+          operation: "queue",
+          errorMessage: "Unexpected DNS queue failure; restart the daemon after investigating its logs",
+          attempts: 0,
+          occurredAt: clock(),
+        })
+      })
     drainPromise = current
     void current.then(() => {
       if (drainPromise !== current) return
@@ -910,6 +1542,30 @@ export function projectRegistryDaemonCloudflareDnsCreate(options: {
     drainSchedule()
   }
 
+  function status(): ProjectRegistryDaemonCloudflareDnsStatus {
+    const snapshot = {
+      enabled: active,
+      pendingProjects: pendingProjects.size,
+      pendingDeletions: pendingDeletions.size,
+      trackingBlocked,
+      ...(lastSuccessAt === undefined ? {} : { lastSuccess: lastSuccessAt }),
+      errors: [...statusErrors.values()]
+        .sort((left, right) => left.occurredAt - right.occurredAt)
+        .map((entry) => ({ ...entry })),
+    }
+    const parsed = a.safeParse(projectRegistryDaemonCloudflareDnsStatusSchema, snapshot)
+    if (!parsed.success) {
+      return {
+        enabled: active,
+        pendingProjects: pendingProjects.size,
+        pendingDeletions: pendingDeletions.size,
+        trackingBlocked: true,
+        errors: [{ operation: "status", errorMessage: "DNS status unavailable", attempts: 0, occurredAt: 0 }],
+      }
+    }
+    return parsed.output
+  }
+
   function start(): Result<void> {
     if (started) return createResult(undefined)
     if (stopped) return createResultError(op, "Cloudflare DNS queue has stopped")
@@ -923,7 +1579,13 @@ export function projectRegistryDaemonCloudflareDnsCreate(options: {
       })
       .catch(() => {
         trackingBlocked = true
-        log("cloudflare DNS tracking outcome=failure operation=startup reason=unexpected-error")
+        logEvent("tracking", "failure", { operation: "startup", reason: "tracking-startup-failed" })
+        statusErrorUpsert({
+          operation: "startup",
+          errorMessage: "tracking-startup-failed",
+          attempts: 0,
+          occurredAt: clock(),
+        })
       })
     drainSchedule()
     return createResult(undefined)
@@ -957,6 +1619,7 @@ export function projectRegistryDaemonCloudflareDnsCreate(options: {
   return createResult({
     start,
     shutdown,
+    status,
     projectCreateAfterPersistence,
     projectEditAfterPersistence,
     projectDeleteAfterPersistence,

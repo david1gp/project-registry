@@ -1,10 +1,11 @@
 import { isIP } from "node:net"
 import * as a from "valibot"
-import { createResult, createResultError, type PromiseResult, type Result } from "#result"
+import { createResult, createResultError, type PromiseResult, type Result, type ResultErr } from "#result"
 import type { CloudflareDnsReconcileOptions } from "./CloudflareDnsReconcileOptions.js"
 import type { CloudflareDnsReconcileResult } from "./CloudflareDnsReconcileResult.js"
 import type { CloudflareDnsRecord } from "./CloudflareDnsRecord.js"
-import { cloudflareZarazAutoInjectDisable } from "./cloudflareZarazAutoInjectDisable.js"
+import type { CloudflareDnsOperation } from "./cloudflareDnsOperationSchema.js"
+import { cloudflareDnsErrorDataCreate } from "./cloudflareDnsErrorDataCreate.js"
 
 const defaultTimeoutMs = 30_000
 const defaultApiBaseUrl = "https://api.cloudflare.com/client/v4"
@@ -26,10 +27,6 @@ const recordSchema = a.object({
 })
 const recordListResponseSchema = a.object({ success: a.literal(true), result: a.array(recordSchema) })
 const recordResponseSchema = a.object({ success: a.literal(true), result: recordSchema })
-const emailObfuscationResponseSchema = a.object({
-  success: a.literal(true),
-  result: a.object({ id: nonBlankTextSchema, value: a.literal("off") }),
-})
 
 type Zone = {
   id: string
@@ -44,6 +41,37 @@ type RequestResponse = {
 type RequestCancellation = typeof requestCancellation
 
 const requestCancellation = Symbol("cloudflare DNS request cancellation")
+
+const operationLabels: Record<CloudflareDnsOperation, string> = {
+  "zone-lookup": "zone lookup",
+  "record-list": "DNS record list",
+  "record-create": "DNS record creation",
+  "record-update": "DNS record update",
+  "record-verify": "DNS record verification",
+  "record-delete": "DNS record deletion",
+  request: "request",
+}
+
+function dnsFailureCreate(
+  op: string,
+  operation: CloudflareDnsOperation,
+  message: string,
+  status?: number,
+  body?: unknown,
+): ResultErr {
+  const error = createResultError(op, message, cloudflareDnsErrorDataCreate({ operation, statusCode: status, body }))
+  if (typeof status === "number" && Number.isInteger(status) && status >= 100 && status <= 599) {
+    error.statusCode = status
+  }
+  return error
+}
+
+function dnsHttpMessageFor(status: number): string {
+  if (status === 401) return "Cloudflare API token is invalid or expired (status 401)"
+  if (status === 403) return "Cloudflare API token lacks Zone Read or DNS Edit permission (status 403)"
+  if (status === 429) return "Cloudflare API rate limit exceeded; retry later (status 429)"
+  return `Cloudflare DNS request failed (status ${status})`
+}
 
 function hostnameNormalize(value: unknown): string | undefined {
   if (typeof value !== "string" || value.length === 0 || value.trim() !== value) return undefined
@@ -116,16 +144,9 @@ function responseIsValid(response: unknown): response is Response {
   )
 }
 
-function apiResponseParse<TSchema extends a.BaseSchema<unknown, unknown, a.BaseIssue<unknown>>>(
-  body: unknown,
-  schema: TSchema,
-): Result<a.InferOutput<TSchema>> {
+function envelopeIsSuccessful(body: unknown): boolean {
   const envelopeR = a.safeParse(apiEnvelopeSchema, body)
-  if (!envelopeR.success || !envelopeR.output.success)
-    return createResultError("cloudflareDnsReconcile", "Cloudflare API response was invalid")
-  const parsedR = a.safeParse(schema, body)
-  if (!parsedR.success) return createResultError("cloudflareDnsReconcile", "Cloudflare API response was invalid")
-  return createResult(parsedR.output)
+  return envelopeR.success && envelopeR.output.success === true
 }
 
 export async function cloudflareDnsReconcile(
@@ -185,10 +206,15 @@ export async function cloudflareDnsReconcile(
     controller.abort()
   }, timeoutMs)
 
-  async function request(path: string, init: RequestInit): Promise<Result<RequestResponse>> {
+  async function request(
+    path: string,
+    init: RequestInit,
+    operation: CloudflareDnsOperation,
+  ): Promise<Result<RequestResponse>> {
     if (controller.signal.aborted) {
-      return createResultError(
+      return dnsFailureCreate(
         op,
+        operation,
         timedOut ? "Cloudflare DNS reconciliation timed out" : "Cloudflare DNS reconciliation cancelled",
       )
     }
@@ -197,11 +223,12 @@ export async function cloudflareDnsReconcile(
       .then(async (response): Promise<RequestResponse> => {
         if (!responseIsValid(response)) throw new Error("invalid response")
         const text = await response.text()
+        if (text.trim() === "") return { status: response.status, body: undefined }
         let body: unknown
         try {
           body = JSON.parse(text)
         } catch {
-          throw new Error("invalid JSON")
+          return { status: response.status, body: undefined }
         }
         return { status: response.status, body }
       })
@@ -219,17 +246,36 @@ export async function cloudflareDnsReconcile(
     try {
       const response = await Promise.race([requestPromise, cancellationPromise])
       if (response === requestCancellation) {
-        return createResultError(
+        return dnsFailureCreate(
           op,
+          operation,
           timedOut ? "Cloudflare DNS reconciliation timed out" : "Cloudflare DNS reconciliation cancelled",
         )
       }
       return createResult(response)
     } catch {
-      return createResultError(op, "Cloudflare DNS request failed")
+      return dnsFailureCreate(op, operation, "Cloudflare DNS request failed")
     } finally {
       cancellationCleanup()
     }
+  }
+
+  function httpErrorFor(operation: CloudflareDnsOperation, status: number, body: unknown): ResultErr {
+    return dnsFailureCreate(op, operation, dnsHttpMessageFor(status), status, body)
+  }
+
+  function envelopeErrorFor(operation: CloudflareDnsOperation, status: number, body: unknown): ResultErr {
+    return dnsFailureCreate(
+      op,
+      operation,
+      `Cloudflare API reported an error during ${operationLabels[operation]}`,
+      status,
+      body,
+    )
+  }
+
+  function invalidResponseErrorFor(operation: CloudflareDnsOperation, status: number): ResultErr {
+    return dnsFailureCreate(op, operation, "Cloudflare API response was invalid", status)
   }
 
   const headers = {
@@ -240,74 +286,80 @@ export async function cloudflareDnsReconcile(
 
   try {
     let zone: Zone | undefined
+    let zoneLookupStatus: number | undefined
     for (const candidate of candidateZoneNames(hostname)) {
       const zoneUrl = new URL(`${apiBase.origin}${apiBase.pathname}/zones`)
       zoneUrl.searchParams.set("name", candidate)
       zoneUrl.searchParams.set("per_page", "50")
-      const responseR = await request(`/zones${zoneUrl.search}`, { method: "GET", headers })
+      const responseR = await request(`/zones${zoneUrl.search}`, { method: "GET", headers }, "zone-lookup")
       if (!responseR.success) return responseR
+      zoneLookupStatus = responseR.data.status
       if (responseR.data.status < 200 || responseR.data.status >= 300) {
-        return createResultError(op, `Cloudflare DNS request failed (status ${responseR.data.status})`)
+        return httpErrorFor("zone-lookup", responseR.data.status, responseR.data.body)
       }
-      const parsedR = apiResponseParse(responseR.data.body, zoneResponseSchema)
-      if (!parsedR.success) return parsedR
-      const zones = parsedR.data.result
+      if (!envelopeIsSuccessful(responseR.data.body)) {
+        return envelopeErrorFor("zone-lookup", responseR.data.status, responseR.data.body)
+      }
+      const parsedR = a.safeParse(zoneResponseSchema, responseR.data.body)
+      if (!parsedR.success) return invalidResponseErrorFor("zone-lookup", responseR.data.status)
+      const zones = parsedR.output.result
         .filter((entry) => hostnameNormalize(entry.name) === candidate)
         .map((entry) => ({ id: entry.id, name: hostnameNormalize(entry.name) ?? entry.name }))
-      if (zones.length > 1) return createResultError(op, `Cloudflare DNS zone lookup is ambiguous for ${candidate}`)
+      if (zones.length > 1)
+        return dnsFailureCreate(
+          op,
+          "zone-lookup",
+          `Cloudflare DNS zone lookup is ambiguous for ${candidate}`,
+          responseR.data.status,
+        )
       zone = zones[0]
       if (zone !== undefined) break
     }
-    if (zone === undefined) return createResultError(op, `No accessible Cloudflare DNS zone matches ${hostname}`)
-
-    const emailObfuscationResponseR = await request(
-      `/zones/${encodeURIComponent(zone.id)}/settings/email_obfuscation`,
-      { method: "PATCH", headers, body: JSON.stringify({ value: "off" }) },
-    )
-    if (!emailObfuscationResponseR.success) return emailObfuscationResponseR
-    if (emailObfuscationResponseR.data.status < 200 || emailObfuscationResponseR.data.status >= 300) {
-      return createResultError(op, `Cloudflare DNS request failed (status ${emailObfuscationResponseR.data.status})`)
-    }
-    const emailObfuscationParsedR = apiResponseParse(
-      emailObfuscationResponseR.data.body,
-      emailObfuscationResponseSchema,
-    )
-    if (!emailObfuscationParsedR.success) return emailObfuscationParsedR
-
-    const zarazR = await cloudflareZarazAutoInjectDisable({
-      zoneId: zone.id,
-      request: async (path, init) => {
-        const zarazResponseR = await request(path, { method: init.method ?? "GET", headers, body: init.body })
-        if (!zarazResponseR.success) return zarazResponseR
-        return createResult(zarazResponseR.data)
-      },
-    })
-    if (!zarazR.success) return zarazR
+    if (zone === undefined)
+      return dnsFailureCreate(
+        op,
+        "zone-lookup",
+        `No accessible Cloudflare DNS zone matches ${hostname}`,
+        zoneLookupStatus,
+      )
 
     const recordsUrl = new URL(`${apiBase.origin}${apiBase.pathname}/zones/${encodeURIComponent(zone.id)}/dns_records`)
     recordsUrl.searchParams.set("name", hostname)
     recordsUrl.searchParams.set("per_page", "1000")
-    const recordsResponseR = await request(`/zones/${encodeURIComponent(zone.id)}/dns_records${recordsUrl.search}`, {
-      method: "GET",
-      headers,
-    })
+    const recordsResponseR = await request(
+      `/zones/${encodeURIComponent(zone.id)}/dns_records${recordsUrl.search}`,
+      {
+        method: "GET",
+        headers,
+      },
+      "record-list",
+    )
     if (!recordsResponseR.success) return recordsResponseR
     if (recordsResponseR.data.status < 200 || recordsResponseR.data.status >= 300) {
-      return createResultError(op, `Cloudflare DNS request failed (status ${recordsResponseR.data.status})`)
+      return httpErrorFor("record-list", recordsResponseR.data.status, recordsResponseR.data.body)
     }
-    const recordsParsedR = apiResponseParse(recordsResponseR.data.body, recordListResponseSchema)
-    if (!recordsParsedR.success) return recordsParsedR
-    const exactRecords = recordsParsedR.data.result.filter((record) => hostnameNormalize(record.name) === hostname)
+    if (!envelopeIsSuccessful(recordsResponseR.data.body)) {
+      return envelopeErrorFor("record-list", recordsResponseR.data.status, recordsResponseR.data.body)
+    }
+    const recordsParsedR = a.safeParse(recordListResponseSchema, recordsResponseR.data.body)
+    if (!recordsParsedR.success) return invalidResponseErrorFor("record-list", recordsResponseR.data.status)
+    const exactRecords = recordsParsedR.output.result.filter((record) => hostnameNormalize(record.name) === hostname)
     const cnameRecords = exactRecords.filter((record) => record.type.toUpperCase() === "CNAME")
     if (cnameRecords.length > 0) {
-      return createResultError(op, `Cloudflare DNS record ${hostname} has an incompatible CNAME`, `cname:${hostname}`)
+      return dnsFailureCreate(
+        op,
+        "record-list",
+        `Cloudflare DNS record ${hostname} has an incompatible CNAME`,
+        recordsResponseR.data.status,
+      )
     }
     const matchingRecords = exactRecords.filter((record) => record.type.toUpperCase() === recordType)
     if (matchingRecords.length > 1) {
-      return createResultError(
+      return dnsFailureCreate(
         op,
+        "record-list",
         `Cloudflare DNS record ${hostname} has ambiguous ${recordType} records`,
-        `multiple:${hostname}:${recordType}`,
+        recordsResponseR.data.status,
       )
     }
 
@@ -328,43 +380,67 @@ export async function cloudflareDnsReconcile(
         return createResult({ action: "skipped", zone, record: currentRecord })
       }
       const updatePath = `/zones/${encodeURIComponent(zone.id)}/dns_records/${encodeURIComponent(currentRecord.id)}`
-      const updateResponseR = await request(updatePath, {
-        method: "PUT",
-        headers,
-        body: JSON.stringify(desiredRecord),
-      })
+      const updateResponseR = await request(
+        updatePath,
+        {
+          method: "PUT",
+          headers,
+          body: JSON.stringify(desiredRecord),
+        },
+        "record-update",
+      )
       if (!updateResponseR.success) return updateResponseR
       if (updateResponseR.data.status < 200 || updateResponseR.data.status >= 300) {
-        return createResultError(op, `Cloudflare DNS request failed (status ${updateResponseR.data.status})`)
+        return httpErrorFor("record-update", updateResponseR.data.status, updateResponseR.data.body)
       }
-      const updatedParsedR = apiResponseParse(updateResponseR.data.body, recordResponseSchema)
-      if (!updatedParsedR.success) return updatedParsedR
-      const updatedRecord = updatedParsedR.data.result as CloudflareDnsRecord
+      if (!envelopeIsSuccessful(updateResponseR.data.body)) {
+        return envelopeErrorFor("record-update", updateResponseR.data.status, updateResponseR.data.body)
+      }
+      const updatedParsedR = a.safeParse(recordResponseSchema, updateResponseR.data.body)
+      if (!updatedParsedR.success) return invalidResponseErrorFor("record-update", updateResponseR.data.status)
+      const updatedRecord = updatedParsedR.output.result as CloudflareDnsRecord
       if (!mutationRecordIsExpected(updatedRecord, hostname, recordType, options.address, currentRecord.id)) {
-        return createResultError(op, "Cloudflare DNS update response was invalid")
+        return dnsFailureCreate(
+          op,
+          "record-update",
+          "Cloudflare DNS update response was invalid",
+          updateResponseR.data.status,
+        )
       }
       return createResult({ action: "updated", zone, record: updatedRecord })
     }
 
     const createUrl = `/zones/${encodeURIComponent(zone.id)}/dns_records`
-    const createResponseR = await request(createUrl, {
-      method: "POST",
-      headers,
-      body: JSON.stringify(desiredRecord),
-    })
+    const createResponseR = await request(
+      createUrl,
+      {
+        method: "POST",
+        headers,
+        body: JSON.stringify(desiredRecord),
+      },
+      "record-create",
+    )
     if (!createResponseR.success) return createResponseR
     if (createResponseR.data.status < 200 || createResponseR.data.status >= 300) {
-      return createResultError(op, `Cloudflare DNS request failed (status ${createResponseR.data.status})`)
+      return httpErrorFor("record-create", createResponseR.data.status, createResponseR.data.body)
     }
-    const createdParsedR = apiResponseParse(createResponseR.data.body, recordResponseSchema)
-    if (!createdParsedR.success) return createdParsedR
-    const createdRecord = createdParsedR.data.result as CloudflareDnsRecord
+    if (!envelopeIsSuccessful(createResponseR.data.body)) {
+      return envelopeErrorFor("record-create", createResponseR.data.status, createResponseR.data.body)
+    }
+    const createdParsedR = a.safeParse(recordResponseSchema, createResponseR.data.body)
+    if (!createdParsedR.success) return invalidResponseErrorFor("record-create", createResponseR.data.status)
+    const createdRecord = createdParsedR.output.result as CloudflareDnsRecord
     if (!mutationRecordIsExpected(createdRecord, hostname, recordType, options.address)) {
-      return createResultError(op, "Cloudflare DNS create response was invalid")
+      return dnsFailureCreate(
+        op,
+        "record-create",
+        "Cloudflare DNS create response was invalid",
+        createResponseR.data.status,
+      )
     }
     return createResult({ action: "created", zone, record: createdRecord })
   } catch {
-    return createResultError(op, "Cloudflare DNS request failed")
+    return dnsFailureCreate(op, "request", "Cloudflare DNS request failed")
   } finally {
     globalThis.clearTimeout(timeoutHandle)
     options.signal?.removeEventListener("abort", onExternalAbort)

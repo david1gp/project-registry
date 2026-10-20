@@ -859,6 +859,198 @@ describe("projectRegistryApiHandlerCreate", () => {
     expect(version.body).toEqual({ success: true, data: { version: pkg.version } })
   })
 
+  test("adds Cloudflare DNS status alongside Caddy status without changing the envelope", async () => {
+    const cloudflareDns = {
+      enabled: true,
+      pendingProjects: 1,
+      pendingDeletions: 2,
+      trackingBlocked: false,
+      lastSuccess: 1_700_000_000_000,
+      errors: [
+        {
+          owner: "leo",
+          project: "opencode",
+          hostname: "opencode.example",
+          operation: "reconcile",
+          errorMessage: "Cloudflare DNS request failed",
+          attempts: 2,
+          occurredAt: 1_700_000_000_000,
+          nextRetryAt: 1_700_000_060_000,
+          statusCode: 503,
+          cloudflareCode: 10000,
+        },
+      ],
+    }
+    const handler = projectRegistryApiHandlerCreate({
+      repository: repositoryCreate(),
+      caddyApplication: caddyApplicationCreate(),
+      cloudflareDnsStatus: () => cloudflareDns,
+    })
+    const leo = { transport: "unix", username: "leo" } as const
+
+    const status = await requestJson(handler, "/api/v1/caddy/status", leo)
+
+    expect(status.response.status).toBe(200)
+    expect(status.body).toEqual({
+      success: true,
+      data: {
+        desiredRevision: revision,
+        appliedRevision: revision,
+        pending: false,
+        lastSuccess: 42,
+        cloudflareDns,
+      },
+    })
+  })
+
+  test("scopes DNS diagnostics to the authenticated owner without hiding global tracking failures", async () => {
+    const common = { operation: "record-create", attempts: 1, occurredAt: 42 }
+    const ownError = { ...common, owner: "leo", project: "opencode", errorMessage: "DNS permission denied" }
+    const globalError = { ...common, operation: "tracking", errorMessage: "tracking-read-failed" }
+    const errors = [
+      ownError,
+      { ...common, owner: "david", project: "private-project", hostname: "private.example", errorMessage: "hidden" },
+      { ...common, recordId: "unknown-owner-record", errorMessage: "hidden" },
+      globalError,
+    ]
+    const handler = projectRegistryApiHandlerCreate({
+      repository: repositoryCreate(),
+      caddyApplication: caddyApplicationCreate(),
+      cloudflareDnsStatus: () => ({
+        enabled: true,
+        pendingProjects: 2,
+        pendingDeletions: 1,
+        trackingBlocked: true,
+        errors,
+      }),
+    })
+
+    const status = await requestJson(handler, "/api/v1/caddy/status", { transport: "unix", username: "leo" })
+
+    expect(status.response.status).toBe(200)
+    expect(status.body).toMatchObject({
+      data: { cloudflareDns: { pendingProjects: 2, pendingDeletions: 1, errors: [ownError, globalError] } },
+    })
+    expect(JSON.stringify(status.body)).not.toContain("private-project")
+    expect(JSON.stringify(status.body)).not.toContain("private.example")
+    expect(JSON.stringify(status.body)).not.toContain("unknown-owner-record")
+    expect(errors).toHaveLength(4)
+  })
+
+  test("uses the authenticated HTTP actor rather than a missing socket username for DNS diagnostic ownership", async () => {
+    const own = {
+      owner: "leo",
+      project: "app",
+      operation: "reconcile",
+      errorMessage: "permission denied",
+      attempts: 1,
+      occurredAt: 42,
+    }
+    const handler = projectRegistryApiHandlerCreate({
+      repository: repositoryCreate(),
+      caddyApplication: caddyApplicationCreate(),
+      cloudflareDnsStatus: () => ({
+        enabled: true,
+        pendingProjects: 1,
+        pendingDeletions: 0,
+        trackingBlocked: false,
+        errors: [own, { ...own, owner: "david", hostname: "private.example" }],
+      }),
+    })
+    const result = await requestJson(handler, "/api/v1/caddy/status", {
+      transport: "http",
+      access: socketAccessCreate("leo", "own", {}),
+    })
+    expect(result.response.status).toBe(200)
+    expect(result.body).toMatchObject({ data: { cloudflareDns: { errors: [own] } } })
+    expect(JSON.stringify(result.body)).not.toContain("private.example")
+  })
+
+  test("omits Cloudflare DNS status when the queue is unavailable and keeps Caddy health", async () => {
+    const withoutAccessor = projectRegistryApiHandlerCreate({
+      repository: repositoryCreate(),
+      caddyApplication: caddyApplicationCreate(),
+    })
+    const throwingAccessor = projectRegistryApiHandlerCreate({
+      repository: repositoryCreate(),
+      caddyApplication: caddyApplicationCreate(),
+      cloudflareDnsStatus: () => {
+        throw new Error("DNS queue unavailable")
+      },
+    })
+    const leo = { transport: "unix", username: "leo" } as const
+
+    const missing = await requestJson(withoutAccessor, "/api/v1/caddy/status", leo)
+    expect(missing.response.status).toBe(200)
+    expect(missing.body).toEqual({
+      success: true,
+      data: { desiredRevision: revision, appliedRevision: revision, pending: false, lastSuccess: 42 },
+    })
+    expect("cloudflareDns" in (missing.body.data as Record<string, unknown>)).toBe(false)
+
+    const degraded = await requestJson(throwingAccessor, "/api/v1/caddy/status", leo)
+    expect(degraded.response.status).toBe(200)
+    expect(degraded.body).toEqual(missing.body)
+  })
+
+  test("serves Caddy and DNS status without depending on repository readiness", async () => {
+    const repository = repositoryCreate()
+    repository.readiness = async () => createResultError("projectRepositoryReadiness", "repository is unavailable")
+    const handler = projectRegistryApiHandlerCreate({
+      repository,
+      caddyApplication: caddyApplicationCreate(),
+      cloudflareDnsStatus: () => ({
+        enabled: true,
+        pendingProjects: 0,
+        pendingDeletions: 0,
+        trackingBlocked: false,
+        errors: [],
+      }),
+    })
+    const leo = { transport: "unix", username: "leo" } as const
+
+    const status = await requestJson(handler, "/api/v1/caddy/status", leo)
+
+    expect(status.response.status).toBe(200)
+    expect(status.body).toMatchObject({
+      success: true,
+      data: {
+        desiredRevision: revision,
+        cloudflareDns: { enabled: true, pendingProjects: 0, pendingDeletions: 0, trackingBlocked: false },
+      },
+    })
+  })
+
+  test("returns a safe Caddy status error when the status read fails", async () => {
+    const application = caddyApplicationCreate()
+    const handler = projectRegistryApiHandlerCreate({
+      repository: repositoryCreate(),
+      caddyApplication: {
+        projectChange: application.projectChange,
+        regenerate: application.regenerate,
+        status: () => {
+          throw new Error("Caddy status unavailable")
+        },
+      },
+    })
+    const leo = { transport: "unix", username: "leo" } as const
+
+    const status = await requestJson(handler, "/api/v1/caddy/status", leo)
+
+    expect(status.response.status).toBe(500)
+    expect(status.body).toEqual({
+      success: false,
+      error: {
+        code: "platform.internal",
+        message: "Caddy status is unavailable.",
+        op: "projectRegistryApiCaddyStatus",
+        status: 500,
+        retryable: false,
+        details: {},
+      },
+    })
+  })
+
   test("keeps legacy read aliases usable while scoping all data to the socket owner", async () => {
     const repository = repositoryCreate()
     const handler = projectRegistryApiHandlerCreate({ repository, caddyApplication: caddyApplicationCreate() })

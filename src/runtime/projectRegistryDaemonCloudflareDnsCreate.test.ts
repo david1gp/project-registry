@@ -480,10 +480,40 @@ describe("projectRegistryDaemonCloudflareDnsCreate", () => {
     await settle()
     expect(fetches).toBeGreaterThan(0)
     expect(logs).toContain(
-      "cloudflare DNS reconciliation outcome=failure hostname=app.example.com reason=Cloudflare DNS request failed",
+      "cloudflare DNS reconciliation outcome=failure owner=leo project=dns-app hostname=app.example.com operation=zone-lookup attempt=1 nextRetryMs=2000 status=503 reason=Cloudflare_DNS_request_failed_(status_503)",
     )
     expect(logs.some((message) => message.includes("secret-token"))).toBe(false)
     await expect(queueR.data.shutdown()).resolves.toMatchObject({ success: true })
+  })
+
+  test("invalid diagnostic state fails closed and a throwing logger cannot stop queue shutdown", async () => {
+    const timer = timerCreate()
+    let now = 0
+    const queue = projectRegistryDaemonCloudflareDnsCreate({
+      enabled: true,
+      credentialResolve: async () => createResult("token"),
+      timeoutMs: 1000,
+      serverIpCurrent: () => {
+        now = Number.NaN
+        return undefined
+      },
+      timer: timer.timer,
+      clock: () => now,
+      logger: () => {
+        throw new Error("secret-token")
+      },
+    })
+    if (!queue.success) throw new Error("queue setup failed")
+    queue.data.start()
+    queue.data.projectCreateAfterPersistence(project(["app.example.com"]), { noDns: false })
+    await settle()
+    expect(queue.data.status()).toMatchObject({
+      pendingProjects: 1,
+      trackingBlocked: true,
+      errors: [{ operation: "status", errorMessage: "DNS status unavailable" }],
+    })
+    expect(JSON.stringify(queue.data.status())).not.toContain("secret-token")
+    expect((await queue.data.shutdown()).success).toBe(true)
   })
 
   test("cancels an in-flight remote request during shutdown", async () => {
