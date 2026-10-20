@@ -11,9 +11,10 @@ Automatically create or update Cloudflare DNS records from project lifecycle cha
 - DNS runs after successful persistence, without blocking entry creation. Queue work while initial IP discovery is pending.
 - Create missing records, update matching records, skip identical records, and report incompatible record conflicts. Managed A/AAAA records are DNS-only (`proxied: false`); existing proxied records are updated to DNS-only during reconciliation.
 - Use existing dependencies and native fetch. Parse owner credential files without executing them, and never log credentials.
-- Persist managed record identities daemon-locally; edits remove tracked removed domains and deletes remove tracked records.
-- After resolving the Cloudflare zone and before DNS record reconciliation, disable email obfuscation for that zone via `PATCH /zones/{zone_id}/settings/email_obfuscation` with `{"value":"off"}`; a settings failure surfaces as a reconciliation failure without DNS changes. Owner API tokens need the Zone Settings edit permission for this write.
-- After email obfuscation and before DNS record reconciliation, enforce Zaraz `settings.autoInjectScript: false` through the documented configuration API: `GET /zones/{zone_id}/settings/zaraz/workflow` must return `realtime` (any `preview` value fails without writes, never publishing a draft or changing workflow mode), then `GET /zones/{zone_id}/settings/zaraz/config`, then a full-configuration `PUT /zones/{zone_id}/settings/zaraz/config` with every received field preserved and only `settings.autoInjectScript` changed to `false`, then a `GET` read-back that must show `false`. When the config `variables` map is non-empty, first `GET /zones/{zone_id}/settings/zaraz/export` (the documented secret-inclusive source) and write from that complete body; fail without writes when secret values are missing. An already-`false` config makes no writes. Any Zaraz failure surfaces as a reconciliation failure without DNS changes. Owner API tokens need Zaraz Read plus Zaraz Edit (or Zaraz Admin) alongside the Zone Settings edit permission.
+- Persist managed record identities daemon-locally. On edits, reconcile and persist all replacement public records before removing obsolete tracked records; partial failure retains old records for retry and restart recovery. Project deletion and edits with no remaining public domains may retire records without server-IP discovery.
+- DNS reconciliation is DNS-only: resolve the zone, read records, and create/update the desired A/AAAA record. Tokens need Zone Read and DNS Edit for the intended zones, not Zone Settings or Zaraz permissions. Email obfuscation and Zaraz configuration are separate administrator concerns and are no longer changed automatically by the DNS client.
+- Expose DNS operational state additively as `cloudflareDns` in `GET /api/v1/caddy/status` and in `project-registry status` (including JSON), without coupling daemon readiness to Cloudflare. Registry mutation success is explicitly distinguished from asynchronous DNS success.
+- Log structured operation/outcome, project and hostname context, retry information, and HTTP status/numeric Cloudflare error code when available. Never retain upstream error messages or raw bodies, tokens, authorization headers, credential contents, or Zaraz variable values. Log state transitions rather than unchanged-success scan noise.
 
 Owner credential files use `CLOUDFLARE_API_TOKEN` or its `CF_API_TOKEN` alias. The preferred name wins when both are
 present. Missing credentials defer create, edit, reconciliation, and deletion work for retry; pending deletions retain
@@ -70,11 +71,10 @@ users should use the authenticated CLI or API. The default filesystem adapter is
   path (single-owner scheduling, owner credential, retry). It is never silently released like an
   external-service or `pages.dev` transition, and never left behind without deletion.
 - The same normalized hostname claimed public by one entry/project and private by another is a conflict.
-  The plan rejects it, the daemon logs
-  `cloudflare DNS reconciliation outcome=failure reason=conflicting-public-private-claims` without any
+  The plan rejects it, the daemon reports a `conflicting-public-private-claims` DNS failure without any
   DNS writes, and retries with backoff until the claims agree. Ambiguous multi-owner tracked records keep
-  the existing deferral: no deletion without a single recorded owner, missing credentials defer and retry,
-  and tracking-restart orphan handling is unchanged.
+  the existing deferral: no deletion without a single recorded owner, and missing credentials defer and retry.
+  Restart recovery must preserve old records until the surviving project's replacement public records succeed.
 - Untracked records stay explicit infrastructure cleanup: the daemon never auto-deletes a record it did
   not track. Project and documentation URL generation is unchanged.
 

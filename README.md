@@ -99,10 +99,44 @@ global `CLOUDFLARE_API_TOKEN` or `CF_API_TOKEN` environment variable is not used
 Set `PROJECT_REGISTRY_CLOUDFLARE_DNS_ENABLED=false` to disable DNS reconciliation explicitly. The default is enabled,
 but no DNS request is made until the relevant owner's credential is available.
 
-Before reconciling records, the daemon disables email obfuscation for the resolved zone
-(`PATCH /zones/{zone_id}/settings/email_obfuscation` with `{"value":"off"}`), so owner tokens additionally require the
-Zone Settings edit permission alongside DNS edit access. Zaraz automatic-injection enforcement also requires Zaraz Edit
-or Zaraz Admin (both include Zaraz Read); no separate account-wide Zaraz permission is needed.
+DNS reconciliation only reads zones and manages DNS records. Owner tokens need Zone Read and DNS Edit access for
+the intended zones; Zone Settings and Zaraz permissions are not required. Reconciliation no longer changes email
+obfuscation or Zaraz configuration. Configure those unrelated zone settings separately if needed.
+
+### DNS health and diagnostics
+
+Project creation, editing, and deletion save the registry first and reconcile DNS asynchronously. A successful
+mutation means the registry was saved, not that Cloudflare accepted the DNS changes. Check both Caddy and DNS with:
+
+```bash
+project-registry status
+project-registry status --json
+```
+
+Status includes DNS queue counts and current failures or deferrals, including unavailable owner credentials, pending
+server-IP discovery, tracking failures, and Cloudflare errors. JSON adds a `cloudflareDns` field to the existing Caddy
+status data. Queue counts are daemon-wide; project/record diagnostics are scoped to the authenticated owner, while
+global tracking failures remain visible. Older daemons that omit DNS status must not be interpreted as reporting healthy
+DNS. DNS status is in-memory operational state; it is rebuilt on restart rather than being a durable audit history.
+
+On an edit, the daemon reconciles and durably tracks all replacement public records before deleting the project's
+obsolete tracked records. Failed or partial replacement creation retains the old records for retry, including after a
+restart. A project deletion or removal of all public domains can still retire records without needing a server IP.
+Only previously tracked records are eligible for verified deletion; external services and `pages.dev` remain protected.
+
+Daemon logs use the `cloudflare DNS` prefix and include structured operation/outcome and project/hostname context,
+with retry information and HTTP status/Cloudflare numeric error codes when available. Success/recovery transitions
+are logged without repeating unchanged DNS successes every scan. Logs and status never include tokens, authorization
+headers, raw Cloudflare response bodies/messages, or credential-file contents. With administrator log access:
+
+```bash
+sudo journalctl -u project-registryd.service --since '30 minutes ago' --no-pager \\
+  | grep 'cloudflare DNS'
+```
+
+For authentication/permission failures, update the affected owner's token and verify its zone scope. For rate limits
+or temporary Cloudflare failures, inspect the retry information rather than repeatedly editing the registry. A failed
+tracking read/write requires fixing the daemon's tracking storage before safe reconciliation can resume.
 
 ### Updating an owner token
 
