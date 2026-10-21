@@ -751,6 +751,84 @@ describe("project use cases", () => {
     })
   })
 
+  test("defaults new leo and david routes to private while other owners stay public", async () => {
+    const access = accessCreate(
+      { subject: "admin-subject", username: "admin", role: "admin" },
+      { leo: "admin", david: "admin", fabian: "admin", musa: "admin" },
+    )
+
+    for (const owner of ["leo", "david"]) {
+      const repository = repositoryCreate()
+      const result = await projectCreate(
+        useCaseOptions(repository, access, { from: 3400, to: 3499 }),
+        { owner, name: "fresh", caddy: { domains: ["fresh.example"] } },
+        { expectedRevision: currentRevision },
+      )
+      expect(result.success).toBe(true)
+      expect(repository.calls.create[0]?.project).toMatchObject({
+        services: [{ id: "default", caddy: { networkVisibility: "private" } }],
+      })
+    }
+
+    for (const owner of ["fabian", "musa"]) {
+      const repository = repositoryCreate()
+      const result = await projectCreate(
+        useCaseOptions(repository, access, { from: 3500, to: 3599 }),
+        { owner, name: "fresh", caddy: { domains: ["fresh.example"] } },
+        { expectedRevision: currentRevision },
+      )
+      expect(result.success).toBe(true)
+      const services = (repository.calls.create[0]?.project as { services: { caddy: { networkVisibility?: string } }[] })
+        .services
+      expect(services[0]?.caddy.networkVisibility).toBeUndefined()
+    }
+
+    const explicitRepository = repositoryCreate()
+    const explicitResult = await projectCreate(
+      useCaseOptions(explicitRepository, access, { from: 3600, to: 3699 }),
+      { owner: "leo", name: "open", caddy: { domains: ["open.example"], networkVisibility: "public" } },
+      { expectedRevision: currentRevision },
+    )
+    expect(explicitResult.success).toBe(true)
+    expect(explicitRepository.calls.create[0]?.project).toMatchObject({
+      services: [{ id: "default", caddy: { networkVisibility: "public" } }],
+    })
+  })
+
+  test("defaults only newly added leo services to private on edit", async () => {
+    const canonical = projectMigrate({
+      schemaVersion: 2,
+      owner: "leo",
+      name: "catalog",
+      services: [{ id: "web", units: [], caddy: { port: 3700, domains: ["web.example"] } }],
+    })
+    if (!canonical.success) return
+    const repository = repositoryCreate([canonical.data])
+    const access = accessCreate({ subject: "admin-subject", username: "admin", role: "admin" }, { leo: "admin" })
+
+    const result = await projectEdit(
+      useCaseOptions(repository, access, { from: 3700, to: 3701 }),
+      { owner: "leo", name: "catalog" },
+      {
+        schemaVersion: 2,
+        services: [{ id: "worker", units: [], ownership: "registry", caddy: { domains: ["worker.example"] } }],
+      },
+      { expectedRevision: currentRevision },
+    )
+
+    expect(result.success).toBe(true)
+    expect(repository.calls.edit[0]?.project).toMatchObject({
+      services: [
+        { id: "web", caddy: { domains: ["web.example"] } },
+        { id: "worker", caddy: { networkVisibility: "private", domains: ["worker.example"] } },
+      ],
+    })
+    const webCaddy = (
+      repository.calls.edit[0]?.project as { services: { id: string; caddy: { networkVisibility?: string } }[] }
+    ).services.find((service) => service.id === "web")?.caddy
+    expect(webCaddy?.networkVisibility).toBeUndefined()
+  })
+
   test("returns successful gets and preserves repository get failures", async () => {
     const projectValue = project("alice", "catalog")
     const repository = repositoryCreate([projectValue])

@@ -5,7 +5,31 @@ import type { ProjectMutationOptions } from "./ProjectMutationOptions.js"
 import type { ProjectUseCaseOptions } from "./ProjectUseCaseOptions.js"
 import { projectCanonicalNormalize } from "./projectCanonicalNormalize.js"
 import { projectMutationExpectedRevision } from "./projectMutationExpectedRevision.js"
+import { projectNetworkVisibilityDefault } from "./projectNetworkVisibilityDefault.js"
 import { projectOwnerAuthorize } from "./projectOwnerAuthorize.js"
+
+function projectCreateVisibilityDefaultApply(input: unknown, owner: string): unknown {
+  if (projectNetworkVisibilityDefault(owner) !== "private") return input
+  if (!input || typeof input !== "object" || Array.isArray(input)) return input
+  const record = input as Record<string, unknown>
+  if (Array.isArray(record.services)) {
+    const services = record.services.map((service) => {
+      if (!service || typeof service !== "object" || Array.isArray(service)) return service
+      const serviceRecord = service as Record<string, unknown>
+      const caddy = serviceRecord.caddy
+      if (!caddy || typeof caddy !== "object" || Array.isArray(caddy)) return service
+      const caddyRecord = caddy as Record<string, unknown>
+      if (caddyRecord.networkVisibility !== undefined) return service
+      return { ...serviceRecord, caddy: { ...caddyRecord, networkVisibility: "private" } }
+    })
+    return { ...record, services }
+  }
+  const caddy = record.caddy
+  if (!caddy || typeof caddy !== "object" || Array.isArray(caddy)) return input
+  const caddyRecord = caddy as Record<string, unknown>
+  if (caddyRecord.networkVisibility !== undefined) return input
+  return { ...record, caddy: { ...caddyRecord, networkVisibility: "private" } }
+}
 
 function projectInputOwner(input: unknown): string | undefined {
   if (!input || typeof input !== "object" || Array.isArray(input)) return undefined
@@ -72,7 +96,7 @@ export async function projectCreate(
   const defaultDomainR = await projectCreateDefaultDomain(options, owner, input)
   if (!defaultDomainR.success) return defaultDomainR
 
-  const projectR = projectCanonicalNormalize(input, {
+  const projectR = projectCanonicalNormalize(projectCreateVisibilityDefaultApply(input, owner), {
     projects: snapshotR.data.projects,
     portRange: options.portRange,
     defaultUserDomains: options.defaultUserDomains,

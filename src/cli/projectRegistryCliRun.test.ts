@@ -726,6 +726,7 @@ describe("projectRegistryCliRun", () => {
             path: process.cwd(),
             docs: false,
             headerUp: { Host: "localhost" },
+            networkVisibility: "private",
           },
           labels: { team: "platform" },
         },
@@ -764,7 +765,12 @@ describe("projectRegistryCliRun", () => {
             id: "api",
             units: [],
             ownership: "external",
-            caddy: { domains: ["api.example"], docs: false, path: process.cwd() },
+            caddy: {
+              domains: ["api.example"],
+              docs: false,
+              path: process.cwd(),
+              networkVisibility: "private",
+            },
           },
         ],
       },
@@ -905,7 +911,7 @@ describe("projectRegistryCliRun", () => {
       body: {
         expectedRevision: "current-revision",
         name: "site",
-        caddy: { docs: false, path: process.cwd() },
+        caddy: { docs: false, path: process.cwd(), networkVisibility: "private" },
         noDns: true,
       },
     })
@@ -1294,13 +1300,55 @@ describe("projectRegistryCliRun", () => {
         body: {
           expectedRevision: "current",
           name: basename(process.cwd()),
-          caddy: { docs: false, path: process.cwd() },
+          caddy: { docs: false, path: process.cwd(), networkVisibility: "private" },
         },
       },
     ])
     expect(stdout.join("")).toBe(
       "created david/site\nRegistry saved; DNS changes, when enabled, run asynchronously. Use project-registry status to check DNS.\n",
     )
+  })
+
+  test("defaults project create visibility by owner without overriding explicit flags", async () => {
+    const bodies: Array<{ user: string; body?: unknown }> = []
+    for (const user of ["fabian", "leo"]) {
+      const exitCode = await projectRegistryCliRun(["project", "create", "--name", "site"], {
+        environment: { USER: user },
+        requestFetch: async (_input, init) => {
+          if (init?.method === "POST") {
+            bodies.push({ user, body: typeof init.body === "string" ? JSON.parse(init.body) : undefined })
+            return Response.json({ success: true, data: mutation("create") }, { status: 201 })
+          }
+          return Response.json({ success: true, data: { projects: [], revision: "current" } })
+        },
+        stdout: () => {},
+      })
+      expect(exitCode).toBe(0)
+    }
+    expect(bodies).toEqual([
+      { user: "fabian", body: expect.objectContaining({ caddy: expect.objectContaining({ networkVisibility: "public" }) }) },
+      { user: "leo", body: expect.objectContaining({ caddy: expect.objectContaining({ networkVisibility: "private" }) }) },
+    ])
+
+    const explicitBodies: unknown[] = []
+    const explicitExit = await projectRegistryCliRun(
+      ["project", "create", "--name", "site", "--network-visibility", "public"],
+      {
+        environment: { USER: "david" },
+        requestFetch: async (_input, init) => {
+          if (init?.method === "POST") {
+            explicitBodies.push(typeof init.body === "string" ? JSON.parse(init.body) : undefined)
+            return Response.json({ success: true, data: mutation("create") }, { status: 201 })
+          }
+          return Response.json({ success: true, data: { projects: [], revision: "current" } })
+        },
+        stdout: () => {},
+      },
+    )
+    expect(explicitExit).toBe(0)
+    expect(explicitBodies).toEqual([
+      expect.objectContaining({ caddy: expect.objectContaining({ networkVisibility: "public" }) }),
+    ])
   })
 
   test.each([

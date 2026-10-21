@@ -10,7 +10,30 @@ import type { ProjectKey } from "./projectKey.js"
 import { projectKeyEqual } from "./projectKeyEqual.js"
 import { projectMigrate } from "./projectMigrate.js"
 import { projectMutationExpectedRevision } from "./projectMutationExpectedRevision.js"
+import { projectNetworkVisibilityDefault } from "./projectNetworkVisibilityDefault.js"
 import { projectOwnerAuthorize } from "./projectOwnerAuthorize.js"
+
+function projectEditNewServiceVisibilityDefaultApply(
+  input: unknown,
+  owner: string,
+  existingServiceIds: Set<string>,
+): unknown {
+  if (projectNetworkVisibilityDefault(owner) !== "private") return input
+  if (!input || typeof input !== "object" || Array.isArray(input)) return input
+  const record = input as Record<string, unknown>
+  if (!Array.isArray(record.services)) return input
+  const services = record.services.map((service) => {
+    if (!service || typeof service !== "object" || Array.isArray(service)) return service
+    const serviceRecord = service as Record<string, unknown>
+    if (typeof serviceRecord.id !== "string" || existingServiceIds.has(serviceRecord.id)) return service
+    const caddy = serviceRecord.caddy
+    if (!caddy || typeof caddy !== "object" || Array.isArray(caddy)) return service
+    const caddyRecord = caddy as Record<string, unknown>
+    if (caddyRecord.networkVisibility !== undefined) return service
+    return { ...serviceRecord, caddy: { ...caddyRecord, networkVisibility: "private" } }
+  })
+  return { ...record, services }
+}
 
 function projectInputIdentityMatches(input: unknown, key: ProjectKey): boolean | undefined {
   if (!input || typeof input !== "object" || Array.isArray(input)) return undefined
@@ -168,13 +191,17 @@ export async function projectEdit(
       })
     : []
 
-  const projectR = projectCanonicalNormalize(projectEditCanonicalInput(existingCanonicalR.data, input), {
-    projects: snapshotR.data.projects,
-    portRange: options.portRange,
-    excludeKey: key,
-    excludeProject: existingCanonicalR.data,
-    allocatePortServiceIds,
-  })
+  const mergedInput = projectEditCanonicalInput(existingCanonicalR.data, input)
+  const projectR = projectCanonicalNormalize(
+    projectEditNewServiceVisibilityDefaultApply(mergedInput, key.owner, existingServiceIds),
+    {
+      projects: snapshotR.data.projects,
+      portRange: options.portRange,
+      excludeKey: key,
+      excludeProject: existingCanonicalR.data,
+      allocatePortServiceIds,
+    },
+  )
   if (!projectR.success) return projectR
   if (!projectKeyEqual(projectR.data, key))
     return createResultErrorCode(op, "project owner and name are immutable", "request.invalid")

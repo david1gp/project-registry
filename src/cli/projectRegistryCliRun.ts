@@ -7,6 +7,7 @@ import { type ProjectCanonical, projectCanonicalSchema } from "../project/projec
 import { projectLabelsSchema } from "../project/projectLabelsSchema.js"
 import { projectLocalCaddyEntries } from "../project/projectLocalCaddyEntries.js"
 import { projectMigrate } from "../project/projectMigrate.js"
+import { projectNetworkVisibilityDefault } from "../project/projectNetworkVisibilityDefault.js"
 import { projectSchema } from "../project/projectSchema.js"
 import { projectRegistryVersionMetadataRender } from "../projectRegistryVersionMetadataRender.js"
 import type { ProjectRegistryCliCaddyOptions } from "./ProjectRegistryCliCaddyOptions.js"
@@ -211,14 +212,22 @@ function projectCanonicalParse(project: unknown, op: string): Result<ProjectCano
   return migrated
 }
 
-function projectCreateDefaults(command: Extract<ProjectRegistryCliInvocation["command"], { kind: "project-create" }>): {
+function projectCreateDefaults(
+  command: Extract<ProjectRegistryCliInvocation["command"], { kind: "project-create" }>,
+  owner: string,
+): {
   name: string
   caddy: ProjectRegistryCliCaddyOptions
 } {
   const path = command.caddy.path ?? resolve(process.cwd())
   return {
     name: command.name ?? basename(path),
-    caddy: { docs: false, ...command.caddy, ...(command.caddy.path === undefined ? { path } : {}) },
+    caddy: {
+      docs: false,
+      networkVisibility: projectNetworkVisibilityDefault(owner),
+      ...command.caddy,
+      ...(command.caddy.path === undefined ? { path } : {}),
+    },
   }
 }
 
@@ -419,7 +428,7 @@ async function commandRequest(
 
   let options: RequestOptions
   if (command.kind === "project-create") {
-    const defaults = projectCreateDefaults(command)
+    const defaults = projectCreateDefaults(command, ownerR.data)
     const projectsR = projectListResponseParse(currentR.data)
     if (!projectsR.success) return projectsR
     if (

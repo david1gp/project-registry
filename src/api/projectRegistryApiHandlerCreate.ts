@@ -1204,6 +1204,7 @@ export function projectRegistryApiHandlerCreate(options: ApiHandlerOptions): Pro
               path: directory,
               staticAllow: ["/docs", "/docs/*"],
               kind: "static",
+              networkVisibility: "public",
             },
           },
           { expectedRevision: projectsR.data.revision },

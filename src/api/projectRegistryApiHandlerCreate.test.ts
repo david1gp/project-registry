@@ -1312,7 +1312,11 @@ describe("projectRegistryApiHandlerCreate", () => {
       services,
     })
     expect(created.response.status).toBe(201)
-    expect(repository.projects).toContainEqual(expect.objectContaining({ schemaVersion: 2, services }))
+    const privateServices = [
+      { ...services[0], caddy: { ...(services[0] as { caddy: object }).caddy, networkVisibility: "private" } },
+      services[1],
+    ]
+    expect(repository.projects).toContainEqual(expect.objectContaining({ schemaVersion: 2, services: privateServices }))
 
     const patched = await requestJson(handler, "/api/v1/users/leo/projects/services-app", leo, "PATCH", {
       expectedRevision: nextRevision,
@@ -1357,7 +1361,7 @@ describe("projectRegistryApiHandlerCreate", () => {
       success: true,
       data: {
         projects: expect.arrayContaining([
-          expect.objectContaining({ name: "services-app", schemaVersion: 2, services }),
+          expect.objectContaining({ name: "services-app", schemaVersion: 2, services: privateServices }),
         ]),
       },
     })
