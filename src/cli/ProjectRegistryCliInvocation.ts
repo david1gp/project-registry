@@ -40,6 +40,7 @@ export type ProjectRegistryCliInvocation = {
     | { kind: "project-delete-by-port"; port: number }
     | { kind: "project-history"; name: string; limit?: number }
     | { kind: "project-access-logs"; name: string; owner?: string; limit?: number; before?: string }
+    | { kind: "route-check"; name: string; service?: string }
     | { kind: "history"; limit?: number }
     | { kind: "docs"; name: string; path: string; http: boolean }
     | { kind: "docs-local"; path: string; http: boolean }

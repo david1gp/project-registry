@@ -104,6 +104,32 @@ const projectAclRepairSchema = a.object({
     }),
   ),
 })
+const routeCheckTlsSchema = a.object({
+  authorized: a.boolean(),
+  validTo: a.nullable(a.string()),
+  issuer: a.nullable(a.string()),
+})
+const routeCheckRowSchema = a.object({
+  service: a.string(),
+  hostname: a.string(),
+  addresses: a.array(a.string()),
+  tls: a.nullable(routeCheckTlsSchema),
+  httpStatus: a.nullable(a.number()),
+  httpMs: a.nullable(a.number()),
+  ok: a.boolean(),
+  error: a.nullable(a.string()),
+})
+const routeCheckSchema = a.object({
+  project: a.string(),
+  service: a.optional(a.string()),
+  rows: a.array(routeCheckRowSchema),
+})
+
+function routeCheckRowLine(row: a.InferOutput<typeof routeCheckRowSchema>): string {
+  if (!row.ok) return `FAIL\t${row.service}\t${row.hostname}\t${row.error ?? "unreachable"}`
+  const tls = row.tls?.issuer ?? "trusted"
+  return `ok\t${row.service}\t${row.hostname}\t${row.addresses.join(",")}\thttp ${row.httpStatus ?? "-"}\ttls ${tls}\t${row.httpMs ?? "-"}ms`
+}
 const backendVersionSchema = a.object({ version: a.string() })
 
 function dataParse<TSchema extends a.BaseSchema<unknown, unknown, a.BaseIssue<unknown>>>(
@@ -245,6 +271,11 @@ export function projectRegistryCliOutputFormat(
     if (!parsedR.success) return parsedR
     parsedData = parsedR.data
   }
+  if (command.kind === "route-check") {
+    const parsedR = dataParse(routeCheckSchema, data, "route check")
+    if (!parsedR.success) return parsedR
+    parsedData = parsedR.data
+  }
   if (command.kind === "backend-version") {
     const parsedR = dataParse(backendVersionSchema, data, "version")
     if (!parsedR.success) return parsedR
@@ -354,6 +385,11 @@ export function projectRegistryCliOutputFormat(
   if (command.kind === "backend-version") {
     const versions = parsedData as { backend: string; cli: string; library: string }
     return createResult(`Backend: ${versions.backend}\nCLI: ${versions.cli}\nLibrary: ${versions.library}\n`)
+  }
+  if (command.kind === "route-check") {
+    const checked = parsedData as a.InferOutput<typeof routeCheckSchema>
+    if (checked.rows.length === 0) return createResult("No served domains.\n")
+    return createResult(`${checked.rows.map(routeCheckRowLine).join("\n")}\n`)
   }
   return createResultError("projectRegistryCliOutputFormat", "The command does not produce daemon output.")
 }

@@ -543,6 +543,32 @@ export function projectRegistryCliArgumentsParse(args: readonly string[]): Resul
   }
   if (
     subject === "project" &&
+    action === "route-check" &&
+    value !== undefined &&
+    extra.length === 0 &&
+    limit === undefined &&
+    port === undefined &&
+    path === undefined &&
+    !hasCaddyOptions &&
+    flagName === undefined &&
+    ownership === undefined &&
+    !noDns &&
+    !hasLabelOptions &&
+    !hasFilterOptions &&
+    !tokenStdin &&
+    !hasAccessLogOptions &&
+    !hasHttp &&
+    owner === undefined
+  ) {
+    if (!projectNamePattern.test(value)) return projectNameError(op)
+    return createResult({
+      command: { kind: "route-check", name: value, ...(service === undefined ? {} : { service }) },
+      json,
+      socket,
+    })
+  }
+  if (
+    subject === "project" &&
     action === "create" &&
     value === undefined &&
     limit === undefined &&

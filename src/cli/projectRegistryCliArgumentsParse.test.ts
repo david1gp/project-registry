@@ -59,6 +59,12 @@ describe("projectRegistryCliArgumentsParse", () => {
       { kind: "project-access-logs", name: "site", owner: "root", limit: 25, before: "cursor" },
     ],
     [["history", "--limit=7"], { kind: "history", limit: 7 }],
+    [["project", "route-check", "site"], { kind: "route-check", name: "site" }],
+    [["project", "route-check", "site", "--service", "api"], { kind: "route-check", name: "site", service: "api" }],
+    [
+      ["project", "route-check", "site", "--service=api-preview"],
+      { kind: "route-check", name: "site", service: "api-preview" },
+    ],
     [["docs", "guide/intro.md"], { kind: "docs-local", path: "guide/intro.md", http: false }],
     [["docs", "guide/intro.md", "--http"], { kind: "docs-local", path: "guide/intro.md", http: true }],
     [["docs", "site", "guide/intro.md"], { kind: "docs", name: "site", path: "guide/intro.md", http: false }],
@@ -288,6 +294,23 @@ describe("projectRegistryCliArgumentsParse", () => {
     [["project", "access-logs", "site", "--before", "--json"], "Option --before requires a bounded cursor."],
     [["project", "access-logs", "site", "--before", "--limit", "25"], "Option --before requires a bounded cursor."],
     [["project", "access-logs", "site", "--before="], "Option --before requires a bounded cursor."],
+    [["project", "route-check"], "Unknown command or invalid syntax: project route-check."],
+    [
+      ["project", "route-check", "Site"],
+      "Project names must start with a lowercase letter or digit and contain only lowercase letters, digits, and hyphens.",
+    ],
+    [
+      ["project", "route-check", "site", "--service", "API"],
+      "Option --service requires a service ID starting with a lowercase letter or digit and containing only lowercase letters, digits, and hyphens.",
+    ],
+    [
+      ["project", "route-check", "site", "--service", ""],
+      "Option --service requires a service ID starting with a lowercase letter or digit and containing only lowercase letters, digits, and hyphens.",
+    ],
+    [
+      ["project", "route-check", "site", "--limit", "5"],
+      "Unknown command or invalid syntax: project route-check site.",
+    ],
     [["project", "create", "--ownership", "external"], "Option --ownership requires --service."],
     [["project", "edit", "site", "--ownership", "registry"], "Option --ownership requires --service."],
     [["project", "edit", "site", "--type", "private"], "Unknown option: --type."],

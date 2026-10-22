@@ -3226,3 +3226,91 @@ describe("projectRegistryApiHandlerCreate", () => {
     })
   })
 })
+
+describe("project route check API", () => {
+  const socketContext = { transport: "unix", username: "leo" } as const
+  const probed: string[] = []
+  const probe = async (hostname: string) => {
+    probed.push(hostname)
+    return createResult({
+      hostname,
+      addresses: ["203.0.113.7"],
+      tls: { authorized: true, validTo: null as string | null, issuer: "Test CA" },
+      httpStatus: 200,
+      httpMs: 3,
+      ok: true,
+      error: null as string | null,
+    })
+  }
+
+  test("probes served domains for the socket owner and reports per-service rows", async () => {
+    probed.length = 0
+    const handler = projectRegistryApiHandlerCreate({
+      repository: repositoryCreate(),
+      caddyApplication: caddyApplicationCreate(),
+      routeCheckProbe: probe,
+    })
+    const checked = await requestJson(handler, "/api/v1/projects/opencode/route-check", socketContext)
+    expect(checked.response.status).toBe(200)
+    expect(checked.body).toMatchObject({
+      success: true,
+      data: {
+        project: "opencode",
+        rows: [
+          { service: "default", hostname: "opencode.example", httpStatus: 200, ok: true },
+          { service: "default", hostname: "oc.example", httpStatus: 200, ok: true },
+        ],
+      },
+    })
+    expect(probed).toEqual(["opencode.example", "oc.example"])
+  })
+
+  test("rejects unknown projects, unknown services, and unwelcome transports or methods", async () => {
+    probed.length = 0
+    const handler = projectRegistryApiHandlerCreate({
+      repository: repositoryCreate(),
+      caddyApplication: caddyApplicationCreate(),
+      routeCheckProbe: probe,
+    })
+    const missing = await requestJson(handler, "/api/v1/projects/missing/route-check", socketContext)
+    const wrongService = await requestJson(handler, "/api/v1/projects/opencode/route-check?service=nope", socketContext)
+    const anonymous = await requestJson(handler, "/api/v1/projects/opencode/route-check", { transport: "http" })
+    const anonymousVersioned = await requestJson(handler, "/api/v1/users/leo/projects/opencode/route-check", {
+      transport: "http",
+    })
+    const foreignOwner = await requestJson(handler, "/api/v1/users/leo/projects/opencode/route-check", {
+      transport: "unix",
+      username: "david",
+    })
+    const httpSelf = await requestJson(handler, "/api/v1/projects/opencode/route-check", {
+      transport: "http",
+      access: socketAccessCreate("leo", "own", { leo: "own" }),
+    })
+    const wrongMethod = await requestJson(handler, "/api/v1/projects/opencode/route-check", socketContext, "POST")
+    expect(missing.response.status).toBe(404)
+    expect(wrongService.response.status).toBe(404)
+    expect(wrongService.body).toMatchObject({
+      success: false,
+      error: { code: "route-check.service-not-found" },
+    })
+    expect(anonymous.response.status).toBe(404)
+    expect(anonymousVersioned.response.status).toBe(401)
+    expect(foreignOwner.response.status).toBe(403)
+    expect(httpSelf.response.status).toBe(404)
+    expect(wrongMethod.response.status).toBe(405)
+    expect(probed).toEqual([])
+  })
+
+  test("serves the versioned owner path for the owning user", async () => {
+    probed.length = 0
+    const handler = projectRegistryApiHandlerCreate({
+      repository: repositoryCreate(),
+      caddyApplication: caddyApplicationCreate(),
+      routeCheckProbe: probe,
+    })
+    const checked = await requestJson(handler, "/api/v1/users/leo/projects/opencode/route-check", socketContext)
+    expect(checked.response.status).toBe(200)
+    expect(checked.body).toMatchObject({ success: true, data: { project: "opencode" } })
+    expect(probed).toEqual(["opencode.example", "oc.example"])
+  })
+})

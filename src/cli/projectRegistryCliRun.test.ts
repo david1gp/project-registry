@@ -357,6 +357,53 @@ describe("projectRegistryCliRun", () => {
     ])
   })
 
+  test("checks served routes through the self-scoped route-check path and renders row lines", async () => {
+    const requests: Array<{ path: string; unix: string | undefined }> = []
+    const stdout: string[] = []
+    const data = {
+      project: "site",
+      rows: [
+        {
+          service: "default",
+          hostname: "site.example",
+          addresses: ["203.0.113.7"],
+          tls: { authorized: true, validTo: null, issuer: "Test CA" },
+          httpStatus: 200,
+          httpMs: 12,
+          ok: true,
+          error: null,
+        },
+        {
+          service: "api",
+          hostname: "api.site.example",
+          addresses: [],
+          tls: null,
+          httpStatus: null,
+          httpMs: null,
+          ok: false,
+          error: "DNS resolution failed: getaddrinfo ENOTFOUND api.site.example",
+        },
+      ],
+    }
+    const requestFetch = async (input: string | URL | Request, init?: RequestInit & { unix?: string }) => {
+      requests.push({ path: new URL(String(input)).pathname + new URL(String(input)).search, unix: init?.unix })
+      return Response.json({ success: true, data })
+    }
+    const exitCode = await projectRegistryCliRun(["project", "route-check", "site", "--service", "default"], {
+      environment: { USER: "david" },
+      requestFetch,
+      stdout: (text) => stdout.push(text),
+    })
+
+    expect(exitCode).toBe(0)
+    expect(requests).toEqual([
+      { path: "/api/v1/projects/site/route-check?service=default", unix: "/run/project-registry/david.sock" },
+    ])
+    expect(stdout.join("")).toBe(
+      "ok\tdefault\tsite.example\t203.0.113.7\thttp 200\ttls Test CA\t12ms\nFAIL\tapi\tapi.site.example\tDNS resolution failed: getaddrinfo ENOTFOUND api.site.example\n",
+    )
+  })
+
   test("repairs static service roots through the authenticated owner POST route", async () => {
     const requests: Array<{ path: string; method: string; unix: string | undefined }> = []
     const stdout: string[] = []
@@ -1326,8 +1373,14 @@ describe("projectRegistryCliRun", () => {
       expect(exitCode).toBe(0)
     }
     expect(bodies).toEqual([
-      { user: "fabian", body: expect.objectContaining({ caddy: expect.objectContaining({ networkVisibility: "public" }) }) },
-      { user: "leo", body: expect.objectContaining({ caddy: expect.objectContaining({ networkVisibility: "private" }) }) },
+      {
+        user: "fabian",
+        body: expect.objectContaining({ caddy: expect.objectContaining({ networkVisibility: "public" }) }),
+      },
+      {
+        user: "leo",
+        body: expect.objectContaining({ caddy: expect.objectContaining({ networkVisibility: "private" }) }),
+      },
     ])
 
     const explicitBodies: unknown[] = []

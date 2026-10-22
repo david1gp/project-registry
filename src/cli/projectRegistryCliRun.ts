@@ -73,6 +73,10 @@ function requestPath(invocation: ProjectRegistryCliInvocation): string {
     return `/config?${new URLSearchParams({ select: command.selector })}`
   }
   if (command.kind === "backend-version") return "/api/v1/version"
+  if (command.kind === "route-check") {
+    const query = command.service === undefined ? "" : `?${new URLSearchParams({ service: command.service })}`
+    return `/api/v1/projects/${encodeURIComponent(command.name)}/route-check${query}`
+  }
   return "/api/v1/caddy/status"
 }
 

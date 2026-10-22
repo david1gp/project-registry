@@ -36,6 +36,8 @@ import type { ProjectRegistryDaemonCloudflareDnsStatus } from "../runtime/projec
 import type { ProjectRegistryDaemonRequestContext } from "../runtime/ProjectRegistryDaemonRequestContext.js"
 import type { ProjectRegistryDaemonRequestHandler } from "../runtime/ProjectRegistryDaemonRequestHandler.js"
 import type { ProjectRegistryDaemonSocketAccessResolve } from "../runtime/ProjectRegistryDaemonSocketAccessResolve.js"
+import type { routeCheckProbe } from "../route-check/routeCheckProbe.js"
+import { routeCheckUseCase } from "../route-check/routeCheckUseCase.js"
 
 type ApiHandlerOptions = {
   repository: ProjectRepository
@@ -45,6 +47,7 @@ type ApiHandlerOptions = {
   defaultUserDomains?: Readonly<Record<string, string>>
   projectAccessLogSource?: ProjectAccessLogSource
   projectStaticAclRepair?: typeof projectStaticAclRepair
+  routeCheckProbe?: typeof routeCheckProbe
   caddyUser?: string
   docsPublicationStore?: ProjectDocsPublicationStore
   cloudflareCredentials?: Pick<ProjectRegistryDaemonCloudflareCredentials, "tokenSet">
@@ -64,6 +67,7 @@ type ApiRoute =
   | { kind: "project"; legacy: boolean; owner?: string; name: string }
   | { kind: "project-by-port"; legacy: true; port: number }
   | { kind: "access-logs"; legacy: false; owner: string; name: string }
+  | { kind: "route-check"; legacy: false; owner?: string; name: string }
   | { kind: "fix-acl"; legacy: false; owner: string; name: string }
   | { kind: "self-access-logs"; legacy: false; name: string }
   | { kind: "history"; legacy: boolean; owner?: string; name?: string }
@@ -110,6 +114,7 @@ const apiFailureStatus: Record<string, number> = {
   "projects.not-found": 404,
   "projects.revision-conflict": 409,
   "request.invalid": 400,
+  "route-check.service-not-found": 404,
 }
 
 const responseHeaders = { "cache-control": "no-store", "content-type": "application/json" }
@@ -118,6 +123,7 @@ const socketAuthenticationHint =
   "Check your account access, then retry. If the problem persists, contact an administrator."
 const ownerPattern = /^[A-Za-z_][A-Za-z0-9_.-]*\$?$/
 const projectNamePattern = /^[a-z0-9][a-z0-9-]*$/
+const serviceIdPattern = /^[a-z0-9][a-z0-9-]*$/
 const maximumCloudflareTokenLength = 8_192
 const maximumCloudflareTokenRequestBytes = 16_384
 
@@ -257,6 +263,21 @@ function routeParse(path: string): ApiRoute | undefined {
     return { kind: "self-access-logs", legacy: false, name }
   }
 
+  const versionedRouteCheck = path.match(/^\/api\/v1\/users\/([^/]+)\/projects\/([^/]+)\/route-check$/)
+  if (versionedRouteCheck !== null) {
+    const owner = segmentDecode(versionedRouteCheck[1]!, ownerPattern)
+    const name = segmentDecode(versionedRouteCheck[2]!, projectNamePattern)
+    if (owner === undefined || name === undefined) return undefined
+    return { kind: "route-check", legacy: false, owner, name }
+  }
+
+  const selfRouteCheck = path.match(/^\/api\/v1\/projects\/([^/]+)\/route-check$/)
+  if (selfRouteCheck !== null) {
+    const name = segmentDecode(selfRouteCheck[1]!, projectNamePattern)
+    if (name === undefined) return undefined
+    return { kind: "route-check", legacy: false, name }
+  }
+
   const versionedProjects = path.match(/^\/api\/v1\/users\/([^/]+)\/projects$/)
   if (versionedProjects !== null) {
     const owner = segmentDecode(versionedProjects[1]!, ownerPattern)
@@ -321,6 +342,7 @@ function routeRequiresProjectAccess(route: ApiRoute): boolean {
     route.kind === "project" ||
     route.kind === "project-by-port" ||
     route.kind === "access-logs" ||
+    route.kind === "route-check" ||
     route.kind === "fix-acl" ||
     route.kind === "self-access-logs" ||
     route.kind === "history" ||
@@ -801,6 +823,12 @@ export function projectRegistryApiHandlerCreate(options: ApiHandlerOptions): Pro
       )
     }
     if (route.kind === "self-access-logs" && context.transport !== "unix") {
+      return errorResponse(
+        { code: "api.not-found", message: "The route was not found.", op: "projectRegistryApiHandle", status: 404 },
+        false,
+      )
+    }
+    if (route.kind === "route-check" && route.owner === undefined && context.transport !== "unix") {
       return errorResponse(
         { code: "api.not-found", message: "The route was not found.", op: "projectRegistryApiHandle", status: 404 },
         false,
@@ -1529,6 +1557,28 @@ export function projectRegistryApiHandlerCreate(options: ApiHandlerOptions): Pro
       const projectR = await projectGetUseCase(useCaseOptions, { owner, name: route.name })
       if (!projectR.success) return resultErrorResponse(projectR, route.legacy, "projects")
       return successResponse(route.legacy ? legacyProjectMap(projectR.data.project) : projectR.data)
+    }
+
+    if (route.kind === "route-check") {
+      const serviceParam = url.searchParams.get("service")
+      if (serviceParam !== null && !serviceIdPattern.test(serviceParam)) {
+        return errorResponse(
+          {
+            code: "request.invalid",
+            message: "Service id is invalid.",
+            op: "projectRegistryApiRouteCheck",
+            status: 400,
+          },
+          false,
+        )
+      }
+      const checkR = await routeCheckUseCase(
+        useCaseOptions,
+        serviceParam === null ? { owner, name: route.name } : { owner, name: route.name, service: serviceParam },
+        options.routeCheckProbe === undefined ? {} : { probe: options.routeCheckProbe },
+      )
+      if (!checkR.success) return resultErrorResponse(checkR, route.legacy, "projects")
+      return successResponse(checkR.data)
     }
 
     if (route.kind === "history") {
