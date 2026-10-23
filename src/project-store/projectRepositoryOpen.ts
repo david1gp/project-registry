@@ -156,6 +156,22 @@ async function projectRepositoryTrackedDivergence(store: GitProjectRepository, o
     }
   }
 
+  const trackedPaths = [...headEntries.keys()]
+  if (trackedPaths.length > 0 && !trackedPaths.some((path) => path.includes("\n"))) {
+    const batchR = await projectRepositoryContentHashes(store, trackedPaths)
+    if (batchR.success) {
+      for (let index = 0; index < trackedPaths.length; index += 1) {
+        const path = trackedPaths[index]!
+        const headObject = headEntries.get(path)?.[0]?.object
+        if (!headObject || batchR.data[index] !== headObject) {
+          const subject = path.startsWith("projects/") ? "tracked project file" : "tracked file"
+          return createResultError(op, `${path}: ${subject} diverges from HEAD`, path)
+        }
+      }
+      return createResult(undefined)
+    }
+  }
+
   for (const path of headEntries.keys()) {
     const hashR = await gitStoreRun(store.git, ["hash-object", `--path=${path}`, "--", path])
     if (!hashR.success) {
@@ -171,6 +187,20 @@ async function projectRepositoryTrackedDivergence(store: GitProjectRepository, o
   }
 
   return createResult(undefined)
+}
+
+async function projectRepositoryContentHashes(
+  store: GitProjectRepository,
+  paths: readonly string[],
+): PromiseResult<readonly string[]> {
+  const op = "projectRepositoryRead"
+  const hashR = await gitStoreRun(store.git, ["hash-object", "--", ...paths])
+  if (!hashR.success) return hashR
+  const hashes = hashR.data.split("\n").filter((line) => line !== "")
+  if (hashes.length !== paths.length) {
+    return createResultError(op, "invalid Git content hashes", `${paths.length} paths`)
+  }
+  return createResult(hashes)
 }
 
 async function projectRepositoryCurrentBranch(git: GitStore): PromiseResult<string> {
