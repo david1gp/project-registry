@@ -778,8 +778,9 @@ describe("project use cases", () => {
         { expectedRevision: currentRevision },
       )
       expect(result.success).toBe(true)
-      const services = (repository.calls.create[0]?.project as { services: { caddy: { networkVisibility?: string } }[] })
-        .services
+      const services = (
+        repository.calls.create[0]?.project as { services: { caddy: { networkVisibility?: string } }[] }
+      ).services
       expect(services[0]?.caddy.networkVisibility).toBeUndefined()
     }
 
