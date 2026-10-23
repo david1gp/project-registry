@@ -1196,6 +1196,61 @@ describe("projectRepositoryOpen", () => {
     }
   })
 
+  test("reads multiple projects through one content check and still rejects hidden divergence", async () => {
+    const directory = temporaryRepository()
+    const openR = await projectRepositoryOpen({ dir: directory })
+    expect(openR.success).toBe(true)
+    if (!openR.success) return
+
+    let expectedRevision = ""
+    for (let index = 0; index < 5; index += 1) {
+      const createR = await openR.data.create(project(`catalog-${index}`, 3000 + index), {
+        actor: "alice",
+        expectedRevision,
+      })
+      expect(createR.success).toBe(true)
+      if (!createR.success) return
+      expectedRevision = createR.data.revision
+    }
+
+    const readR = await openR.data.read()
+    expect(readR.success).toBe(true)
+    if (!readR.success) return
+    expect(readR.data.projects).toHaveLength(5)
+
+    const gitR = await gitStoreOpen({ dir: directory })
+    expect(gitR.success).toBe(true)
+    if (!gitR.success) return
+    const projectPath = "projects/alice/catalog-2.json"
+    const flagR = await gitStoreRun(gitR.data, ["update-index", "--assume-unchanged", "--", projectPath])
+    expect(flagR.success).toBe(true)
+    if (!flagR.success) return
+    writeFileSync(join(directory, projectPath), `${JSON.stringify(project("catalog-2", 3010))}\n`, "utf8")
+
+    const statusR = await gitStoreRun(gitR.data, ["status", "--porcelain", "--untracked-files=all"])
+    expect(statusR.success).toBe(true)
+    if (!statusR.success) return
+    expect(statusR.data.trim()).toBe("")
+
+    const hiddenR = await openR.data.read()
+    expect(hiddenR.success).toBe(false)
+    if (hiddenR.success) return
+    expect(hiddenR.errorMessage).toContain(`${projectPath}: tracked project file diverges from HEAD`)
+
+    const unflagR = await gitStoreRun(gitR.data, ["update-index", "--no-assume-unchanged", "--", projectPath])
+    expect(unflagR.success).toBe(true)
+    if (!unflagR.success) return
+    const recoverR = await openR.data.recover()
+    expect(recoverR.success).toBe(true)
+    if (!recoverR.success) return
+    expect(recoverR.data.ready).toBe(true)
+
+    const recoveredR = await openR.data.read()
+    expect(recoveredR.success).toBe(true)
+    if (!recoveredR.success) return
+    expect(recoveredR.data.projects).toHaveLength(5)
+  })
+
   test("edits and deletes flagged projects through real Git", async () => {
     for (const flag of ["--assume-unchanged", "--skip-worktree"]) {
       const directory = temporaryRepository()
