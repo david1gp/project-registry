@@ -419,7 +419,13 @@ export async function wikiReconcile(input: WikiReconcileInput): Promise<Result<W
           continue
         }
       }
-      await wikiReconcileEnsureDir(join(folderPath, "Transcripte"), rootStat.uid, rootStat.gid, input.logger, label)
+      await wikiReconcileEnsureDir(
+        join(folderPath, "Sprachprotokolle"),
+        rootStat.uid,
+        rootStat.gid,
+        input.logger,
+        label,
+      )
     } catch (error) {
       skip(`skipping ${label}: cannot prepare project folder ${folderPath}: ${(error as Error).message}`)
       continue

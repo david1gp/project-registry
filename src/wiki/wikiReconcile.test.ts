@@ -48,7 +48,7 @@ describe("wikiReconcile", () => {
     }
   })
 
-  test("creates customer projects under Externe and other projects under Interne with Transcripte dirs", async () => {
+  test("creates customer projects under Externe and other projects under Interne with Sprachprotokolle dirs", async () => {
     const root = await tempRoot()
     try {
       const capture = loggerCapture()
@@ -80,8 +80,8 @@ describe("wikiReconcile", () => {
       await expect(readFile(internalNote, "utf8")).resolves.toContain("owner: leo")
 
       for (const dir of [
-        join(root, "Projekte", "Externe", "santuens", "Transcripte"),
-        join(root, "Projekte", "Interne", "contentoren", "Transcripte"),
+        join(root, "Projekte", "Externe", "santuens", "Sprachprotokolle"),
+        join(root, "Projekte", "Interne", "contentoren", "Sprachprotokolle"),
       ]) {
         expect((await lstat(dir)).isDirectory()).toBe(true)
       }
