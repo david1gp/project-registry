@@ -553,7 +553,7 @@ describe("projectRegistryCliRun", () => {
         args: ["status"],
         data: status,
         output:
-          "Caddy: pending\nDesired: new\nApplied: old\nPending: new\nCloudflare DNS: unavailable (older/degraded daemon; not healthy)\n",
+          "Caddy: pending\nDesired: new\nApplied: old\nPending: new\nCloudflare DNS: unavailable (older/degraded daemon; not healthy)\nPrivate DNS: unavailable (older/degraded daemon; not healthy)\n",
       },
       {
         args: ["version"],
@@ -1710,7 +1710,7 @@ describe("projectRegistryCliRun", () => {
 
     expect(exitCode).toBe(0)
     expect(stdout.join("")).toBe(
-      "Caddy: pending\nDesired: new\nApplied: old\nPending: new\nCloudflare DNS: healthy (pending projects: 0, pending deletions: 0)\n",
+      "Caddy: pending\nDesired: new\nApplied: old\nPending: new\nCloudflare DNS: healthy (pending projects: 0, pending deletions: 0)\nPrivate DNS: unavailable (older/degraded daemon; not healthy)\n",
     )
   })
 
@@ -1736,7 +1736,49 @@ describe("projectRegistryCliRun", () => {
     )
 
     expect(exitCode).toBe(0)
-    expect(stdout.join("")).toBe("Caddy: pending\nDesired: new\nApplied: old\nPending: new\nCloudflare DNS: disabled\n")
+    expect(stdout.join("")).toBe(
+      "Caddy: pending\nDesired: new\nApplied: old\nPending: new\nCloudflare DNS: disabled\nPrivate DNS: unavailable (older/degraded daemon; not healthy)\n",
+    )
+  })
+
+  test("reports private DNS status alongside Caddy status", async () => {
+    const stdout: string[] = []
+    const exitCode = await projectRegistryCliRun(
+      ["status"],
+      runOptions(
+        {
+          ...status,
+          privateDns: {
+            enabled: true,
+            pendingProjects: 1,
+            pendingDeletions: 0,
+            trackingBlocked: false,
+            errors: [
+              {
+                owner: "leo",
+                project: "app",
+                hostname: "app.wonder1.de",
+                operation: "claim",
+                errorMessage: "not claimable",
+                attempts: 0,
+                occurredAt: 1_700_000_000_000,
+              },
+            ],
+          },
+        },
+        [],
+        stdout,
+        [],
+      ),
+    )
+
+    expect(exitCode).toBe(0)
+    expect(stdout.join("")).toBe(
+      "Caddy: pending\nDesired: new\nApplied: old\nPending: new\n" +
+        "Cloudflare DNS: unavailable (older/degraded daemon; not healthy)\n" +
+        "Private DNS: error (pending projects: 1, pending deletions: 0)\n" +
+        "DNS error [claim] leo/app app.wonder1.de: not claimable (attempts: 0)\n",
+    )
   })
 
   test("reports pending, failed, and deferred DNS entries with identity, hostname, and retry time", async () => {
@@ -1791,7 +1833,8 @@ describe("projectRegistryCliRun", () => {
         "Cloudflare DNS: error (pending projects: 2, pending deletions: 1)\n" +
         "Tracking: blocked (state unavailable)\n" +
         "DNS error [reconcile] david/site site.example: Cloudflare DNS request failed (attempts: 3 status=503 cf=10000 retry=2023-11-14T22:14:20.000Z)\n" +
-        "DNS error [delete] david/site record record-id: Cloudflare DNS delete failed (attempts: 1)\n",
+        "DNS error [delete] david/site record record-id: Cloudflare DNS delete failed (attempts: 1)\n" +
+        "Private DNS: unavailable (older/degraded daemon; not healthy)\n",
     )
   })
 

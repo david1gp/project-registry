@@ -73,6 +73,14 @@ export function projectRegistryDaemonConfigFromEnv(
       "PROJECT_REGISTRY_SERVER_IP_DISCOVERY_TIMEOUT_MS",
       "PROJECT_REGISTRY_CLOUDFLARE_CREDENTIALS_DIR",
       "PROJECT_REGISTRY_CLOUDFLARE_DNS_ENABLED",
+      "PROJECT_REGISTRY_PRIVATE_DNS_ENABLED",
+      "PROJECT_REGISTRY_PRIVATE_DNS_TAILNET",
+      "PROJECT_REGISTRY_PRIVATE_DNS_NODE_ADDRESS",
+      "PROJECT_REGISTRY_PRIVATE_DNS_API_BASE",
+      "PROJECT_REGISTRY_PRIVATE_DNS_DNSMASQ_CONFIG",
+      "PROJECT_REGISTRY_PRIVATE_DNS_RESOLVER_UNIT",
+      "PROJECT_REGISTRY_PRIVATE_DNS_UPSTREAMS",
+      "PROJECT_REGISTRY_PRIVATE_DNS_CREDENTIALS_DIR",
     ]
     for (const name of names) {
       const value = values[name]
@@ -120,6 +128,7 @@ export function projectRegistryDaemonConfigFromEnv(
       "PROJECT_REGISTRY_CADDY_INITIALIZE_FROM_GENERATED_CONFIG",
     )
     const cloudflareDnsEnabled = environmentBoolean(values, "PROJECT_REGISTRY_CLOUDFLARE_DNS_ENABLED")
+    const privateDnsEnabled = environmentBoolean(values, "PROJECT_REGISTRY_PRIVATE_DNS_ENABLED")
     const localDomainsEnabled = environmentBoolean(values, "PROJECT_REGISTRY_LOCAL_DOMAINS_ENABLED")
     let defaultUserDomains: unknown
     const defaultUserDomainsValue = values.PROJECT_REGISTRY_DEFAULT_USER_DOMAINS?.trim()
@@ -174,9 +183,19 @@ export function projectRegistryDaemonConfigFromEnv(
       (values.PROJECT_REGISTRY_CADDY_INITIALIZE_FROM_GENERATED_CONFIG !== undefined &&
         initializeFromGeneratedConfig === undefined) ||
       (values.PROJECT_REGISTRY_CLOUDFLARE_DNS_ENABLED !== undefined && cloudflareDnsEnabled === undefined) ||
+      (values.PROJECT_REGISTRY_PRIVATE_DNS_ENABLED !== undefined && privateDnsEnabled === undefined) ||
       (values.PROJECT_REGISTRY_LOCAL_DOMAINS_ENABLED !== undefined && localDomainsEnabled === undefined)
     ) {
       return createResultError(op, "daemon environment contains an invalid number or boolean")
+    }
+
+    const privateDnsUpstreamsValue = values.PROJECT_REGISTRY_PRIVATE_DNS_UPSTREAMS?.trim()
+    let privateDnsUpstreams: string[] | undefined
+    if (privateDnsUpstreamsValue !== undefined && privateDnsUpstreamsValue !== "") {
+      privateDnsUpstreams = privateDnsUpstreamsValue
+        .split(",")
+        .map((upstream) => upstream.trim())
+        .filter(Boolean)
     }
 
     return projectRegistryDaemonConfigValidate({
@@ -253,6 +272,34 @@ export function projectRegistryDaemonConfigFromEnv(
             ? { credentialsDirectory: `${configDirectory}/project-registry/cloudflare` }
             : {}
           : { credentialsDirectory: values.PROJECT_REGISTRY_CLOUDFLARE_CREDENTIALS_DIR?.trim() }),
+      },
+      privateDns: {
+        // Disabled by default until the Phase 1 admin bulk import converges
+        // the resolver, split-DNS, and TLS for the migrated scopes.
+        enabled: privateDnsEnabled === true,
+        ...(values.PROJECT_REGISTRY_PRIVATE_DNS_TAILNET?.trim()
+          ? { tailnet: values.PROJECT_REGISTRY_PRIVATE_DNS_TAILNET.trim() }
+          : {}),
+        ...(values.PROJECT_REGISTRY_PRIVATE_DNS_NODE_ADDRESS?.trim()
+          ? { nodeAddress: values.PROJECT_REGISTRY_PRIVATE_DNS_NODE_ADDRESS.trim() }
+          : {}),
+        ...(values.PROJECT_REGISTRY_PRIVATE_DNS_API_BASE?.trim()
+          ? { apiBaseUrl: values.PROJECT_REGISTRY_PRIVATE_DNS_API_BASE.trim() }
+          : {}),
+        ...(!values.PROJECT_REGISTRY_PRIVATE_DNS_DNSMASQ_CONFIG?.trim()
+          ? mode === "user" && configDirectory
+            ? { dnsmasqConfigPath: `${configDirectory}/project-registry/private-dnsmasq.conf` }
+            : {}
+          : { dnsmasqConfigPath: values.PROJECT_REGISTRY_PRIVATE_DNS_DNSMASQ_CONFIG.trim() }),
+        ...(values.PROJECT_REGISTRY_PRIVATE_DNS_RESOLVER_UNIT?.trim()
+          ? { resolverUnit: values.PROJECT_REGISTRY_PRIVATE_DNS_RESOLVER_UNIT.trim() }
+          : {}),
+        ...(privateDnsUpstreams === undefined ? {} : { upstreamResolvers: privateDnsUpstreams }),
+        ...(!values.PROJECT_REGISTRY_PRIVATE_DNS_CREDENTIALS_DIR?.trim()
+          ? mode === "user" && configDirectory
+            ? { credentialsDirectory: `${configDirectory}/project-registry/tailscale` }
+            : {}
+          : { credentialsDirectory: values.PROJECT_REGISTRY_PRIVATE_DNS_CREDENTIALS_DIR?.trim() }),
       },
     })
   } catch (error) {

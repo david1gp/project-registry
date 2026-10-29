@@ -27,6 +27,7 @@ Commands:
   user default-domain set <domain>
   user default-domain unset
   user cloudflare-token set --token-stdin
+  tailscale split-dns rollback (--state-file <path> | --owner <owner> --state-dir <dir>)
 
 Project create/edit options:
   --port <port>              Upstream port (create allocates one when omitted)
@@ -56,6 +57,14 @@ Project create/edit options:
 Cloudflare credentials:
   user cloudflare-token set --token-stdin
                               Read one token line from stdin; never pass it as an argument
+
+Split-DNS rollback (local admin command, no daemon round-trip):
+  tailscale split-dns rollback --state-file <path>
+  tailscale split-dns rollback --owner <owner> --state-dir <dir>
+                              Restore owned split-DNS entries from a per-owner state file;
+                              refuses on tailnet mismatch or externally changed entries.
+                              Auth from TAILSCALE_TAILNET and TAILSCALE_API_KEY
+                              (or TAILSCALE_ACCESS_TOKEN); optional TAILSCALE_API_BASE.
 
 Project names:
   Start with a lowercase letter or digit; use only lowercase letters, digits, and hyphens.

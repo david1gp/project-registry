@@ -26,18 +26,19 @@ import { projectListUseCase } from "../project/projectListUseCase.js"
 import { projectLocalCaddyEntries } from "../project/projectLocalCaddyEntries.js"
 import { projectOrganize } from "../project/projectOrganize.js"
 import { projectOwnerAuthorize } from "../project/projectOwnerAuthorize.js"
-import { projectStaticAclRepair, type ProjectStaticAclRepairOptions } from "../project/projectStaticAclRepair.js"
 import type { ProjectPortRange } from "../project/projectPortNext.js"
+import { type ProjectStaticAclRepairOptions, projectStaticAclRepair } from "../project/projectStaticAclRepair.js"
 import type { ProjectRepository } from "../project-store/ProjectRepository.js"
 import type { ProjectRepositoryMutation } from "../project-store/ProjectRepositoryMutation.js"
 import { projectRegistryVersion } from "../projectRegistryVersion.js"
+import type { routeCheckProbe } from "../route-check/routeCheckProbe.js"
+import { routeCheckUseCase } from "../route-check/routeCheckUseCase.js"
 import type { ProjectRegistryDaemonCloudflareCredentials } from "../runtime/ProjectRegistryDaemonCloudflareCredentials.js"
-import type { ProjectRegistryDaemonCloudflareDnsStatus } from "../runtime/projectRegistryDaemonCloudflareDnsStatusSchema.js"
 import type { ProjectRegistryDaemonRequestContext } from "../runtime/ProjectRegistryDaemonRequestContext.js"
 import type { ProjectRegistryDaemonRequestHandler } from "../runtime/ProjectRegistryDaemonRequestHandler.js"
 import type { ProjectRegistryDaemonSocketAccessResolve } from "../runtime/ProjectRegistryDaemonSocketAccessResolve.js"
-import type { routeCheckProbe } from "../route-check/routeCheckProbe.js"
-import { routeCheckUseCase } from "../route-check/routeCheckUseCase.js"
+import type { ProjectRegistryDaemonCloudflareDnsStatus } from "../runtime/projectRegistryDaemonCloudflareDnsStatusSchema.js"
+import type { ProjectRegistryDaemonPrivateDnsStatus } from "../runtime/projectRegistryDaemonPrivateDnsStatusSchema.js"
 
 type ApiHandlerOptions = {
   repository: ProjectRepository
@@ -52,6 +53,7 @@ type ApiHandlerOptions = {
   docsPublicationStore?: ProjectDocsPublicationStore
   cloudflareCredentials?: Pick<ProjectRegistryDaemonCloudflareCredentials, "tokenSet">
   cloudflareDnsStatus?: () => ProjectRegistryDaemonCloudflareDnsStatus | undefined
+  privateDnsStatus?: () => ProjectRegistryDaemonPrivateDnsStatus | undefined
   socketAccessResolve?: ProjectRegistryDaemonSocketAccessResolve
   projectCreateAfterPersistence?: (project: Project, options: { noDns: boolean }) => void
   projectEditAfterPersistence?: (previous: Project, project: Project) => void
@@ -1688,7 +1690,40 @@ export function projectRegistryApiHandlerCreate(options: ApiHandlerOptions): Pro
         // CLI reports DNS status as unavailable instead of healthy.
         cloudflareDns = undefined
       }
-      return successResponse(cloudflareDns === undefined ? caddyStatus : { ...caddyStatus, cloudflareDns })
+      let privateDns: ProjectRegistryDaemonPrivateDnsStatus | undefined
+      try {
+        const dnsStatus = options.privateDnsStatus?.()
+        if (dnsStatus !== undefined) {
+          let diagnosticOwner = context.transport === "unix" ? username : undefined
+          if (context.transport === "http" && access !== undefined) {
+            const actor = await access.actorResolve()
+            if (actor.success) diagnosticOwner = actor.data.username
+          }
+          // Queue counts are daemon-wide operational metrics, but record and
+          // project diagnostics are owner-scoped just like config inspection.
+          privateDns = {
+            ...dnsStatus,
+            errors: dnsStatus.errors.filter(
+              (error) =>
+                (diagnosticOwner !== undefined && error.owner === diagnosticOwner) ||
+                (error.owner === undefined &&
+                  error.project === undefined &&
+                  error.hostname === undefined &&
+                  error.recordId === undefined),
+            ),
+          }
+        }
+      } catch {
+        // A failing DNS queue must not break Caddy status reads. Omitting the
+        // field lets older or degraded daemons report Caddy health while the
+        // CLI reports DNS status as unavailable instead of healthy.
+        privateDns = undefined
+      }
+      return successResponse({
+        ...caddyStatus,
+        ...(cloudflareDns === undefined ? {} : { cloudflareDns }),
+        ...(privateDns === undefined ? {} : { privateDns }),
+      })
     } catch {
       return errorResponse(
         {

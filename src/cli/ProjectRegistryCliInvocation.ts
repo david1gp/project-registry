@@ -47,6 +47,7 @@ export type ProjectRegistryCliInvocation = {
     | { kind: "config"; selector?: string }
     | { kind: "regenerate" }
     | { kind: "status" }
+    | { kind: "tailscale-split-dns-rollback"; owner?: string; stateFile?: string; stateDir?: string }
   json: boolean
   socket?: string
 }

@@ -1,13 +1,17 @@
 import * as a from "valibot"
 import { createResult, createResultError, type Result } from "#result"
-import { projectLabelsSchema } from "../project/projectLabelsSchema.js"
 import { projectFilter } from "../project/projectFilter.js"
+import { projectLabelsSchema } from "../project/projectLabelsSchema.js"
 import { projectServiceOwnershipSchema } from "../project/projectServiceOwnershipSchema.js"
 import { projectRegistryVersion } from "../projectRegistryVersion.js"
 import {
-  projectRegistryDaemonCloudflareDnsStatusSchema,
   type ProjectRegistryDaemonCloudflareDnsStatus,
+  projectRegistryDaemonCloudflareDnsStatusSchema,
 } from "../runtime/projectRegistryDaemonCloudflareDnsStatusSchema.js"
+import {
+  type ProjectRegistryDaemonPrivateDnsStatus,
+  projectRegistryDaemonPrivateDnsStatusSchema,
+} from "../runtime/projectRegistryDaemonPrivateDnsStatusSchema.js"
 import type { ProjectRegistryCliInvocation } from "./ProjectRegistryCliInvocation.js"
 
 const projectSchema = a.looseObject({
@@ -40,6 +44,7 @@ const statusSchema = a.looseObject({
   lastSuccess: a.optional(a.number()),
   error: a.optional(a.string()),
   cloudflareDns: a.optional(projectRegistryDaemonCloudflareDnsStatusSchema),
+  privateDns: a.optional(projectRegistryDaemonPrivateDnsStatusSchema),
 })
 const mutationSchema = a.looseObject({
   action: a.picklist(["create", "edit", "delete"]),
@@ -131,6 +136,7 @@ function routeCheckRowLine(row: a.InferOutput<typeof routeCheckRowSchema>): stri
   return `ok\t${row.service}\t${row.hostname}\t${row.addresses.join(",")}\thttp ${row.httpStatus ?? "-"}\ttls ${tls}\t${row.httpMs ?? "-"}ms`
 }
 const backendVersionSchema = a.object({ version: a.string() })
+const splitDnsRollbackSchema = a.object({ stateFile: a.string(), restored: a.array(a.string()) })
 
 function dataParse<TSchema extends a.BaseSchema<unknown, unknown, a.BaseIssue<unknown>>>(
   schema: TSchema,
@@ -150,6 +156,20 @@ function cloudflareDnsStatusLines(dns: ProjectRegistryDaemonCloudflareDnsStatus 
   const health = dns.trackingBlocked || dns.errors.length > 0 ? "error" : queued > 0 ? "pending" : "healthy"
   const lines = [
     `Cloudflare DNS: ${health} (pending projects: ${dns.pendingProjects}, pending deletions: ${dns.pendingDeletions})`,
+  ]
+  if (dns.trackingBlocked) lines.push("Tracking: blocked (state unavailable)")
+  for (const error of dns.errors.slice(0, 5)) lines.push(cloudflareDnsErrorLine(error))
+  if (dns.errors.length > 5) lines.push(`... and ${dns.errors.length - 5} more DNS errors`)
+  return lines
+}
+
+function privateDnsStatusLines(dns: ProjectRegistryDaemonPrivateDnsStatus | undefined): string[] {
+  if (dns === undefined) return ["Private DNS: unavailable (older/degraded daemon; not healthy)"]
+  if (!dns.enabled) return ["Private DNS: disabled"]
+  const queued = dns.pendingProjects + dns.pendingDeletions
+  const health = dns.trackingBlocked || dns.errors.length > 0 ? "error" : queued > 0 ? "pending" : "healthy"
+  const lines = [
+    `Private DNS: ${health} (pending projects: ${dns.pendingProjects}, pending deletions: ${dns.pendingDeletions})`,
   ]
   if (dns.trackingBlocked) lines.push("Tracking: blocked (state unavailable)")
   for (const error of dns.errors.slice(0, 5)) lines.push(cloudflareDnsErrorLine(error))
@@ -285,6 +305,13 @@ export function projectRegistryCliOutputFormat(
       library: projectRegistryVersion,
     }
   }
+  if (command.kind === "tailscale-split-dns-rollback") {
+    const parsed = a.safeParse(splitDnsRollbackSchema, data)
+    if (!parsed.success) {
+      return createResultError("projectRegistryCliOutputFormat", "The split-DNS rollback result is malformed.")
+    }
+    parsedData = parsed.output
+  }
 
   if (invocation.json) return jsonSerialize({ success: true, data: parsedData })
   if (command.kind === "project-list") {
@@ -321,6 +348,7 @@ export function projectRegistryCliOutputFormat(
     if (status.pendingRevision !== undefined) lines.push(`Pending: ${status.pendingRevision}`)
     if (status.error !== undefined) lines.push(`Error: ${status.error}`)
     lines.push(...cloudflareDnsStatusLines(status.cloudflareDns))
+    lines.push(...privateDnsStatusLines(status.privateDns))
     return createResult(`${lines.join("\n")}\n`)
   }
   if (command.kind === "project-create" || command.kind === "project-edit" || command.kind === "project-delete") {
@@ -390,6 +418,11 @@ export function projectRegistryCliOutputFormat(
     const checked = parsedData as a.InferOutput<typeof routeCheckSchema>
     if (checked.rows.length === 0) return createResult("No served domains.\n")
     return createResult(`${checked.rows.map(routeCheckRowLine).join("\n")}\n`)
+  }
+  if (command.kind === "tailscale-split-dns-rollback") {
+    const rollback = parsedData as a.InferOutput<typeof splitDnsRollbackSchema>
+    if (rollback.restored.length === 0) return createResult("No split-DNS entries to restore.\n")
+    return createResult(`restored ${rollback.restored.join(", ")} from ${rollback.stateFile}\n`)
   }
   return createResultError("projectRegistryCliOutputFormat", "The command does not produce daemon output.")
 }

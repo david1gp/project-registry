@@ -74,6 +74,8 @@ export function projectRegistryCliArgumentsParse(args: readonly string[]): Resul
   let path: string | undefined
   let owner: string | undefined
   let before: string | undefined
+  let stateFile: string | undefined
+  let stateDir: string | undefined
   let kind: "proxy" | "static" | undefined
   let access: "internal" | "external" | undefined
   let networkVisibility: "public" | "private" | undefined
@@ -150,6 +152,8 @@ export function projectRegistryCliArgumentsParse(args: readonly string[]): Resul
       "--flush-interval",
       "--owner",
       "--before",
+      "--state-file",
+      "--state-dir",
     ]
     const option = optionNames.find((name) => argument === name || argument.startsWith(`${name}=`))
     if (option !== undefined) {
@@ -243,6 +247,20 @@ export function projectRegistryCliArgumentsParse(args: readonly string[]): Resul
           return createResultError(op, "Option --before requires a bounded cursor.")
         }
         before = value
+        continue
+      }
+      if (option === "--state-file") {
+        if (value === undefined || value.length === 0 || value.startsWith("-")) {
+          return createResultError(op, "Option --state-file requires a path.")
+        }
+        stateFile = value
+        continue
+      }
+      if (option === "--state-dir") {
+        if (value === undefined || value.length === 0 || value.startsWith("-")) {
+          return createResultError(op, "Option --state-dir requires a directory.")
+        }
+        stateDir = value
         continue
       }
       if (option === "--kind") {
@@ -400,8 +418,11 @@ export function projectRegistryCliArgumentsParse(args: readonly string[]): Resul
     noDns ||
     hasLabelOptions ||
     hasFilterOptions ||
-    tokenStdin
+    tokenStdin ||
+    stateFile !== undefined ||
+    stateDir !== undefined
   const hasAccessLogOptions = owner !== undefined || before !== undefined
+  const hasStateOptions = stateFile !== undefined || stateDir !== undefined
   const hasHttp = booleans.has("--http")
 
   if (
@@ -431,6 +452,7 @@ export function projectRegistryCliArgumentsParse(args: readonly string[]): Resul
     !clearLabels &&
     !tokenStdin &&
     !hasAccessLogOptions &&
+    !hasStateOptions &&
     !hasHttp
   ) {
     return createResult({
@@ -494,6 +516,7 @@ export function projectRegistryCliArgumentsParse(args: readonly string[]): Resul
     !noDns &&
     !hasLabelOptions &&
     !hasAccessLogOptions &&
+    !hasStateOptions &&
     !hasHttp
   ) {
     return createResult({ command: { kind: "user-cloudflare-token-set", tokenStdin: true }, json, socket })
@@ -533,6 +556,7 @@ export function projectRegistryCliArgumentsParse(args: readonly string[]): Resul
     flagName === undefined &&
     service === undefined &&
     !noDns &&
+    !hasStateOptions &&
     !hasHttp
   ) {
     if (!projectNamePattern.test(value)) return projectNameError(op)
@@ -557,6 +581,7 @@ export function projectRegistryCliArgumentsParse(args: readonly string[]): Resul
     !hasFilterOptions &&
     !tokenStdin &&
     !hasAccessLogOptions &&
+    !hasStateOptions &&
     !hasHttp &&
     owner === undefined
   ) {
@@ -573,6 +598,7 @@ export function projectRegistryCliArgumentsParse(args: readonly string[]): Resul
     value === undefined &&
     limit === undefined &&
     !hasAccessLogOptions &&
+    !hasStateOptions &&
     !hasHttp
   ) {
     if (ownership !== undefined && service === undefined) {
@@ -605,6 +631,7 @@ export function projectRegistryCliArgumentsParse(args: readonly string[]): Resul
     extra.length === 0 &&
     limit === undefined &&
     !hasAccessLogOptions &&
+    !hasStateOptions &&
     !noDns &&
     !hasHttp
   ) {
@@ -638,6 +665,7 @@ export function projectRegistryCliArgumentsParse(args: readonly string[]): Resul
     flagName === undefined &&
     limit === undefined &&
     !hasAccessLogOptions &&
+    !hasStateOptions &&
     !hasHttp
   ) {
     return createResult({ command: { kind: "project-delete-by-port", port }, json, socket })
@@ -723,6 +751,43 @@ export function projectRegistryCliArgumentsParse(args: readonly string[]): Resul
     !hasHttp
   ) {
     return createResult({ command: { kind: "status" }, json, socket })
+  }
+  if (
+    subject === "tailscale" &&
+    action === "split-dns" &&
+    value === "rollback" &&
+    extra.length === 0 &&
+    limit === undefined &&
+    !hasCaddyOptions &&
+    flagName === undefined &&
+    service === undefined &&
+    ownership === undefined &&
+    !noDns &&
+    !hasLabelOptions &&
+    !hasFilterOptions &&
+    !tokenStdin &&
+    before === undefined &&
+    !hasHttp
+  ) {
+    if (stateFile !== undefined && (owner !== undefined || stateDir !== undefined)) {
+      return createResultError(op, "Options --state-file and --owner/--state-dir cannot be combined.")
+    }
+    if (stateFile === undefined && (owner === undefined || stateDir === undefined)) {
+      return createResultError(
+        op,
+        "Option --state-file or both --owner and --state-dir are required for tailscale split-dns rollback.",
+      )
+    }
+    return createResult({
+      command: {
+        kind: "tailscale-split-dns-rollback",
+        ...(owner === undefined ? {} : { owner }),
+        ...(stateFile === undefined ? {} : { stateFile }),
+        ...(stateDir === undefined ? {} : { stateDir }),
+      },
+      json,
+      socket,
+    })
   }
   if (cloudflareTokenSetPositionalsMatch(positionals)) return createResultError(op, cloudflareTokenArgumentsError)
   return createResultError(op, `Unknown command or invalid syntax: ${positionals.join(" ")}.`)

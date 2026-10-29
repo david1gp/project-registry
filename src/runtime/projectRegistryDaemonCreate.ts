@@ -1,4 +1,4 @@
-import { join, relative, resolve } from "node:path"
+import { dirname, join, relative, resolve } from "node:path"
 import { createResult, createResultError, type PromiseResult, type Result } from "#result"
 import type { Actor } from "../access/Actor.js"
 import type { ProjectAccess } from "../access/ProjectAccess.js"
@@ -32,6 +32,11 @@ import { projectRegistryDaemonCloudflareDnsTrackingFilesystemDefault } from "./p
 import { projectRegistryDaemonConfigValidate } from "./projectRegistryDaemonConfigValidate.js"
 import { projectRegistryDaemonFilesystemDefault } from "./projectRegistryDaemonFilesystemDefault.js"
 import { projectRegistryDaemonPosixDefault } from "./projectRegistryDaemonPosixDefault.js"
+import { projectRegistryDaemonPrivateDnsCreate } from "./projectRegistryDaemonPrivateDnsCreate.js"
+import { projectRegistryDaemonPrivateDnsCredentialsCreate } from "./projectRegistryDaemonPrivateDnsCredentialsCreate.js"
+import { projectRegistryDaemonPrivateDnsResolverReloadDefault } from "./projectRegistryDaemonPrivateDnsResolverReloadDefault.js"
+import { projectRegistryDaemonPrivateDnsTrackingCreate } from "./projectRegistryDaemonPrivateDnsTrackingCreate.js"
+import { projectRegistryDaemonPrivateDnsTrackingFilesystemDefault } from "./projectRegistryDaemonPrivateDnsTrackingFilesystemDefault.js"
 import { projectRegistryDaemonServerDefault } from "./projectRegistryDaemonServerDefault.js"
 import { projectRegistryDaemonServerIpCreate } from "./projectRegistryDaemonServerIpCreate.js"
 import { projectRegistryDaemonServerIpFilesystemDefault } from "./projectRegistryDaemonServerIpFilesystemDefault.js"
@@ -220,6 +225,10 @@ export function projectRegistryDaemonCreate(options: ProjectRegistryDaemonOption
   let cloudflareDnsFetchOption: ProjectRegistryDaemonOptions["cloudflareDnsFetch"]
   let cloudflareDnsTrackingFilesystemOption: ProjectRegistryDaemonOptions["cloudflareDnsTrackingFilesystem"]
   let cloudflareDnsCredentialsFilesystemOption: ProjectRegistryDaemonOptions["cloudflareDnsCredentialsFilesystem"]
+  let privateDnsFetchOption: ProjectRegistryDaemonOptions["privateDnsFetch"]
+  let privateDnsTrackingFilesystemOption: ProjectRegistryDaemonOptions["privateDnsTrackingFilesystem"]
+  let privateDnsCredentialsFilesystemOption: ProjectRegistryDaemonOptions["privateDnsCredentialsFilesystem"]
+  let privateDnsResolverReloadOption: ProjectRegistryDaemonOptions["privateDnsResolverReload"]
   let wikiReconcileOption: ProjectRegistryDaemonOptions["wikiReconcile"]
   let requireRootOption: ProjectRegistryDaemonOptions["requireRoot"]
   try {
@@ -243,6 +252,10 @@ export function projectRegistryDaemonCreate(options: ProjectRegistryDaemonOption
     cloudflareDnsFetchOption = options.cloudflareDnsFetch
     cloudflareDnsTrackingFilesystemOption = options.cloudflareDnsTrackingFilesystem
     cloudflareDnsCredentialsFilesystemOption = options.cloudflareDnsCredentialsFilesystem
+    privateDnsFetchOption = options.privateDnsFetch
+    privateDnsTrackingFilesystemOption = options.privateDnsTrackingFilesystem
+    privateDnsCredentialsFilesystemOption = options.privateDnsCredentialsFilesystem
+    privateDnsResolverReloadOption = options.privateDnsResolverReload
     wikiReconcileOption = options.wikiReconcile
     requireRootOption = options.requireRoot
   } catch (error) {
@@ -305,6 +318,42 @@ export function projectRegistryDaemonCreate(options: ProjectRegistryDaemonOption
   })
   if (!cloudflareDnsR.success) return cloudflareDnsR
   const cloudflareDns = cloudflareDnsR.data
+  const privateDnsFilesystem =
+    privateDnsTrackingFilesystemOption ?? projectRegistryDaemonPrivateDnsTrackingFilesystemDefault()
+  const privateDnsTrackingR = projectRegistryDaemonPrivateDnsTrackingCreate({
+    path: `${config.serverIpCachePath}.private-dns.json`,
+    filesystem: privateDnsFilesystem,
+  })
+  if (!privateDnsTrackingR.success) return privateDnsTrackingR
+  const privateDnsCredentialsR = projectRegistryDaemonPrivateDnsCredentialsCreate({
+    directory: config.privateDns.credentialsDirectory,
+    filesystem: privateDnsCredentialsFilesystemOption ?? projectRegistryDaemonCloudflareCredentialsFilesystemDefault(),
+  })
+  if (!privateDnsCredentialsR.success) return privateDnsCredentialsR
+  const privateDnsR = projectRegistryDaemonPrivateDnsCreate({
+    enabled: config.privateDns.enabled,
+    tailnet: config.privateDns.tailnet ?? "",
+    nodeAddress: config.privateDns.nodeAddress ?? "",
+    apiBaseUrl: config.privateDns.apiBaseUrl,
+    upstreamResolvers: config.privateDns.upstreamResolvers,
+    dnsmasqConfigPath: config.privateDns.dnsmasqConfigPath,
+    splitDnsStateDirectory: dirname(config.serverIpCachePath),
+    credentialResolve: privateDnsCredentialsR.data.tokenResolve,
+    filesystem: privateDnsFilesystem,
+    resolverReload:
+      privateDnsResolverReloadOption ??
+      projectRegistryDaemonPrivateDnsResolverReloadDefault(config.privateDns.resolverUnit),
+    logger: serverIpLoggerOption,
+    tracking: privateDnsTrackingR.data,
+    repositoryProjectsCurrent: async () => {
+      const snapshotR = await repository.read()
+      return snapshotR.success ? createResult(snapshotR.data.projects) : snapshotR
+    },
+    timer,
+    ...(privateDnsFetchOption === undefined ? {} : { fetch: privateDnsFetchOption }),
+  })
+  if (!privateDnsR.success) return privateDnsR
+  const privateDns = privateDnsR.data
   const wikiSyncR = projectRegistryWikiSyncCreate({
     ...(config.wikiRoot === undefined ? {} : { wikiRoot: config.wikiRoot }),
     repositoryProjectsCurrent: async () => {
@@ -1042,6 +1091,8 @@ export function projectRegistryDaemonCreate(options: ProjectRegistryDaemonOption
     const cloudflareDnsShutdownR = await cloudflareDns.shutdown()
     if (!cloudflareDnsShutdownR.success)
       failures.push(`Cloudflare DNS shutdown: ${cloudflareDnsShutdownR.errorMessage}`)
+    const privateDnsShutdownR = await privateDns.shutdown()
+    if (!privateDnsShutdownR.success) failures.push(`Private DNS shutdown: ${privateDnsShutdownR.errorMessage}`)
     serverIp.shutdown()
     if (userRefreshHandle !== undefined) {
       try {
@@ -1236,12 +1287,28 @@ export function projectRegistryDaemonCreate(options: ProjectRegistryDaemonOption
           return undefined
         }
       },
-      ...(config.cloudflareDns.enabled || wikiSyncEnabled
+      privateDnsStatus: () => {
+        try {
+          return privateDns.status()
+        } catch {
+          // A failing DNS queue must not break Caddy status reads; the CLI
+          // reports missing DNS data as unavailable instead of healthy.
+          return undefined
+        }
+      },
+      ...(config.cloudflareDns.enabled || config.privateDns.enabled || wikiSyncEnabled
         ? {
             projectCreateAfterPersistence: (project, createOptions) => {
               if (config.cloudflareDns.enabled) {
                 try {
                   cloudflareDns.projectCreateAfterPersistence(project, createOptions)
+                } catch {
+                  // Post-persistence integrations must not fail the mutation or skip Wiki sync.
+                }
+              }
+              if (config.privateDns.enabled) {
+                try {
+                  privateDns.projectCreateAfterPersistence(project, createOptions)
                 } catch {
                   // Post-persistence integrations must not fail the mutation or skip Wiki sync.
                 }
@@ -1262,6 +1329,11 @@ export function projectRegistryDaemonCreate(options: ProjectRegistryDaemonOption
         } catch {
           // Post-persistence integrations must not fail the mutation or skip Wiki sync.
         }
+        try {
+          privateDns.projectEditAfterPersistence(previous, project)
+        } catch {
+          // Post-persistence integrations must not fail the mutation or skip Wiki sync.
+        }
         if (wikiSyncEnabled) {
           try {
             wikiSync.projectEditAfterPersistence(previous, project)
@@ -1270,7 +1342,14 @@ export function projectRegistryDaemonCreate(options: ProjectRegistryDaemonOption
           }
         }
       },
-      projectDeleteAfterPersistence: cloudflareDns.projectDeleteAfterPersistence,
+      projectDeleteAfterPersistence: (project) => {
+        cloudflareDns.projectDeleteAfterPersistence(project)
+        try {
+          privateDns.projectDeleteAfterPersistence(project)
+        } catch {
+          // Post-persistence integrations must not fail the mutation.
+        }
+      },
       ...(wikiSyncEnabled
         ? {
             projectOrganizeAfterPersistence: () => {
@@ -1417,6 +1496,8 @@ export function projectRegistryDaemonCreate(options: ProjectRegistryDaemonOption
     serverIp.start()
     const cloudflareDnsStartR = cloudflareDns.start()
     if (!cloudflareDnsStartR.success) return startupFailure(cloudflareDnsStartR.errorMessage)
+    const privateDnsStartR = privateDns.start()
+    if (!privateDnsStartR.success) return startupFailure(privateDnsStartR.errorMessage)
     const signalsR = signalsInstall()
     if (!signalsR.success) return startupFailure(signalsR.errorMessage)
 
@@ -1478,6 +1559,10 @@ export function projectRegistryDaemonCreate(options: ProjectRegistryDaemonOption
       cloudflareDns.shutdown().then(
         (result) => (result.success ? [] : [`Cloudflare DNS shutdown: ${result.errorMessage}`]),
         () => ["Cloudflare DNS shutdown did not complete"],
+      ),
+      privateDns.shutdown().then(
+        (result) => (result.success ? [] : [`Private DNS shutdown: ${result.errorMessage}`]),
+        () => ["Private DNS shutdown did not complete"],
       ),
       wikiSync.shutdown().then(
         (result) => (result.success ? [] : [`Wiki sync shutdown: ${result.errorMessage}`]),

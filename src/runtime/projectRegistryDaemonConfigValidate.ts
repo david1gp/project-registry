@@ -83,6 +83,15 @@ export function projectRegistryDaemonConfigValidate(input: unknown): Result<Proj
       return createResultError(op, "port range start must not exceed its end")
     }
 
+    if (parsed.output.privateDns.enabled) {
+      if (parsed.output.privateDns.tailnet === undefined) {
+        return createResultError(op, "private DNS tailnet is required when private DNS is enabled")
+      }
+      if (parsed.output.privateDns.nodeAddress === undefined) {
+        return createResultError(op, "private DNS node address is required when private DNS is enabled")
+      }
+    }
+
     if (parsed.output.caddyAccessLogRoot !== undefined) {
       const accessLogRootR = projectAccessLogRootValidate(
         parsed.output.caddyAccessLogRoot,
@@ -133,6 +142,7 @@ export function projectRegistryDaemonConfigValidate(input: unknown): Result<Proj
       portRange: { ...parsed.output.portRange },
       webListener: { ...parsed.output.webListener },
       cloudflareDns: { ...parsed.output.cloudflareDns },
+      privateDns: { ...parsed.output.privateDns, upstreamResolvers: [...parsed.output.privateDns.upstreamResolvers] },
     })
   } catch (error) {
     return createResultError(op, error instanceof Error ? error.message : "invalid daemon configuration")

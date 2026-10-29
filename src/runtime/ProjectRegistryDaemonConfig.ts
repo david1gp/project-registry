@@ -1,7 +1,7 @@
 import type { CaddyConfigOptions } from "../caddy/caddyConfigOptionsSchema.js"
 import type { CaddyInstanceConfig } from "../caddy/caddyInstanceConfigSchema.js"
-import type { ProjectPortRange } from "../project/projectPortNext.js"
 import type { LocalDomainsOptions } from "../local-domains/localDomainsOptionsSchema.js"
+import type { ProjectPortRange } from "../project/projectPortNext.js"
 
 export type ProjectRegistryDaemonConfig = {
   mode: "root" | "user"
@@ -49,6 +49,16 @@ export type ProjectRegistryDaemonConfig = {
   serverIpDiscoveryTimeoutMs: number
   cloudflareDns: {
     enabled: boolean
+    credentialsDirectory: string
+  }
+  privateDns: {
+    enabled: boolean
+    tailnet?: string
+    nodeAddress?: string
+    apiBaseUrl: string
+    dnsmasqConfigPath: string
+    resolverUnit: string
+    upstreamResolvers: string[]
     credentialsDirectory: string
   }
 }

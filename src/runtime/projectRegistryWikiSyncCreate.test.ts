@@ -414,7 +414,7 @@ describe("projectRegistryApiHandlerWikiSync", () => {
     const created = await handlerJson(handler, "/api/v1/users/leo/projects", leo, "POST", {
       expectedRevision: revisionA,
       name: "wiki-app",
-      caddy: { domains: ["wiki-app.example"] },
+      caddy: { domains: ["wiki-app.wonder1.de"] },
     })
     expect(created.status).toBe(201)
 
@@ -454,7 +454,7 @@ describe("projectRegistryApiHandlerWikiSync", () => {
     const failedCreate = await handlerJson(handler, "/api/v1/users/leo/projects", leo, "POST", {
       expectedRevision: "c".repeat(40),
       name: "nope",
-      caddy: { domains: ["nope.example"] },
+      caddy: { domains: ["nope.wonder1.de"] },
     })
     expect(failedCreate.status).toBe(409)
 
@@ -468,7 +468,7 @@ describe("projectRegistryApiHandlerWikiSync", () => {
     const created = await handlerJson(handler, "/api/v1/users/leo/projects", leo, "POST", {
       expectedRevision: revisionA,
       name: "wiki-app",
-      caddy: { domains: ["wiki-app.example"] },
+      caddy: { domains: ["wiki-app.wonder1.de"] },
     })
     expect(created.status).toBe(201)
 
@@ -555,7 +555,7 @@ describe("projectRegistryDaemonWikiSync", () => {
           body: JSON.stringify({
             expectedRevision: repository.revision,
             name: "wiki-app",
-            caddy: { domains: ["wiki-app.example"] },
+            caddy: { domains: ["wiki-app.wonder1.de"] },
           }),
         }),
       )

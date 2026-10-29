@@ -4,23 +4,25 @@ import * as a from "valibot"
 import { createResult, createResultError, type Result, type ResultErr } from "#result"
 import type { Project } from "../project/Project.js"
 import { type ProjectCanonical, projectCanonicalSchema } from "../project/projectCanonicalSchema.js"
+import { projectFilter } from "../project/projectFilter.js"
 import { projectLabelsSchema } from "../project/projectLabelsSchema.js"
 import { projectLocalCaddyEntries } from "../project/projectLocalCaddyEntries.js"
 import { projectMigrate } from "../project/projectMigrate.js"
 import { projectNetworkVisibilityDefault } from "../project/projectNetworkVisibilityDefault.js"
 import { projectSchema } from "../project/projectSchema.js"
 import { projectRegistryVersionMetadataRender } from "../projectRegistryVersionMetadataRender.js"
+import type { TailscaleSplitDnsFetch } from "../tailscale/TailscaleSplitDnsFetch.js"
+import { docsLogicalPagePathResolve } from "./docsLogicalPagePath.js"
 import type { ProjectRegistryCliCaddyOptions } from "./ProjectRegistryCliCaddyOptions.js"
 import type { ProjectRegistryCliFetch } from "./ProjectRegistryCliFetch.js"
 import type { ProjectRegistryCliInvocation } from "./ProjectRegistryCliInvocation.js"
 import { projectCliServiceRows } from "./projectCliServiceRows.js"
-import { projectFilter } from "../project/projectFilter.js"
-import { docsLogicalPagePathResolve } from "./docsLogicalPagePath.js"
 import { projectRegistryCliArgumentsParse } from "./projectRegistryCliArgumentsParse.js"
 import { projectRegistryCliHelp } from "./projectRegistryCliHelp.js"
 import { projectRegistryCliOutputFormat } from "./projectRegistryCliOutputFormat.js"
 import { projectRegistryCliRequest } from "./projectRegistryCliRequest.js"
 import { projectRegistryCliSocketResolve } from "./projectRegistryCliSocketResolve.js"
+import { projectRegistryCliSplitDnsRollback } from "./projectRegistryCliSplitDnsRollback.js"
 import { projectRegistryCliVersion } from "./projectRegistryCliVersion.js"
 import { projectServicesPatchApply } from "./projectServicesPatchApply.js"
 
@@ -30,6 +32,8 @@ type CliRunOptions = {
   stdin?: ReadableStream<Uint8Array>
   stdout?: (text: string) => void
   stderr?: (text: string) => void
+  tailscaleFetch?: TailscaleSplitDnsFetch
+  tailscaleStateRead?: (path: string) => Promise<string>
 }
 
 type RequestOptions = {
@@ -560,6 +564,28 @@ export async function projectRegistryCliRun(args: readonly string[], options: Cl
   }
 
   const environment = options.environment ?? Bun.env
+  if (invocation.command.kind === "tailscale-split-dns-rollback") {
+    const command = invocation.command
+    const resultR = await projectRegistryCliSplitDnsRollback({
+      ...(command.owner === undefined ? {} : { owner: command.owner }),
+      ...(command.stateFile === undefined ? {} : { stateFile: command.stateFile }),
+      ...(command.stateDir === undefined ? {} : { stateDir: command.stateDir }),
+      environment,
+      ...(options.tailscaleStateRead === undefined ? {} : { stateRead: options.tailscaleStateRead }),
+      ...(options.tailscaleFetch === undefined ? {} : { fetch: options.tailscaleFetch }),
+    })
+    if (!resultR.success) {
+      errorWrite(resultR, invocation.json, writeError)
+      return 1
+    }
+    const outputR = projectRegistryCliOutputFormat(invocation, resultR.data)
+    if (!outputR.success) {
+      errorWrite({ ...outputR, code: "cli.protocol" }, invocation.json, writeError)
+      return 1
+    }
+    writeOut(outputR.data)
+    return 0
+  }
   const socketR = projectRegistryCliSocketResolve(invocation.socket, environment)
   if (!socketR.success) {
     errorWrite({ ...socketR, code: "cli.socket" }, invocation.json, writeError)

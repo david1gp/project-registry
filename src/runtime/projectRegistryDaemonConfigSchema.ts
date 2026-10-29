@@ -149,6 +149,53 @@ const cloudflareDnsSchema = a.strictObject({
   credentialsDirectory: a.optional(absolutePathSchema, "/etc/project-registry/cloudflare"),
 })
 
+const ipv4Schema = a.pipe(
+  a.string(),
+  a.minLength(1),
+  a.check((value) => isIP(value) === 4, "address must be a valid IPv4 address"),
+)
+
+const tailscaleApiBaseUrlSchema = a.pipe(
+  a.string(),
+  a.minLength(1),
+  a.check((value) => {
+    try {
+      const url = new URL(value)
+      return (
+        url.protocol === "https:" &&
+        url.username.length === 0 &&
+        url.password.length === 0 &&
+        url.search.length === 0 &&
+        url.hash.length === 0
+      )
+    } catch {
+      return false
+    }
+  }, "Tailscale API URL must be an HTTPS URL without credentials, query, or fragment"),
+)
+
+const systemdUnitSchema = a.pipe(
+  a.string(),
+  a.minLength(1),
+  a.maxLength(256),
+  a.check(
+    (value) => [...value].every((character) => character.charCodeAt(0) > 0x20 && character.charCodeAt(0) !== 0x7f),
+    "systemd unit name is invalid",
+  ),
+  a.check((value) => !value.includes("/") && !value.includes("\0"), "systemd unit name is invalid"),
+)
+
+const privateDnsSchema = a.strictObject({
+  enabled: a.optional(a.boolean(), false),
+  tailnet: a.optional(boundedIdentityValueSchema),
+  nodeAddress: a.optional(ipv4Schema),
+  apiBaseUrl: a.optional(tailscaleApiBaseUrlSchema, "https://api.tailscale.com/api/v2"),
+  dnsmasqConfigPath: a.optional(absolutePathSchema, "/etc/project-registry/private-dnsmasq.conf"),
+  resolverUnit: a.optional(systemdUnitSchema, "leo-tailscale-private-dns"),
+  upstreamResolvers: a.optional(a.pipe(a.array(ipv4Schema), a.minLength(1)), ["1.1.1.1", "8.8.8.8"]),
+  credentialsDirectory: a.optional(absolutePathSchema, "/etc/project-registry/tailscale"),
+})
+
 export const projectRegistryDaemonConfigSchema = a.strictObject({
   mode: a.optional(a.picklist(["root", "user"]), "root"),
   localDomains: a.optional(localDomainsOptionsSchema),
@@ -192,4 +239,5 @@ export const projectRegistryDaemonConfigSchema = a.strictObject({
   serverIpCachePath: a.optional(absolutePathSchema, "/var/lib/project-registry/server-ip"),
   serverIpDiscoveryTimeoutMs: a.optional(durationSchema, 3_000),
   cloudflareDns: a.optional(cloudflareDnsSchema, { enabled: true }),
+  privateDns: a.optional(privateDnsSchema, { enabled: false }),
 })

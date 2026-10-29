@@ -1,3 +1,4 @@
+import type { PromiseResult } from "#result"
 import type { ProjectAccessLogSource } from "../access-log/ProjectAccessLogSource.js"
 import type { CaddyApplication } from "../caddy/CaddyApplication.js"
 import type { CaddyFetch } from "../caddy/CaddyFetch.js"
@@ -7,6 +8,7 @@ import type { CloudflareDnsFetch } from "../cloudflare/CloudflareDnsFetch.js"
 import type { ProjectRepository } from "../project-store/ProjectRepository.js"
 import type { SessionStore } from "../session/SessionStore.js"
 import type { TokenReferenceStore } from "../session/TokenReferenceStore.js"
+import type { TailscaleSplitDnsFetch } from "../tailscale/TailscaleSplitDnsFetch.js"
 import type { ZitadelHttp } from "../zitadel/ZitadelHttp.js"
 import type { ProjectRegistryDaemonBrowserAuth } from "./ProjectRegistryDaemonBrowserAuth.js"
 import type { ProjectRegistryDaemonCloudflareCredentialsFilesystem } from "./ProjectRegistryDaemonCloudflareCredentialsFilesystem.js"
@@ -14,6 +16,7 @@ import type { ProjectRegistryDaemonCloudflareDnsTrackingFilesystem } from "./Pro
 import type { ProjectRegistryDaemonFilesystem } from "./ProjectRegistryDaemonFilesystem.js"
 import type { ProjectRegistryDaemonMappedUsersResolve } from "./ProjectRegistryDaemonMappedUsersResolve.js"
 import type { ProjectRegistryDaemonPosix } from "./ProjectRegistryDaemonPosix.js"
+import type { ProjectRegistryDaemonPrivateDnsTrackingFilesystem } from "./ProjectRegistryDaemonPrivateDnsTrackingFilesystem.js"
 import type { ProjectRegistryDaemonRequestHandler } from "./ProjectRegistryDaemonRequestHandler.js"
 import type { ProjectRegistryDaemonServerFactory } from "./ProjectRegistryDaemonServerFactory.js"
 import type { ProjectRegistryDaemonServerIpFilesystem } from "./ProjectRegistryDaemonServerIpFilesystem.js"
@@ -48,6 +51,10 @@ export type ProjectRegistryDaemonOptions = {
   cloudflareDnsFetch?: CloudflareDnsFetch
   cloudflareDnsTrackingFilesystem?: ProjectRegistryDaemonCloudflareDnsTrackingFilesystem
   cloudflareDnsCredentialsFilesystem?: ProjectRegistryDaemonCloudflareCredentialsFilesystem
+  privateDnsFetch?: TailscaleSplitDnsFetch
+  privateDnsTrackingFilesystem?: ProjectRegistryDaemonPrivateDnsTrackingFilesystem
+  privateDnsCredentialsFilesystem?: ProjectRegistryDaemonCloudflareCredentialsFilesystem
+  privateDnsResolverReload?: () => PromiseResult<void>
   wikiReconcile?: ProjectRegistryDaemonWikiReconcile
   requireRoot?: boolean
 }

@@ -109,7 +109,7 @@ test("default user-mode private socket authorizes own list/create/edit/delete wi
     const created = await harness.request(path, "POST", {
       expectedRevision: initial.data.revision,
       name: "socket-auth",
-      caddy: { domains: ["socket-auth.example"] },
+      caddy: { domains: ["socket-auth.example"], networkVisibility: "public" },
     })
     expect(created.status).toBe(201)
     expect(await created.json()).toMatchObject({ success: true, data: { action: "create" } })
