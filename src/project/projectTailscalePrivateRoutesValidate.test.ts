@@ -1,5 +1,8 @@
 import { describe, expect, test } from "bun:test"
-import { projectTailscalePrivateRoutesValidate } from "./projectTailscalePrivateRoutesValidate.js"
+import {
+  projectTailscalePrivateRouteDomains,
+  projectTailscalePrivateRoutesValidate,
+} from "./projectTailscalePrivateRoutesValidate.js"
 
 describe("projectTailscalePrivateRoutesValidate", () => {
   test("passes empty and malformed inputs", () => {
@@ -56,6 +59,44 @@ describe("projectTailscalePrivateRoutesValidate", () => {
     expect(result.success).toBe(false)
     if (result.success) return
     expect(result.errorMessage).toContain("webflows.de")
+  })
+
+  test("grandfathers already-served private domains but validates new ones", () => {
+    const legacy = { caddy: { port: 3000, domains: ["api.preview.akademie.contentoren.de"], networkVisibility: "private" } }
+    expect(projectTailscalePrivateRouteDomains(legacy)).toEqual(["api.preview.akademie.contentoren.de"])
+    // Unrelated edits keep the legacy claim working.
+    expect(projectTailscalePrivateRoutesValidate(legacy, "leo", "op", ["api.preview.akademie.contentoren.de"]).success).toBe(
+      true,
+    )
+    // Newly added out-of-zone domains are still rejected.
+    const added = {
+      caddy: {
+        port: 3000,
+        domains: ["api.preview.akademie.contentoren.de", "new.contentoren.de"],
+        networkVisibility: "private",
+      },
+    }
+    const addedR = projectTailscalePrivateRoutesValidate(added, "leo", "op", ["api.preview.akademie.contentoren.de"])
+    expect(addedR.success).toBe(false)
+    if (addedR.success) return
+    expect(addedR.errorMessage).toContain("new.contentoren.de")
+    // Newly privatized domains are not grandfathered either.
+    const privatized = {
+      caddy: { port: 3000, domains: ["new.contentoren.de"], networkVisibility: "private" },
+    }
+    expect(projectTailscalePrivateRoutesValidate(privatized, "leo", "op", []).success).toBe(false)
+    // The upstream guard still applies to grandfathered routes.
+    const badUpstream = {
+      caddy: {
+        port: 3000,
+        domains: ["api.preview.akademie.contentoren.de"],
+        networkVisibility: "private",
+        upstream: "10.1.2.3",
+      },
+    }
+    expect(projectTailscalePrivateRoutesValidate(badUpstream, "leo", "op", ["api.preview.akademie.contentoren.de"]).success).toBe(
+      false,
+    )
   })
 
   test("rejects non-loopback upstreams on private routes", () => {

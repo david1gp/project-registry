@@ -3,6 +3,7 @@ import type { Project } from "../project/Project.js"
 import { projectDomainNormalize } from "../project/projectDomainNormalize.js"
 import { projectLocalCaddyEntries } from "../project/projectLocalCaddyEntries.js"
 import { projectPrivateTlsAutomationRender } from "../project/projectPrivateTlsAutomation.js"
+import { projectTailscaleZoneClaimValidate } from "../project/projectTailscaleZonePolicy.js"
 import { type ProjectPrivateTlsGateSnapshot, projectPrivateTlsGateDecide } from "../project/projectPrivateTlsGate.js"
 import type { CaddyConfig } from "./CaddyConfig.js"
 
@@ -149,9 +150,18 @@ export function caddyConfigPrivateTlsReconcileCreate(options: {
         }
       }
     }
+    // Claims outside the owner's current zones are pre-migration rows, not
+    // renderable enrollments: skip them here (the tracker records persistent
+    // claim errors for the backlog) so one legacy name cannot fail the whole
+    // render. Their routes pass through with base-config TLS untouched; the
+    // gate below only withholds rendered-but-unproven names.
     const claims = [...namesByOwner]
       .filter(([, names]) => names.size > 0)
-      .map(([owner, names]) => ({ owner, hostnames: [...names] }))
+      .map(([owner, names]) => ({
+        owner,
+        hostnames: [...names].filter((hostname) => projectTailscaleZoneClaimValidate(owner, hostname, op).success),
+      }))
+      .filter((claim) => claim.hostnames.length > 0)
     if (claims.length === 0) return createResult(config)
 
     const renderedR = projectPrivateTlsAutomationRender({

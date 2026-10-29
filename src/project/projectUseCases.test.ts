@@ -1291,4 +1291,51 @@ describe("project use cases", () => {
       services: [{ id: "default", caddy: { domains: ["injected.wonder1.de"] } }],
     })
   })
+
+  test("grandfathers pre-migration out-of-zone domains on edit", async () => {
+    const canonicalR = projectMigrate({
+      schemaVersion: 2,
+      owner: "leo",
+      name: "akademie",
+      services: [
+        {
+          id: "default",
+          units: [],
+          ownership: "registry",
+          caddy: { port: 3120, domains: ["api.preview.akademie.contentoren.de"], networkVisibility: "private" },
+        },
+      ],
+    })
+    if (!canonicalR.success) throw new Error(canonicalR.errorMessage)
+    const repository = repositoryCreate([canonicalR.data])
+    const access = accessCreate({ subject: "admin-subject", username: "admin", role: "admin" }, { leo: "admin" })
+    const options = useCaseOptions(repository, access, { from: 3120, to: 3129 })
+
+    const unrelated = await projectEdit(
+      options,
+      { owner: "leo", name: "akademie" },
+      { description: "unrelated change" },
+      { expectedRevision: currentRevision },
+    )
+    expect(unrelated.success).toBe(true)
+
+    const added = await projectEdit(
+      options,
+      { owner: "leo", name: "akademie" },
+      {
+        schemaVersion: 2,
+        services: [
+          {
+            id: "default",
+            caddy: { domains: ["api.preview.akademie.contentoren.de", "new.contentoren.de"] },
+          },
+        ],
+      },
+      { expectedRevision: currentRevision },
+    )
+    expect(added.success).toBe(false)
+    if (added.success) return
+    expect(added.errorMessage).toContain("allowed Tailscale zones: wonder1.de")
+    expect(repository.calls.edit).toHaveLength(1)
+  })
 })

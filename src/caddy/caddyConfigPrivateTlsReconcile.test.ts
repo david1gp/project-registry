@@ -204,6 +204,32 @@ describe("caddyConfigPrivateTlsReconcileCreate", () => {
     expect((await reconcileR.data(malformed, projects)).success).toBe(false)
   })
 
+  test("skips pre-migration out-of-zone claims while rendering valid ones", async () => {
+    const projects = [
+      project("legacy", ["api.preview.akademie.contentoren.de"]),
+      project("current", ["api.preview.wonder1.de"]),
+    ]
+    const config = generatePrivate(projects)
+    const reconcileR = caddyConfigPrivateTlsReconcileCreate({
+      enabled: true,
+      snapshotCurrent: () => ({
+        enrolled: ["api.preview.wonder1.de"],
+        wildcardCovered: [],
+        proven: ["api.preview.wonder1.de"],
+      }),
+    })
+    if (!reconcileR.success) throw new Error("setup failed")
+    const reconciled = await reconcileR.data(config, projects)
+    expect(reconciled.success).toBe(true)
+    if (!reconciled.success) return
+    // The legacy route passes through with base TLS untouched; only the
+    // in-zone claim is enrolled and served.
+    expect(routeHosts(reconciled.data)).toEqual([["api.preview.akademie.contentoren.de"], ["api.preview.wonder1.de"]])
+    expect(reconciled.data.apps.tls?.certificates?.automate).toEqual(["api.preview.wonder1.de"])
+    expect(reconciled.data.apps.tls?.automation?.policies).toHaveLength(1)
+    expect(reconciled.data.apps.tls?.automation?.policies?.[0]?.subjects).toEqual(["api.preview.wonder1.de"])
+  })
+
   test("passes legacy and unparseable routes through while gating desired names", async () => {
     const projects = [project("app", ["api.preview.wonder1.de"])]
     const generated = generatePrivate(projects)

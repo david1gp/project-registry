@@ -12,7 +12,10 @@ import { projectMigrate } from "./projectMigrate.js"
 import { projectMutationExpectedRevision } from "./projectMutationExpectedRevision.js"
 import { projectNetworkVisibilityDefault } from "./projectNetworkVisibilityDefault.js"
 import { projectOwnerAuthorize } from "./projectOwnerAuthorize.js"
-import { projectTailscalePrivateRoutesValidate } from "./projectTailscalePrivateRoutesValidate.js"
+import {
+  projectTailscalePrivateRouteDomains,
+  projectTailscalePrivateRoutesValidate,
+} from "./projectTailscalePrivateRoutesValidate.js"
 
 function projectEditNewServiceVisibilityDefaultApply(
   input: unknown,
@@ -194,7 +197,12 @@ export async function projectEdit(
 
   const mergedInput = projectEditCanonicalInput(existingCanonicalR.data, input)
   const visibilityAppliedInput = projectEditNewServiceVisibilityDefaultApply(mergedInput, key.owner, existingServiceIds)
-  const tailscaleR = projectTailscalePrivateRoutesValidate(visibilityAppliedInput, key.owner, op)
+  // Grandfather this project's existing private domains: the rename
+  // migration moves rows zone by zone, so pre-migration claims keep working
+  // until renamed; only newly added (or newly privatized) domains must
+  // fall inside the owner's current zones.
+  const grandfatheredDomains = projectTailscalePrivateRouteDomains(existingCanonicalR.data)
+  const tailscaleR = projectTailscalePrivateRoutesValidate(visibilityAppliedInput, key.owner, op, grandfatheredDomains)
   if (!tailscaleR.success) return tailscaleR
 
   const projectR = projectCanonicalNormalize(visibilityAppliedInput, {
@@ -207,7 +215,12 @@ export async function projectEdit(
   if (!projectR.success) return projectR
   // Post-normalize pass: see projectCreate for why the pre-normalize check
   // alone is not enough (default-domain injection happens inside normalize).
-  const tailscaleNormalizedR = projectTailscalePrivateRoutesValidate(projectR.data, key.owner, op)
+  const tailscaleNormalizedR = projectTailscalePrivateRoutesValidate(
+    projectR.data,
+    key.owner,
+    op,
+    grandfatheredDomains,
+  )
   if (!tailscaleNormalizedR.success) return tailscaleNormalizedR
   if (!projectKeyEqual(projectR.data, key))
     return createResultErrorCode(op, "project owner and name are immutable", "request.invalid")
