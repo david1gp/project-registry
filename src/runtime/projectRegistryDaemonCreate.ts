@@ -9,6 +9,7 @@ import { projectDocsPublicationStoreCreate } from "../docs/projectDocsPublicatio
 import type { ProjectRepository } from "../project-store/ProjectRepository.js"
 import { sessionActorResolve } from "../session/sessionActorResolve.js"
 import { sessionRequestResolve } from "../session/sessionRequestResolve.js"
+import { tailscaleTlsTrustProbeCreate } from "../tailscale/tailscaleTlsTrustProbe.js"
 import type { ProjectRegistryDaemon } from "./ProjectRegistryDaemon.js"
 import type { ProjectRegistryDaemonBrowserAuth } from "./ProjectRegistryDaemonBrowserAuth.js"
 import type { ProjectRegistryDaemonConfig } from "./ProjectRegistryDaemonConfig.js"
@@ -230,6 +231,8 @@ export function projectRegistryDaemonCreate(options: ProjectRegistryDaemonOption
   let privateDnsTrackingFilesystemOption: ProjectRegistryDaemonOptions["privateDnsTrackingFilesystem"]
   let privateDnsCredentialsFilesystemOption: ProjectRegistryDaemonOptions["privateDnsCredentialsFilesystem"]
   let privateDnsResolverReloadOption: ProjectRegistryDaemonOptions["privateDnsResolverReload"]
+  let privateTlsTrustedProbeOption: ProjectRegistryDaemonOptions["privateTlsTrustedProbe"]
+  let privateTlsGateStateOption: ProjectRegistryDaemonOptions["privateTlsGateState"]
   let wikiReconcileOption: ProjectRegistryDaemonOptions["wikiReconcile"]
   let requireRootOption: ProjectRegistryDaemonOptions["requireRoot"]
   try {
@@ -257,6 +260,8 @@ export function projectRegistryDaemonCreate(options: ProjectRegistryDaemonOption
     privateDnsTrackingFilesystemOption = options.privateDnsTrackingFilesystem
     privateDnsCredentialsFilesystemOption = options.privateDnsCredentialsFilesystem
     privateDnsResolverReloadOption = options.privateDnsResolverReload
+    privateTlsTrustedProbeOption = options.privateTlsTrustedProbe
+    privateTlsGateStateOption = options.privateTlsGateState
     wikiReconcileOption = options.wikiReconcile
     requireRootOption = options.requireRoot
   } catch (error) {
@@ -356,12 +361,36 @@ export function projectRegistryDaemonCreate(options: ProjectRegistryDaemonOption
   if (!privateDnsR.success) return privateDnsR
   const privateDns = privateDnsR.data
   // Private TLS readiness rides on the private-DNS switch: no separate
-  // config section. The tracker only resolves claiming-owner Cloudflare
-  // tokens to confirm availability and never writes Caddy state; the
-  // automation renderer (item 2) consumes its plans later.
+  // config section. The tracker resolves claiming-owner Cloudflare tokens
+  // to confirm availability (never logged), proves trusted handshakes
+  // against the tailnet node, and publishes the gate snapshot that the
+  // private regenerate hook reads; the hook installs the rendered
+  // enrollment set and withholds unproven routes.
+  if (privateTlsTrustedProbeOption !== undefined && typeof privateTlsTrustedProbeOption !== "function") {
+    return createResultError(op, "Private TLS trust probe is invalid")
+  }
+  if (
+    privateTlsGateStateOption !== undefined &&
+    (typeof privateTlsGateStateOption !== "object" ||
+      privateTlsGateStateOption === null ||
+      typeof (privateTlsGateStateOption as { update?: unknown }).update !== "function")
+  ) {
+    return createResultError(op, "Private TLS gate state is invalid")
+  }
+  let privateTlsProbe = privateTlsTrustedProbeOption
+  if (privateTlsProbe === undefined && config.privateDns.enabled) {
+    const privateTlsProbeDefaultR = tailscaleTlsTrustProbeCreate({ nodeAddress: config.privateDns.nodeAddress ?? "" })
+    if (!privateTlsProbeDefaultR.success) return createResultError(op, "Private TLS trust probe is unavailable")
+    privateTlsProbe = privateTlsProbeDefaultR.data.probe
+  }
   const privateTlsR = projectRegistryDaemonPrivateTlsCreate({
     enabled: config.privateDns.enabled,
+    ...(config.privateDns.nodeAddress === undefined
+      ? {}
+      : { privateListenerAddresses: [config.privateDns.nodeAddress] }),
     credentialResolve: cloudflareCredentialsR.data.tokenResolve,
+    ...(privateTlsProbe === undefined ? {} : { trustedProbe: privateTlsProbe }),
+    ...(privateTlsGateStateOption === undefined ? {} : { gateState: privateTlsGateStateOption }),
     repositoryProjectsCurrent: async () => {
       const snapshotR = await repository.read()
       return snapshotR.success ? createResult(snapshotR.data.projects) : snapshotR

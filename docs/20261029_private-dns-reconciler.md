@@ -101,6 +101,19 @@ The claim is validated first; rejected claims resolve nothing.
   tracker runs on the private-DNS switch (no separate config), feeds
   `privateTls` into API status (owner-scoped errors) and `Private TLS:`
   CLI lines, and hooks create/edit/delete.
+- TLS render + gate landed: `projectPrivateTlsAutomationRender`
+  (`src/project/`) renders enrollment plans into the `apps.tls` section
+  (per-credential DNS-01 policies with `{env.*}` placeholders and public
+  `:53` resolvers, plus the `certificates.automate` loader; exact hosts
+  only, single-level names skipped, cross-zone/apex/wildcard rejected);
+  `projectPrivateTlsGateDecide` + `tailscaleTlsTrustProbeCreate` prove
+  trusted handshakes; `caddyConfigPrivateTlsReconcile` (private target
+  only, behind the same switch) unions the render onto base TLS and
+  withholds routes for unproven names — enroll on the zero-route
+  baseline first, prove, only then move routes. The tracker publishes
+  the gate snapshot and `proven` status; `tls-proof` errors defer with
+  backoff. Single-level names still prove via the baseline zone
+  wildcard (the renderer never emits wildcard subjects).
 - Rollback CLI landed: `project-registry tailscale split-dns rollback
   (--state-file <path> | --owner <owner> --state-dir <dir>)`, a local admin
   command (no daemon round-trip) around `tailscaleSplitDnsRollback` with

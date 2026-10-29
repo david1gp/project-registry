@@ -954,6 +954,7 @@ describe("projectRegistryApiHandlerCreate", () => {
         pendingOwners: 1,
         enrolled: [],
         wildcardCovered: [],
+        proven: [],
         challengeResolvers: ["1.1.1.1"],
         errors,
       }),

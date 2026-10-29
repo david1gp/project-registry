@@ -135,7 +135,7 @@ test("daemon open composes local reconcilers and always loads new startup TLS ev
     try {
       expect((await daemonR.data.caddyApplication.startup()).success).toBe(true)
       expect(loaded).toHaveLength(1)
-      expect(loaded[0]?.apps.tls?.certificates.load_files).toEqual([
+      expect(loaded[0]?.apps.tls?.certificates?.load_files).toEqual([
         { certificate: certificatesR.data.certificatePath, key: certificatesR.data.privateKeyPath },
       ])
       expect(await readFile(localDomains.hostsFilePath, "utf8")).toContain("127.0.0.1 oc.example\n")

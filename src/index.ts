@@ -70,6 +70,7 @@ export {
   type OidcOptions,
   oidcOptionsSchema,
 } from "./caddy/caddyConfigOptionsSchema.js"
+export { caddyConfigPrivateTlsReconcileCreate } from "./caddy/caddyConfigPrivateTlsReconcile.js"
 export { caddyConfigSerialize } from "./caddy/caddyConfigSerialize.js"
 export { caddyConfigValidate } from "./caddy/caddyConfigValidate.js"
 export { caddyProcessRun } from "./caddy/caddyProcessRun.js"
@@ -132,6 +133,17 @@ export { projectPortCollision } from "./project/projectPortCollision.js"
 export type { ProjectPortRange } from "./project/projectPortNext.js"
 export { projectPortNext } from "./project/projectPortNext.js"
 export type {
+  ProjectPrivateTlsAutomationClaim,
+  ProjectPrivateTlsAutomationIssuer,
+  ProjectPrivateTlsAutomationPolicy,
+  ProjectPrivateTlsAutomationRender,
+  ProjectPrivateTlsAutomationTls,
+} from "./project/projectPrivateTlsAutomation.js"
+export {
+  projectPrivateTlsAutomationRender,
+  projectPrivateTlsTokenEnvVarsDefault,
+} from "./project/projectPrivateTlsAutomation.js"
+export type {
   ProjectPrivateTlsEnrollmentHost,
   ProjectPrivateTlsEnrollmentKind,
   ProjectPrivateTlsEnrollmentPlan,
@@ -142,6 +154,18 @@ export {
   projectPrivateTlsEnrollmentPlanCreate,
   projectPrivateTlsEnrollmentPrepare,
 } from "./project/projectPrivateTlsEnrollment.js"
+export type {
+  ProjectPrivateTlsGateDecision,
+  ProjectPrivateTlsGateRefusal,
+  ProjectPrivateTlsGateSnapshot,
+  ProjectPrivateTlsGateState,
+  ProjectPrivateTlsTrustProbe,
+} from "./project/projectPrivateTlsGate.js"
+export {
+  projectPrivateTlsGateDecide,
+  projectPrivateTlsGateStateCreate,
+  projectPrivateTlsTrustedCheck,
+} from "./project/projectPrivateTlsGate.js"
 export type { ProjectPrivateTlsTokenSelection } from "./project/projectPrivateTlsTokenSelect.js"
 export {
   projectPrivateTlsTokenOwnerSelect,
@@ -285,6 +309,7 @@ export { tailscaleSplitDnsRemovePlanCreate } from "./tailscale/tailscaleSplitDns
 export { tailscaleSplitDnsRollback } from "./tailscale/tailscaleSplitDnsRollback.js"
 export type { TailscaleSplitDnsState } from "./tailscale/tailscaleSplitDnsStateSchema.js"
 export { tailscaleSplitDnsStateSchema } from "./tailscale/tailscaleSplitDnsStateSchema.js"
+export { tailscaleTlsTrustProbeCreate } from "./tailscale/tailscaleTlsTrustProbe.js"
 export type { UserDefaultDomain } from "./user-default-domain/UserDefaultDomain.js"
 export type { UserDefaultDomainEntry } from "./user-default-domain/UserDefaultDomainEntry.js"
 export type { UserDefaultDomainMutation } from "./user-default-domain/UserDefaultDomainMutation.js"

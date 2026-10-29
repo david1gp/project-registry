@@ -8,6 +8,7 @@ import {
   projectPrivateTlsChallengeResolversValidate,
   projectPrivateTlsEnrollmentPlanCreate,
 } from "../project/projectPrivateTlsEnrollment.js"
+import type { ProjectPrivateTlsGateSnapshot } from "../project/projectPrivateTlsGate.js"
 import { projectPrivateTlsTokenResolve } from "../project/projectPrivateTlsTokenSelect.js"
 import type { ProjectRegistryDaemonPrivateTlsStatus } from "./projectRegistryDaemonPrivateTlsStatusSchema.js"
 
@@ -69,20 +70,26 @@ function privateHostnames(project: Project): string[] {
  * enrollment or a credential lookup. Missing tokens defer with backoff like
  * the DNS queues; claim rejections surface as persistent errors.
  *
- * Remainder (not here): rendering the enrollment set into the private-Caddy
- * `tls.automation` section (per-zone DNS-01 issuer policies plus the
- * `certificates.automate` loader, public resolvers only), the atomic
- * baseline install, regenerate settle, and the trusted-TLS gate mirror the
- * `~/ds` `leoBatchTlsPrepare` flow and still need a private-Caddy TLS
- * automation renderer in this repo (`caddyConfigGenerate` emits no `tls`
- * section today). This module is also not yet wired into
- * `projectRegistryDaemonCreate` or `status` output.
+ * Trusted proof (mirroring the `~/ds` `leoBatchTlsPrepare` ordering):
+ * every desired name is probed for a genuinely trusted handshake (chain
+ * verified, never `--insecure`; any served content is fine) and only
+ * proven names are published to the gate snapshot. The private regenerate
+ * hook (`caddyConfigPrivateTlsReconcile`, fed by `gateState`) installs
+ * the rendered enrollment set
+ * (`projectPrivateTlsAutomationRender`: per-zone DNS-01 issuer policies
+ * plus the `certificates.automate` loader) onto the zero-route baseline
+ * and withholds routes for unproven names — enroll first, prove, only
+ * then move routes. The loader enrolls certificates even with zero
+ * routes, so withholding never deadlocks proof; the next regenerate
+ * (project change, manual, or periodic) serves newly proven names.
  */
 export function projectRegistryDaemonPrivateTlsCreate(options: {
   enabled: boolean
   challengeResolvers?: readonly string[]
   privateListenerAddresses?: readonly string[]
   credentialResolve?: (owner: string) => PromiseResult<string | undefined>
+  trustedProbe?: (hostname: string) => PromiseResult<"trusted">
+  gateState?: { update(snapshot: ProjectPrivateTlsGateSnapshot): void }
   repositoryProjectsCurrent?: () => PromiseResult<readonly Project[]>
   logger?: (message: string) => void
   clock?: () => number
@@ -120,6 +127,20 @@ export function projectRegistryDaemonPrivateTlsCreate(options: {
   if (options.credentialResolve !== undefined && typeof options.credentialResolve !== "function") {
     return createResultError(op, "Private TLS credential resolver is invalid")
   }
+  if (options.trustedProbe !== undefined && typeof options.trustedProbe !== "function") {
+    return createResultError(op, "Private TLS trust probe is invalid")
+  }
+  if (
+    options.gateState !== undefined &&
+    (typeof options.gateState !== "object" ||
+      options.gateState === null ||
+      typeof (options.gateState as { update?: unknown }).update !== "function")
+  ) {
+    return createResultError(op, "Private TLS gate state is invalid")
+  }
+  if (options.gateState !== undefined && options.trustedProbe === undefined) {
+    return createResultError(op, "Private TLS gate state requires a trust probe; nothing could ever be proven")
+  }
   if (options.repositoryProjectsCurrent !== undefined && typeof options.repositoryProjectsCurrent !== "function") {
     return createResultError(op, "Private TLS project snapshot accessor is invalid")
   }
@@ -137,7 +158,9 @@ export function projectRegistryDaemonPrivateTlsCreate(options: {
   const challengeResolvers = resolversR.data
   const knownProjects = new Map<string, Project>()
   const enrolled = new Map<string, EnrolledHost>()
+  const proven = new Map<string, EnrolledHost>()
   const ownerRetries = new Map<string, RetryState>()
+  const proofRetries = new Map<string, RetryState>()
   const statusErrors = new Map<string, StatusErrorEntry>()
   const logger = options.logger ?? ((message: string) => console.info(message))
   const clock = options.clock ?? Date.now
@@ -158,7 +181,7 @@ export function projectRegistryDaemonPrivateTlsCreate(options: {
   }
 
   function logEvent(
-    event: "enrollment" | "release" | "snapshot" | "credential",
+    event: "enrollment" | "release" | "snapshot" | "credential" | "proof",
     outcome: "success" | "failure" | "deferred",
     fields: {
       owner?: string
@@ -277,6 +300,7 @@ export function projectRegistryDaemonPrivateTlsCreate(options: {
 
     const desiredEnroll = new Map<string, { owner: string; zone: string }>()
     const desiredWildcard = new Set<string>()
+    const desiredOwner = new Map<string, { owner: string; zone: string }>()
     const claimedOwners = new Set<string>()
     for (const [owner, hostnames] of desiredByOwner) {
       for (const hostname of hostnames) {
@@ -288,10 +312,15 @@ export function projectRegistryDaemonPrivateTlsCreate(options: {
         claimedOwners.add(owner)
         const host = planR.data.hosts[0]
         if (host === undefined) continue
+        desiredOwner.set(host.hostname, { owner, zone: host.zone })
         if (host.enrollment === "wildcard") {
           desiredWildcard.add(host.hostname)
           statusErrorsClear(
-            (entry) => entry.owner === owner && entry.hostname === host.hostname && entry.operation !== "claim",
+            (entry) =>
+              entry.owner === owner &&
+              entry.hostname === host.hostname &&
+              entry.operation !== "claim" &&
+              entry.operation !== "tls-proof",
           )
           continue
         }
@@ -398,6 +427,77 @@ export function projectRegistryDaemonPrivateTlsCreate(options: {
       )
       if (!outstanding) ownerRetries.delete(owner)
     }
+
+    const probe = options.trustedProbe
+    if (probe !== undefined) {
+      for (const [hostname, identity] of [...proven]) {
+        if (!desiredOwner.has(hostname)) {
+          proven.delete(hostname)
+          proofRetries.delete(hostname)
+          statusErrorsClear((value) => value.hostname === hostname && value.operation === "tls-proof")
+          logEvent("release", "success", { owner: identity.owner, hostname, zone: identity.zone })
+        }
+      }
+      for (const [hostname, identity] of desiredOwner) {
+        if (proven.has(hostname)) {
+          statusErrorsClear((value) => value.hostname === hostname && value.operation === "tls-proof")
+          continue
+        }
+        const retry = proofRetries.get(hostname) ?? { attempts: 0, nextAt: 0 }
+        if (retry.nextAt > clock()) continue
+        let probed: unknown
+        try {
+          probed = await probe(hostname)
+        } catch {
+          probed = undefined
+        }
+        const trusted =
+          typeof probed === "object" &&
+          probed !== null &&
+          (probed as { success?: unknown }).success === true &&
+          (probed as { data?: unknown }).data === "trusted"
+        if (trusted) {
+          proven.set(hostname, identity)
+          proofRetries.delete(hostname)
+          statusErrorsClear((value) => value.hostname === hostname && value.operation === "tls-proof")
+          logEvent("proof", "success", { owner: identity.owner, hostname, zone: identity.zone })
+          lastSuccessAt = clock()
+          continue
+        }
+        const attempts = retry.attempts + 1
+        const nextRetryMs = retryDelay(attempts)
+        proofRetries.set(hostname, { attempts, nextAt: clock() + nextRetryMs })
+        statusErrorUpsert({
+          owner: identity.owner,
+          hostname,
+          operation: "tls-proof",
+          errorMessage: `Private TLS trust for "${hostname}" is not proven; refusing to serve before a trusted handshake`,
+          attempts,
+          occurredAt: clock(),
+          nextRetryAt: clock() + nextRetryMs,
+        })
+        logEvent("proof", "deferred", {
+          owner: identity.owner,
+          hostname,
+          zone: identity.zone,
+          operation: "tls-proof",
+          attempt: attempts,
+          nextRetryMs,
+        })
+      }
+    }
+
+    if (options.gateState !== undefined) {
+      try {
+        options.gateState.update({
+          enrolled: [...enrolled.keys()].sort(),
+          wildcardCovered: [...wildcardCovered],
+          proven: [...proven.keys()].sort(),
+        })
+      } catch {
+        // A failing gate publish must not break the drain; the last snapshot stands.
+      }
+    }
   }
 
   function drainKick(): void {
@@ -451,6 +551,7 @@ export function projectRegistryDaemonPrivateTlsCreate(options: {
         pendingOwners: pendingOwners.size,
         enrolled: [...enrolled.keys()].sort(),
         wildcardCovered: [...wildcardCovered],
+        proven: [...proven.keys()].sort(),
         challengeResolvers: [...challengeResolvers],
         ...(lastSuccessAt === undefined ? {} : { lastSuccess: lastSuccessAt }),
         errors: [...statusErrors.values()].sort((left, right) => left.occurredAt - right.occurredAt),

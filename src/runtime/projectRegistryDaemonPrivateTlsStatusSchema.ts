@@ -17,6 +17,7 @@ export const projectRegistryDaemonPrivateTlsStatusSchema = a.looseObject({
   pendingOwners: a.pipe(a.number(), a.integer(), a.minValue(0)),
   enrolled: a.array(a.string()),
   wildcardCovered: a.array(a.string()),
+  proven: a.array(a.string()),
   challengeResolvers: a.array(a.string()),
   lastSuccess: a.optional(timestampSchema),
   errors: a.array(statusErrorSchema),

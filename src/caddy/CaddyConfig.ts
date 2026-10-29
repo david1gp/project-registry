@@ -2,9 +2,14 @@ export type CaddyConfig = {
   apps: {
     tls?: {
       [key: string]: unknown
-      certificates: {
+      automation?: {
         [key: string]: unknown
-        load_files: Array<{ certificate: string; key: string; tags?: string[]; [key: string]: unknown }>
+        policies?: Array<{ [key: string]: unknown; subjects?: string[]; issuers?: Array<Record<string, unknown>> }>
+      }
+      certificates?: {
+        [key: string]: unknown
+        load_files?: Array<{ certificate: string; key: string; tags?: string[]; [key: string]: unknown }>
+        automate?: string[]
       }
     }
     http: {

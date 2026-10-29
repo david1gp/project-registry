@@ -1,14 +1,15 @@
 import { createResult, createResultError, type PromiseResult, type Result } from "#result"
 import { projectAccessCreate } from "../access/projectAccessCreate.js"
-import { caddyApplicationCreate } from "../caddy/caddyApplicationCreate.js"
 import type { CaddyApplicationOptions } from "../caddy/CaddyApplicationOptions.js"
 import type { CaddyConfig } from "../caddy/CaddyConfig.js"
+import { caddyApplicationCreate } from "../caddy/caddyApplicationCreate.js"
 import { caddyConfigBaseMerge } from "../caddy/caddyConfigBaseMerge.js"
 import { caddyConfigBaseRead } from "../caddy/caddyConfigBaseRead.js"
-import { caddyProcessRunnerAsUser } from "../caddy/caddyProcessRunnerAsUser.js"
 import { caddyInstanceTargetsResolve } from "../caddy/caddyInstanceTargetsResolve.js"
+import { caddyProcessRunnerAsUser } from "../caddy/caddyProcessRunnerAsUser.js"
 import { posixUserDirectoryCreate } from "../identity/posixUserDirectoryCreate.js"
 import { localDomainsCaddyConfigReconcileCreate } from "../local-domains/localDomainsCaddyConfigReconcileCreate.js"
+import { projectPrivateTlsGateStateCreate } from "../project/projectPrivateTlsGate.js"
 import { projectRepositoryOpen } from "../project-store/projectRepositoryOpen.js"
 import { sessionStoreCreate } from "../session/sessionStoreCreate.js"
 import { tokenReferenceStoreCreate } from "../session/tokenReferenceStoreCreate.js"
@@ -17,9 +18,9 @@ import type { ProjectRegistryDaemon } from "./ProjectRegistryDaemon.js"
 import type { ProjectRegistryDaemonBrowserAuth } from "./ProjectRegistryDaemonBrowserAuth.js"
 import type { ProjectRegistryDaemonConfig } from "./ProjectRegistryDaemonConfig.js"
 import type { ProjectRegistryDaemonOptions } from "./ProjectRegistryDaemonOptions.js"
+import { projectRegistryDaemonCaddyTargetCreate } from "./projectRegistryDaemonCaddyTargetCreate.js"
 import { projectRegistryDaemonConfigValidate } from "./projectRegistryDaemonConfigValidate.js"
 import { projectRegistryDaemonCreate } from "./projectRegistryDaemonCreate.js"
-import { projectRegistryDaemonCaddyTargetCreate } from "./projectRegistryDaemonCaddyTargetCreate.js"
 import { projectRegistryDaemonPosixDefault } from "./projectRegistryDaemonPosixDefault.js"
 
 function identityDependenciesCreate(
@@ -111,13 +112,35 @@ export async function projectRegistryDaemonOpen(
 
   const config = configR.data
   const instances = caddyInstanceTargetsResolve(config)
+  // The TLS gate cell is shared by the tracker (writer, via daemonCreate)
+  // and the private regenerate hook (reader). It exists only behind the
+  // private-DNS switch on dual instances; otherwise both sides behave
+  // exactly as if private TLS did not exist.
+  const privateTlsGate =
+    config.privateDns.enabled && config.caddyInstances !== undefined && instances.private !== undefined
+      ? projectPrivateTlsGateStateCreate()
+      : undefined
   let targets: CaddyApplicationOptions["targets"]
   if (config.caddyInstances !== undefined) {
     const publicR = await projectRegistryDaemonCaddyTargetCreate(instances.public, config)
     if (!publicR.success) return publicR
     targets = { public: publicR.data }
     if (instances.private !== undefined) {
-      const privateR = await projectRegistryDaemonCaddyTargetCreate(instances.private, config)
+      const privateR = await projectRegistryDaemonCaddyTargetCreate(
+        instances.private,
+        config,
+        privateTlsGate === undefined
+          ? undefined
+          : {
+              privateTls: {
+                enabled: config.privateDns.enabled,
+                snapshotCurrent: privateTlsGate.current,
+                ...(config.privateDns.nodeAddress === undefined
+                  ? {}
+                  : { privateListenerAddresses: [config.privateDns.nodeAddress] }),
+              },
+            },
+      )
       if (!privateR.success) return privateR
       targets.private = privateR.data
     }
@@ -200,5 +223,6 @@ export async function projectRegistryDaemonOpen(
     posix,
     browserAuth: authR.data,
     ...(socketAccessResolve === undefined ? {} : { socketAccessResolve }),
+    ...(privateTlsGate === undefined ? {} : { privateTlsGateState: privateTlsGate }),
   })
 }

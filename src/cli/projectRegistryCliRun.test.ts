@@ -1794,6 +1794,7 @@ describe("projectRegistryCliRun", () => {
             pendingOwners: 1,
             enrolled: ["api.wonder1.de"],
             wildcardCovered: ["shop.wonder1.de"],
+            proven: [],
             challengeResolvers: ["1.1.1.1", "8.8.8.8"],
             errors: [
               {

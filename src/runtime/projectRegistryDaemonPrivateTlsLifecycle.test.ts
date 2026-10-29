@@ -1,7 +1,8 @@
 import { describe, expect, test } from "bun:test"
 import * as a from "valibot"
-import { createResult } from "#result"
+import { createResult, createResultError } from "#result"
 import type { Project } from "../project/Project.js"
+import { projectPrivateTlsGateStateCreate } from "../project/projectPrivateTlsGate.js"
 import { projectRegistryDaemonPrivateTlsCreate } from "./projectRegistryDaemonPrivateTlsCreate.js"
 import { projectRegistryDaemonPrivateTlsStatusSchema } from "./projectRegistryDaemonPrivateTlsStatusSchema.js"
 
@@ -214,6 +215,127 @@ describe("projectRegistryDaemonPrivateTls lifecycle", () => {
     await settle()
     const parsed = a.safeParse(projectRegistryDaemonPrivateTlsStatusSchema, queueR.data.status())
     expect(parsed.success).toBe(true)
+    await queueR.data.shutdown()
+  })
+
+  test("proves trusted handshakes for enrolled and wildcard names and publishes the gate snapshot", async () => {
+    const timer = timerCreate()
+    const probed: string[] = []
+    const gate = projectPrivateTlsGateStateCreate()
+    const first = project("app", ["checkout.wonder1.de", "api.preview.wonder1.de"])
+    const queueR = projectRegistryDaemonPrivateTlsCreate({
+      enabled: true,
+      credentialResolve: async (owner) => createResult(`${owner}-token`),
+      trustedProbe: async (hostname) => {
+        probed.push(hostname)
+        return createResult("trusted")
+      },
+      gateState: gate,
+      repositoryProjectsCurrent: async () => createResult([first]),
+      timer: timer.timer,
+    })
+    if (!queueR.success) throw new Error("setup failed")
+    expect(queueR.data.start().success).toBe(true)
+    queueR.data.projectCreateAfterPersistence(first)
+    await settle()
+
+    const status = queueR.data.status()
+    expect(status.enrolled).toEqual(["api.preview.wonder1.de"])
+    expect(status.wildcardCovered).toEqual(["checkout.wonder1.de"])
+    expect(status.proven).toEqual(["api.preview.wonder1.de", "checkout.wonder1.de"])
+    expect(status.errors).toEqual([])
+    expect(probed.sort()).toEqual(["api.preview.wonder1.de", "checkout.wonder1.de"])
+    expect(gate.current()).toEqual({
+      enrolled: ["api.preview.wonder1.de"],
+      wildcardCovered: ["checkout.wonder1.de"],
+      proven: ["api.preview.wonder1.de", "checkout.wonder1.de"],
+    })
+    await queueR.data.shutdown()
+  })
+
+  test("defers unproven names with tls-proof errors and recovers after proof", async () => {
+    let now = 3_000_000
+    let trusted = false
+    const timer = timerCreate()
+    const gate = projectPrivateTlsGateStateCreate()
+    const projects = [project("app", ["api.preview.wonder1.de"])]
+    const queueR = projectRegistryDaemonPrivateTlsCreate({
+      enabled: true,
+      credentialResolve: async () => createResult("leo-token"),
+      trustedProbe: async () => (trusted ? createResult("trusted") : createResultError("probe", "connection failed")),
+      gateState: gate,
+      repositoryProjectsCurrent: async () => createResult(projects),
+      clock: () => now,
+      logger: () => {},
+      timer: timer.timer,
+    })
+    if (!queueR.success) throw new Error("setup failed")
+    expect(queueR.data.start().success).toBe(true)
+    queueR.data.projectCreateAfterPersistence(projects[0]!)
+    await settle()
+
+    let status = queueR.data.status()
+    expect(status.enrolled).toEqual(["api.preview.wonder1.de"])
+    expect(status.proven).toEqual([])
+    expect(status.errors).toHaveLength(1)
+    expect(status.errors[0]).toMatchObject({
+      owner: "leo",
+      hostname: "api.preview.wonder1.de",
+      operation: "tls-proof",
+    })
+    expect(status.errors[0]?.nextRetryAt).toBe(now + 2_000)
+    expect(gate.current().proven).toEqual([])
+
+    trusted = true
+    now += 2_001
+    timer.tick()
+    await settle()
+    status = queueR.data.status()
+    expect(status.proven).toEqual(["api.preview.wonder1.de"])
+    expect(status.errors).toEqual([])
+    expect(gate.current().proven).toEqual(["api.preview.wonder1.de"])
+    expect(JSON.stringify(status)).not.toContain("leo-token")
+    await queueR.data.shutdown()
+  })
+
+  test("requires a trust probe when a gate state is attached and releases proof for removed names", async () => {
+    const gate = projectPrivateTlsGateStateCreate()
+    const missing = projectRegistryDaemonPrivateTlsCreate({
+      enabled: true,
+      gateState: gate,
+      timer: timerCreate().timer,
+    })
+    expect(missing.success).toBe(false)
+
+    const invalid = projectRegistryDaemonPrivateTlsCreate({
+      enabled: true,
+      trustedProbe: "nope" as never,
+      timer: timerCreate().timer,
+    })
+    expect(invalid.success).toBe(false)
+
+    let projects: Project[] = []
+    const queueR = projectRegistryDaemonPrivateTlsCreate({
+      enabled: true,
+      credentialResolve: async () => createResult("leo-token"),
+      trustedProbe: async () => createResult("trusted"),
+      gateState: gate,
+      repositoryProjectsCurrent: async () => createResult(projects),
+      timer: timerCreate().timer,
+    })
+    if (!queueR.success) throw new Error("setup failed")
+    expect(queueR.data.start().success).toBe(true)
+    const first = project("app", ["api.preview.wonder1.de"])
+    projects = [first]
+    queueR.data.projectCreateAfterPersistence(first)
+    await settle()
+    expect(queueR.data.status().proven).toEqual(["api.preview.wonder1.de"])
+
+    queueR.data.projectDeleteAfterPersistence(first)
+    projects = []
+    await settle()
+    expect(queueR.data.status().proven).toEqual([])
+    expect(gate.current()).toEqual({ enrolled: [], wildcardCovered: [], proven: [] })
     await queueR.data.shutdown()
   })
 })

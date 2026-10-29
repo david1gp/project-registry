@@ -87,7 +87,7 @@ test("startup, add, edit and last-domain removal reconcile hosts and versioned T
   try {
     expect((await h.application.startup()).success).toBe(true)
     expect(h.issued).toEqual([["oc.example", "opencode.example"]])
-    const firstPair = h.loaded[0]?.apps.tls?.certificates.load_files[0]
+    const firstPair = h.loaded[0]?.apps.tls?.certificates?.load_files?.[0]
     expect(firstPair?.certificate).toContain("/generation-")
     expect(h.validated[0]?.apps.tls).toEqual(h.loaded[0]?.apps.tls)
     expect((await readFile(h.options.hostsFilePath, "utf8")).startsWith(baseline)).toBe(true)
@@ -99,7 +99,7 @@ test("startup, add, edit and last-domain removal reconcile hosts and versioned T
     h.projectsSet([projectWithDomains(["opencode.example", "oc.example", "added.example"])])
     expect((await h.application.projectChange()).success).toBe(true)
     expect(h.issued[1]).toEqual(["added.example", "oc.example", "opencode.example"])
-    expect(h.loaded[1]?.apps.tls?.certificates.load_files[0]).not.toEqual(firstPair)
+    expect(h.loaded[1]?.apps.tls?.certificates?.load_files?.[0]).not.toEqual(firstPair)
 
     h.projectsSet([projectWithDomains(["renamed.example"])])
     expect((await h.application.projectChange()).success).toBe(true)

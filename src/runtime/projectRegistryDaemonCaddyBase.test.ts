@@ -155,8 +155,8 @@ test("daemon preserves 78 baseline routes and TLS tags, certificates cover the m
       expect(loaded[0]!.apps.http.servers.srv0.routes.slice(0, 78)).toEqual(base.apps.http.servers.srv0.routes)
       expect(caddyConfigHostnames(loaded[0]!)).toEqual([...hosts, "oc.example", "opencode.example"].sort())
       expect(loaded[0]!.apps.tls!.automation).toEqual(base.apps.tls.automation)
-      expect(loaded[0]!.apps.tls!.certificates.load_pem).toEqual(base.apps.tls.certificates.load_pem)
-      expect(loaded[0]!.apps.tls!.certificates.load_files).toEqual([
+      expect(loaded[0]!.apps.tls!.certificates?.load_pem).toEqual(base.apps.tls.certificates.load_pem)
+      expect(loaded[0]!.apps.tls!.certificates?.load_files).toEqual([
         ...base.apps.tls.certificates.load_files,
         { certificate: first.data.certificatePath, key: first.data.privateKeyPath, tags: ["cert0"] },
       ])
