@@ -757,11 +757,14 @@ describe("project use cases", () => {
       { leo: "admin", david: "admin", fabian: "admin", musa: "admin" },
     )
 
-    for (const owner of ["leo", "david"]) {
+    for (const [owner, domain] of [
+      ["leo", "fresh.wonder1.de"],
+      ["david", "fresh.david-siewert.com"],
+    ] as const) {
       const repository = repositoryCreate()
       const result = await projectCreate(
         useCaseOptions(repository, access, { from: 3400, to: 3499 }),
-        { owner, name: "fresh", caddy: { domains: ["fresh.example"] } },
+        { owner, name: "fresh", caddy: { domains: [domain] } },
         { expectedRevision: currentRevision },
       )
       expect(result.success).toBe(true)
@@ -812,7 +815,7 @@ describe("project use cases", () => {
       { owner: "leo", name: "catalog" },
       {
         schemaVersion: 2,
-        services: [{ id: "worker", units: [], ownership: "registry", caddy: { domains: ["worker.example"] } }],
+        services: [{ id: "worker", units: [], ownership: "registry", caddy: { domains: ["worker.wonder1.de"] } }],
       },
       { expectedRevision: currentRevision },
     )
@@ -821,7 +824,7 @@ describe("project use cases", () => {
     expect(repository.calls.edit[0]?.project).toMatchObject({
       services: [
         { id: "web", caddy: { domains: ["web.example"] } },
-        { id: "worker", caddy: { networkVisibility: "private", domains: ["worker.example"] } },
+        { id: "worker", caddy: { networkVisibility: "private", domains: ["worker.wonder1.de"] } },
       ],
     })
     const webCaddy = (
@@ -1111,5 +1114,181 @@ describe("project use cases", () => {
       { expectedRevision: currentRevision },
     )
     expect(deleteResultValue).toEqual(createResult(deleteMutation))
+  })
+
+  test("rejects cross-zone, apex, and wildcard private claims on create without mutating", async () => {
+    const access = accessCreate(
+      { subject: "admin-subject", username: "admin", role: "admin" },
+      { leo: "admin", fabian: "admin" },
+    )
+
+    const crossZoneRepository = repositoryCreate()
+    const crossZone = await projectCreate(
+      useCaseOptions(crossZoneRepository, access, { from: 3800, to: 3899 }),
+      {
+        owner: "fabian",
+        name: "cross",
+        caddy: { domains: ["x.wonder1.de"], networkVisibility: "private" },
+      },
+      { expectedRevision: currentRevision },
+    )
+    expect(crossZone.success).toBe(false)
+    if (crossZone.success) return
+    expect(crossZone.errorMessage).toContain("webflows.de")
+    expect(crossZoneRepository.calls.create).toHaveLength(0)
+
+    for (const domains of [["wonder1.de"], ["*.wonder1.de"]]) {
+      const repository = repositoryCreate()
+      const result = await projectCreate(
+        useCaseOptions(repository, access, { from: 3800, to: 3899 }),
+        { owner: "leo", name: "rejected", caddy: { domains } },
+        { expectedRevision: currentRevision },
+      )
+      expect(result.success).toBe(false)
+      expect(repository.calls.create).toHaveLength(0)
+    }
+  })
+
+  test("keeps public-only flows for owners without Tailscale zones unaffected", async () => {
+    const repository = repositoryCreate()
+    const access = accessCreate({ subject: "alice-subject", username: "alice", role: "own" }, { alice: "own" })
+
+    const created = await projectCreate(
+      useCaseOptions(repository, access, { from: 3900, to: 3999 }),
+      { owner: "alice", name: "public-app", caddy: { domains: ["app.example"] } },
+      { expectedRevision: currentRevision },
+    )
+    expect(created.success).toBe(true)
+
+    const explicitPrivate = await projectCreate(
+      useCaseOptions(repository, access, { from: 3900, to: 3999 }),
+      {
+        owner: "alice",
+        name: "private-app",
+        caddy: { domains: ["private.example"], networkVisibility: "private" },
+      },
+      { expectedRevision: currentRevision },
+    )
+    expect(explicitPrivate.success).toBe(false)
+    if (explicitPrivate.success) return
+    expect(explicitPrivate.errorMessage).toContain("no Tailscale zones")
+    expect(repository.calls.create).toHaveLength(1)
+  })
+
+  test("rejects non-loopback upstreams on private routes with the tailnet-wide fix", async () => {
+    const access = accessCreate({ subject: "admin-subject", username: "admin", role: "admin" }, { leo: "admin" })
+
+    const lanRepository = repositoryCreate()
+    const lan = await projectCreate(
+      useCaseOptions(lanRepository, access, { from: 4000, to: 4099 }),
+      {
+        owner: "leo",
+        name: "lan-app",
+        caddy: { domains: ["lan.wonder1.de"], upstream: "192.168.1.10:3000" },
+      },
+      { expectedRevision: currentRevision },
+    )
+    expect(lan.success).toBe(false)
+    if (lan.success) return
+    expect(lan.errorMessage).toContain("tailnet-wide")
+    expect(lan.errorMessage).toContain("Fix:")
+    expect(lanRepository.calls.create).toHaveLength(0)
+
+    const loopbackRepository = repositoryCreate()
+    const loopback = await projectCreate(
+      useCaseOptions(loopbackRepository, access, { from: 4000, to: 4099 }),
+      {
+        owner: "leo",
+        name: "loopback-app",
+        caddy: { domains: ["loopback.wonder1.de"], upstream: "127.0.0.1" },
+      },
+      { expectedRevision: currentRevision },
+    )
+    expect(loopback.success).toBe(true)
+  })
+
+  test("validates private claims and upstreams on merged edit state", async () => {
+    const canonicalR = projectMigrate({
+      schemaVersion: 2,
+      owner: "fabian",
+      name: "catalog",
+      services: [
+        {
+          id: "web",
+          units: [],
+          ownership: "registry",
+          caddy: { port: 4100, domains: ["web.webflows.de"], networkVisibility: "private" },
+        },
+      ],
+    })
+    if (!canonicalR.success) throw new Error(canonicalR.errorMessage)
+    const repository = repositoryCreate([canonicalR.data])
+    const access = accessCreate({ subject: "admin-subject", username: "admin", role: "admin" }, { fabian: "admin" })
+    const options = useCaseOptions(repository, access, { from: 4100, to: 4199 })
+
+    const crossZone = await projectEdit(
+      options,
+      { owner: "fabian", name: "catalog" },
+      { schemaVersion: 2, services: [{ id: "web", caddy: { domains: ["x.wonder1.de"] } }] },
+      { expectedRevision: currentRevision },
+    )
+    expect(crossZone.success).toBe(false)
+    if (crossZone.success) return
+    expect(crossZone.errorMessage).toContain("webflows.de")
+
+    const lanUpstream = await projectEdit(
+      options,
+      { owner: "fabian", name: "catalog" },
+      { schemaVersion: 2, services: [{ id: "web", caddy: { upstream: "10.0.0.5" } }] },
+      { expectedRevision: currentRevision },
+    )
+    expect(lanUpstream.success).toBe(false)
+    if (lanUpstream.success) return
+    expect(lanUpstream.errorMessage).toContain("tailnet-wide")
+
+    const valid = await projectEdit(
+      options,
+      { owner: "fabian", name: "catalog" },
+      { schemaVersion: 2, services: [{ id: "web", caddy: { domains: ["shop.webflows.de"] } }] },
+      { expectedRevision: currentRevision },
+    )
+    expect(valid.success).toBe(true)
+    expect(repository.calls.edit).toHaveLength(1)
+  })
+
+  test("rejects injected default domains outside the owner's Tailscale zones", async () => {
+    const access = accessCreate({ subject: "admin-subject", username: "admin", role: "admin" }, { leo: "admin" })
+
+    const foreignRepository = repositoryCreate()
+    foreignRepository.getUserDefaultDomain = async () =>
+      createResult({ owner: "leo", domain: undefined, revision: currentRevision })
+    const foreign = await projectCreate(
+      {
+        ...useCaseOptions(foreignRepository, access, { from: 4200, to: 4299 }),
+        defaultUserDomains: { leo: "leonardomora.de" },
+      },
+      { owner: "leo", name: "injected", caddy: {} },
+      { expectedRevision: currentRevision },
+    )
+    expect(foreign.success).toBe(false)
+    if (foreign.success) return
+    expect(foreign.errorMessage).toContain("allowed Tailscale zones: wonder1.de")
+    expect(foreignRepository.calls.create).toHaveLength(0)
+
+    const homeRepository = repositoryCreate()
+    homeRepository.getUserDefaultDomain = async () =>
+      createResult({ owner: "leo", domain: undefined, revision: currentRevision })
+    const home = await projectCreate(
+      {
+        ...useCaseOptions(homeRepository, access, { from: 4300, to: 4399 }),
+        defaultUserDomains: { leo: "wonder1.de" },
+      },
+      { owner: "leo", name: "injected", caddy: {} },
+      { expectedRevision: currentRevision },
+    )
+    expect(home.success).toBe(true)
+    expect(homeRepository.calls.create[0]?.project).toMatchObject({
+      services: [{ id: "default", caddy: { domains: ["injected.wonder1.de"] } }],
+    })
   })
 })

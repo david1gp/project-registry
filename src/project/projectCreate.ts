@@ -7,6 +7,7 @@ import { projectCanonicalNormalize } from "./projectCanonicalNormalize.js"
 import { projectMutationExpectedRevision } from "./projectMutationExpectedRevision.js"
 import { projectNetworkVisibilityDefault } from "./projectNetworkVisibilityDefault.js"
 import { projectOwnerAuthorize } from "./projectOwnerAuthorize.js"
+import { projectTailscalePrivateRoutesValidate } from "./projectTailscalePrivateRoutesValidate.js"
 
 function projectCreateVisibilityDefaultApply(input: unknown, owner: string): unknown {
   if (projectNetworkVisibilityDefault(owner) !== "private") return input
@@ -96,13 +97,23 @@ export async function projectCreate(
   const defaultDomainR = await projectCreateDefaultDomain(options, owner, input)
   if (!defaultDomainR.success) return defaultDomainR
 
-  const projectR = projectCanonicalNormalize(projectCreateVisibilityDefaultApply(input, owner), {
+  const visibilityAppliedInput = projectCreateVisibilityDefaultApply(input, owner)
+  const tailscaleR = projectTailscalePrivateRoutesValidate(visibilityAppliedInput, owner, op)
+  if (!tailscaleR.success) return tailscaleR
+
+  const projectR = projectCanonicalNormalize(visibilityAppliedInput, {
     projects: snapshotR.data.projects,
     portRange: options.portRange,
     defaultUserDomains: options.defaultUserDomains,
     defaultUserDomain: defaultDomainR.data,
   })
   if (!projectR.success) return projectR
+
+  // Post-normalize pass: domain-less inputs receive their default domain
+  // inside normalize, so the pre-normalize check above cannot see injected
+  // domains. Re-run on the canonical project to close that bypass.
+  const tailscaleNormalizedR = projectTailscalePrivateRoutesValidate(projectR.data, owner, op)
+  if (!tailscaleNormalizedR.success) return tailscaleNormalizedR
 
   const repositoryOptions = { actor: actorR.data.username, expectedRevision: expectedRevisionR.data }
   const mutationR = await options.repository.create(projectR.data, repositoryOptions)

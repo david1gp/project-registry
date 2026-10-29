@@ -12,6 +12,7 @@ import { projectMigrate } from "./projectMigrate.js"
 import { projectMutationExpectedRevision } from "./projectMutationExpectedRevision.js"
 import { projectNetworkVisibilityDefault } from "./projectNetworkVisibilityDefault.js"
 import { projectOwnerAuthorize } from "./projectOwnerAuthorize.js"
+import { projectTailscalePrivateRoutesValidate } from "./projectTailscalePrivateRoutesValidate.js"
 
 function projectEditNewServiceVisibilityDefaultApply(
   input: unknown,
@@ -192,17 +193,22 @@ export async function projectEdit(
     : []
 
   const mergedInput = projectEditCanonicalInput(existingCanonicalR.data, input)
-  const projectR = projectCanonicalNormalize(
-    projectEditNewServiceVisibilityDefaultApply(mergedInput, key.owner, existingServiceIds),
-    {
-      projects: snapshotR.data.projects,
-      portRange: options.portRange,
-      excludeKey: key,
-      excludeProject: existingCanonicalR.data,
-      allocatePortServiceIds,
-    },
-  )
+  const visibilityAppliedInput = projectEditNewServiceVisibilityDefaultApply(mergedInput, key.owner, existingServiceIds)
+  const tailscaleR = projectTailscalePrivateRoutesValidate(visibilityAppliedInput, key.owner, op)
+  if (!tailscaleR.success) return tailscaleR
+
+  const projectR = projectCanonicalNormalize(visibilityAppliedInput, {
+    projects: snapshotR.data.projects,
+    portRange: options.portRange,
+    excludeKey: key,
+    excludeProject: existingCanonicalR.data,
+    allocatePortServiceIds,
+  })
   if (!projectR.success) return projectR
+  // Post-normalize pass: see projectCreate for why the pre-normalize check
+  // alone is not enough (default-domain injection happens inside normalize).
+  const tailscaleNormalizedR = projectTailscalePrivateRoutesValidate(projectR.data, key.owner, op)
+  if (!tailscaleNormalizedR.success) return tailscaleNormalizedR
   if (!projectKeyEqual(projectR.data, key))
     return createResultErrorCode(op, "project owner and name are immutable", "request.invalid")
 

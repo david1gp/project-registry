@@ -1184,7 +1184,7 @@ describe("projectRegistryApiHandlerCreate", () => {
     const created = await requestJson(handler, "/api/v1/users/leo/projects", leo, "POST", {
       expectedRevision: revision,
       name: "new-app",
-      caddy: { domains: ["new.example"] },
+      caddy: { domains: ["new.wonder1.de"] },
     })
     expect(created.response.status).toBe(201)
     expect(created.body).toMatchObject({
@@ -1241,7 +1241,7 @@ describe("projectRegistryApiHandlerCreate", () => {
     const created = await requestJson(handler, "/api/v1/users/leo/projects", leo, "POST", {
       expectedRevision: revision,
       name: "dns-app",
-      caddy: { domains: [" Alias.Example. "] },
+      caddy: { domains: [" Alias.Wonder1.De. "] },
     })
     expect(created.response.status).toBe(201)
 
@@ -1249,7 +1249,7 @@ describe("projectRegistryApiHandlerCreate", () => {
       expectedRevision: nextRevision,
       name: "no-dns-app",
       noDns: true,
-      caddy: { domains: ["skip.example"] },
+      caddy: { domains: ["skip.wonder1.de"] },
     })
     expect(skipped.response.status).toBe(201)
 
@@ -1267,13 +1267,13 @@ describe("projectRegistryApiHandlerCreate", () => {
     const failed = await requestJson(handler, "/api/v1/users/leo/projects", leo, "POST", {
       expectedRevision: revision,
       name: "failed-dns-app",
-      caddy: { domains: ["failed.example"] },
+      caddy: { domains: ["failed.wonder1.de"] },
     })
     expect(failed.response.status).toBe(409)
     expect(notifications).toHaveLength(2)
     expect(lifecycle).toEqual(["edit:true", "delete:false"])
     expect(notifications[0]).toMatchObject({ noDns: false, project: { name: "dns-app" } })
-    expect(notifications[0]?.project.services).toMatchObject([{ caddy: { domains: ["alias.example"] } }])
+    expect(notifications[0]?.project.services).toMatchObject([{ caddy: { domains: ["alias.wonder1.de"] } }])
     expect(notifications[1]).toMatchObject({ noDns: true, project: { name: "no-dns-app" } })
   })
 
@@ -1288,7 +1288,7 @@ describe("projectRegistryApiHandlerCreate", () => {
         ownership: "external",
         caddy: {
           port: 4200,
-          domains: ["api.example"],
+          domains: ["api.wonder1.de"],
           path: "",
           access: "external",
           kind: "proxy",
@@ -1328,7 +1328,7 @@ describe("projectRegistryApiHandlerCreate", () => {
           units: ["api.service"],
           caddy: {
             port: 4200,
-            domains: ["api.example"],
+            domains: ["api.wonder1.de"],
             path: "",
             access: "external",
             kind: "proxy",
@@ -1387,14 +1387,14 @@ describe("projectRegistryApiHandlerCreate", () => {
       schemaVersion: 2,
       services: [
         { id: "web", units: [], ownership: "registry", caddy: { port: 3000, domains: ["web.example"] } },
-        { id: "worker", units: [], ownership: "registry", caddy: { domains: ["worker.example"] } },
+        { id: "worker", units: [], ownership: "registry", caddy: { domains: ["worker.wonder1.de"] } },
       ],
     })
 
     expect(patched.response.status).toBe(200)
     expect(repository.projects.find((project) => project.name === "opencode")?.services).toMatchObject([
       { id: "web", caddy: { port: 3000 } },
-      { id: "worker", caddy: { port: 3001, domains: ["worker.example"] } },
+      { id: "worker", caddy: { port: 3001, domains: ["worker.wonder1.de"] } },
     ])
   })
 
@@ -1422,7 +1422,7 @@ describe("projectRegistryApiHandlerCreate", () => {
             id: "pages",
             units: [],
             ownership: "external",
-            caddy: { domains: ["pages.example"] },
+            caddy: { domains: ["pages.wonder1.de"] },
           },
         ],
       },
@@ -1434,7 +1434,7 @@ describe("projectRegistryApiHandlerCreate", () => {
     expect(saved).toBe(persisted[0])
     expect(saved).toMatchObject({
       schemaVersion: 2,
-      services: [{ id: "pages", ownership: "external", caddy: { port: 3100, domains: ["pages.example"] } }],
+      services: [{ id: "pages", ownership: "external", caddy: { port: 3100, domains: ["pages.wonder1.de"] } }],
     })
     if (saved?.schemaVersion !== 2) return
     expect(saved.services.map((service) => (typeof service === "string" ? service : service.ownership))).toEqual([
@@ -1501,7 +1501,7 @@ describe("projectRegistryApiHandlerCreate", () => {
     const handler = projectRegistryApiHandlerCreate({
       repository,
       caddyApplication: caddyApplicationCreate(),
-      defaultUserDomains: { leo: "leonardomora.de" },
+      defaultUserDomains: { leo: "wonder1.de" },
     })
 
     const created = await requestJson(
@@ -1520,7 +1520,7 @@ describe("projectRegistryApiHandlerCreate", () => {
     expect(repository.projects).toContainEqual(
       expect.objectContaining({
         name: "api",
-        services: [expect.objectContaining({ caddy: expect.objectContaining({ domains: ["api.leonardomora.de"] }) })],
+        services: [expect.objectContaining({ caddy: expect.objectContaining({ domains: ["api.wonder1.de"] }) })],
       }),
     )
   })
@@ -1742,7 +1742,7 @@ describe("projectRegistryApiHandlerCreate", () => {
 
   test("uses persisted defaults for new projects, preserves explicit domains, and keeps projects unchanged", async () => {
     const repository = repositoryCreate()
-    repository.defaultDomains.leo = "persisted.example"
+    repository.defaultDomains.leo = "wonder1.de"
     const handler = projectRegistryApiHandlerCreate({
       repository,
       caddyApplication: caddyApplicationCreate(),
@@ -1762,7 +1762,7 @@ describe("projectRegistryApiHandlerCreate", () => {
         name: "persisted-app",
         services: [
           expect.objectContaining({
-            caddy: expect.objectContaining({ domains: ["persisted-app.persisted.example"] }),
+            caddy: expect.objectContaining({ domains: ["persisted-app.wonder1.de"] }),
           }),
         ],
       }),
@@ -1773,13 +1773,13 @@ describe("projectRegistryApiHandlerCreate", () => {
     const explicit = await requestJson(handler, "/api/v1/users/leo/projects", leo, "POST", {
       expectedRevision: revision,
       name: "explicit-app",
-      caddy: { domains: ["explicit.example"] },
+      caddy: { domains: ["explicit.wonder1.de"] },
     })
     expect(explicit.response.status).toBe(201)
     expect(repository.projects).toContainEqual(
       expect.objectContaining({
         name: "explicit-app",
-        services: [expect.objectContaining({ caddy: expect.objectContaining({ domains: ["explicit.example"] }) })],
+        services: [expect.objectContaining({ caddy: expect.objectContaining({ domains: ["explicit.wonder1.de"] }) })],
       }),
     )
     expect(repository.defaultDomainCalls.length).toBe(callsBeforeExplicit)
@@ -1796,7 +1796,7 @@ describe("projectRegistryApiHandlerCreate", () => {
       expectedRevision: revision,
       name: "labels-app",
       labels: initialLabels,
-      caddy: { domains: ["labels.example"] },
+      caddy: { domains: ["labels.wonder1.de"] },
     })
     expect(created.response.status).toBe(201)
     expect(repository.projects).toContainEqual(
@@ -1884,7 +1884,7 @@ describe("projectRegistryApiHandlerCreate", () => {
     const duplicateDomain = await requestJson(handler, "/api/v1/users/leo/projects", leo, "POST", {
       expectedRevision: revision,
       name: "duplicate-domain",
-      caddy: { port: 4190, domains: ["OPENCODE.EXAMPLE."] },
+      caddy: { port: 4190, domains: ["OPENCODE.EXAMPLE."], networkVisibility: "public" },
     })
     expect(duplicateDomain.response.status).toBe(409)
     expect(duplicateDomain.body).toMatchObject({ success: false, error: { code: "projects.conflict" } })
@@ -1892,7 +1892,7 @@ describe("projectRegistryApiHandlerCreate", () => {
     const duplicatePort = await requestJson(handler, "/api/v1/users/leo/projects", leo, "POST", {
       expectedRevision: revision,
       name: "duplicate-port",
-      caddy: { port: 4096, domains: ["different.example"] },
+      caddy: { port: 4096, domains: ["different.example"], networkVisibility: "public" },
     })
     expect(duplicatePort.response.status).toBe(409)
     expect(duplicatePort.body).toMatchObject({ success: false, error: { code: "projects.conflict" } })
@@ -2890,7 +2890,7 @@ describe("projectRegistryApiHandlerCreate", () => {
     const created = await requestJson(handler, "/api/v1/users/leo/projects", leo, "POST", {
       expectedRevision: "",
       name: "history-app",
-      caddy: { port: 4300, domains: ["history.example"] },
+      caddy: { port: 4300, domains: ["history.wonder1.de"] },
     })
     expect(created.response.status).toBe(201)
     const createData = created.body.data as ProjectRepositoryMutation
