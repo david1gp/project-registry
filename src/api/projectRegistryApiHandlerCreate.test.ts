@@ -937,6 +937,38 @@ describe("projectRegistryApiHandlerCreate", () => {
     expect(errors).toHaveLength(4)
   })
 
+  test("scopes private TLS diagnostics to the authenticated owner without hiding global failures", async () => {
+    const common = { operation: "tls-token", attempts: 1, occurredAt: 42 }
+    const ownError = { ...common, owner: "leo", hostname: "deep.api.wonder1.de", errorMessage: "missing token" }
+    const globalError = { ...common, errorMessage: "snapshot failed" }
+    const errors = [
+      ownError,
+      { ...common, owner: "david", hostname: "x.david-siewert.com", errorMessage: "hidden" },
+      globalError,
+    ]
+    const handler = projectRegistryApiHandlerCreate({
+      repository: repositoryCreate(),
+      caddyApplication: caddyApplicationCreate(),
+      privateTlsStatus: () => ({
+        enabled: true,
+        pendingOwners: 1,
+        enrolled: [],
+        wildcardCovered: [],
+        challengeResolvers: ["1.1.1.1"],
+        errors,
+      }),
+    })
+
+    const status = await requestJson(handler, "/api/v1/caddy/status", { transport: "unix", username: "leo" })
+
+    expect(status.response.status).toBe(200)
+    expect(status.body).toMatchObject({
+      data: { privateTls: { pendingOwners: 1, errors: [ownError, globalError] } },
+    })
+    expect(JSON.stringify(status.body)).not.toContain("x.david-siewert.com")
+    expect(errors).toHaveLength(3)
+  })
+
   test("uses the authenticated HTTP actor rather than a missing socket username for DNS diagnostic ownership", async () => {
     const own = {
       owner: "leo",

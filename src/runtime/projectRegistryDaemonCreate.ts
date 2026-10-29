@@ -37,6 +37,7 @@ import { projectRegistryDaemonPrivateDnsCredentialsCreate } from "./projectRegis
 import { projectRegistryDaemonPrivateDnsResolverReloadDefault } from "./projectRegistryDaemonPrivateDnsResolverReloadDefault.js"
 import { projectRegistryDaemonPrivateDnsTrackingCreate } from "./projectRegistryDaemonPrivateDnsTrackingCreate.js"
 import { projectRegistryDaemonPrivateDnsTrackingFilesystemDefault } from "./projectRegistryDaemonPrivateDnsTrackingFilesystemDefault.js"
+import { projectRegistryDaemonPrivateTlsCreate } from "./projectRegistryDaemonPrivateTlsCreate.js"
 import { projectRegistryDaemonServerDefault } from "./projectRegistryDaemonServerDefault.js"
 import { projectRegistryDaemonServerIpCreate } from "./projectRegistryDaemonServerIpCreate.js"
 import { projectRegistryDaemonServerIpFilesystemDefault } from "./projectRegistryDaemonServerIpFilesystemDefault.js"
@@ -354,6 +355,22 @@ export function projectRegistryDaemonCreate(options: ProjectRegistryDaemonOption
   })
   if (!privateDnsR.success) return privateDnsR
   const privateDns = privateDnsR.data
+  // Private TLS readiness rides on the private-DNS switch: no separate
+  // config section. The tracker only resolves claiming-owner Cloudflare
+  // tokens to confirm availability and never writes Caddy state; the
+  // automation renderer (item 2) consumes its plans later.
+  const privateTlsR = projectRegistryDaemonPrivateTlsCreate({
+    enabled: config.privateDns.enabled,
+    credentialResolve: cloudflareCredentialsR.data.tokenResolve,
+    repositoryProjectsCurrent: async () => {
+      const snapshotR = await repository.read()
+      return snapshotR.success ? createResult(snapshotR.data.projects) : snapshotR
+    },
+    ...(serverIpLoggerOption === undefined ? {} : { logger: serverIpLoggerOption }),
+    timer,
+  })
+  if (!privateTlsR.success) return privateTlsR
+  const privateTls = privateTlsR.data
   const wikiSyncR = projectRegistryWikiSyncCreate({
     ...(config.wikiRoot === undefined ? {} : { wikiRoot: config.wikiRoot }),
     repositoryProjectsCurrent: async () => {
@@ -1093,6 +1110,8 @@ export function projectRegistryDaemonCreate(options: ProjectRegistryDaemonOption
       failures.push(`Cloudflare DNS shutdown: ${cloudflareDnsShutdownR.errorMessage}`)
     const privateDnsShutdownR = await privateDns.shutdown()
     if (!privateDnsShutdownR.success) failures.push(`Private DNS shutdown: ${privateDnsShutdownR.errorMessage}`)
+    const privateTlsShutdownR = await privateTls.shutdown()
+    if (!privateTlsShutdownR.success) failures.push(`Private TLS shutdown: ${privateTlsShutdownR.errorMessage}`)
     serverIp.shutdown()
     if (userRefreshHandle !== undefined) {
       try {
@@ -1296,6 +1315,14 @@ export function projectRegistryDaemonCreate(options: ProjectRegistryDaemonOption
           return undefined
         }
       },
+      privateTlsStatus: () => {
+        try {
+          return privateTls.status()
+        } catch {
+          // A failing TLS queue must not break Caddy status reads either.
+          return undefined
+        }
+      },
       ...(config.cloudflareDns.enabled || config.privateDns.enabled || wikiSyncEnabled
         ? {
             projectCreateAfterPersistence: (project, createOptions) => {
@@ -1309,6 +1336,11 @@ export function projectRegistryDaemonCreate(options: ProjectRegistryDaemonOption
               if (config.privateDns.enabled) {
                 try {
                   privateDns.projectCreateAfterPersistence(project, createOptions)
+                } catch {
+                  // Post-persistence integrations must not fail the mutation or skip Wiki sync.
+                }
+                try {
+                  privateTls.projectCreateAfterPersistence(project)
                 } catch {
                   // Post-persistence integrations must not fail the mutation or skip Wiki sync.
                 }
@@ -1334,6 +1366,11 @@ export function projectRegistryDaemonCreate(options: ProjectRegistryDaemonOption
         } catch {
           // Post-persistence integrations must not fail the mutation or skip Wiki sync.
         }
+        try {
+          privateTls.projectEditAfterPersistence(previous, project)
+        } catch {
+          // Post-persistence integrations must not fail the mutation or skip Wiki sync.
+        }
         if (wikiSyncEnabled) {
           try {
             wikiSync.projectEditAfterPersistence(previous, project)
@@ -1346,6 +1383,11 @@ export function projectRegistryDaemonCreate(options: ProjectRegistryDaemonOption
         cloudflareDns.projectDeleteAfterPersistence(project)
         try {
           privateDns.projectDeleteAfterPersistence(project)
+        } catch {
+          // Post-persistence integrations must not fail the mutation.
+        }
+        try {
+          privateTls.projectDeleteAfterPersistence(project)
         } catch {
           // Post-persistence integrations must not fail the mutation.
         }
@@ -1498,6 +1540,8 @@ export function projectRegistryDaemonCreate(options: ProjectRegistryDaemonOption
     if (!cloudflareDnsStartR.success) return startupFailure(cloudflareDnsStartR.errorMessage)
     const privateDnsStartR = privateDns.start()
     if (!privateDnsStartR.success) return startupFailure(privateDnsStartR.errorMessage)
+    const privateTlsStartR = privateTls.start()
+    if (!privateTlsStartR.success) return startupFailure(privateTlsStartR.errorMessage)
     const signalsR = signalsInstall()
     if (!signalsR.success) return startupFailure(signalsR.errorMessage)
 
@@ -1563,6 +1607,10 @@ export function projectRegistryDaemonCreate(options: ProjectRegistryDaemonOption
       privateDns.shutdown().then(
         (result) => (result.success ? [] : [`Private DNS shutdown: ${result.errorMessage}`]),
         () => ["Private DNS shutdown did not complete"],
+      ),
+      privateTls.shutdown().then(
+        (result) => (result.success ? [] : [`Private TLS shutdown: ${result.errorMessage}`]),
+        () => ["Private TLS shutdown did not complete"],
       ),
       wikiSync.shutdown().then(
         (result) => (result.success ? [] : [`Wiki sync shutdown: ${result.errorMessage}`]),

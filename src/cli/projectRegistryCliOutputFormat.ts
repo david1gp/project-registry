@@ -12,6 +12,10 @@ import {
   type ProjectRegistryDaemonPrivateDnsStatus,
   projectRegistryDaemonPrivateDnsStatusSchema,
 } from "../runtime/projectRegistryDaemonPrivateDnsStatusSchema.js"
+import {
+  type ProjectRegistryDaemonPrivateTlsStatus,
+  projectRegistryDaemonPrivateTlsStatusSchema,
+} from "../runtime/projectRegistryDaemonPrivateTlsStatusSchema.js"
 import type { ProjectRegistryCliInvocation } from "./ProjectRegistryCliInvocation.js"
 
 const projectSchema = a.looseObject({
@@ -45,6 +49,7 @@ const statusSchema = a.looseObject({
   error: a.optional(a.string()),
   cloudflareDns: a.optional(projectRegistryDaemonCloudflareDnsStatusSchema),
   privateDns: a.optional(projectRegistryDaemonPrivateDnsStatusSchema),
+  privateTls: a.optional(projectRegistryDaemonPrivateTlsStatusSchema),
 })
 const mutationSchema = a.looseObject({
   action: a.picklist(["create", "edit", "delete"]),
@@ -174,6 +179,21 @@ function privateDnsStatusLines(dns: ProjectRegistryDaemonPrivateDnsStatus | unde
   if (dns.trackingBlocked) lines.push("Tracking: blocked (state unavailable)")
   for (const error of dns.errors.slice(0, 5)) lines.push(cloudflareDnsErrorLine(error))
   if (dns.errors.length > 5) lines.push(`... and ${dns.errors.length - 5} more DNS errors`)
+  return lines
+}
+
+function privateTlsStatusLines(tls: ProjectRegistryDaemonPrivateTlsStatus | undefined): string[] {
+  if (tls === undefined) return ["Private TLS: unavailable (older/degraded daemon; not healthy)"]
+  if (!tls.enabled) return ["Private TLS: disabled"]
+  const health = tls.errors.length > 0 ? "error" : tls.pendingOwners > 0 ? "pending" : "healthy"
+  const lines = [
+    `Private TLS: ${health} (pending owners: ${tls.pendingOwners}, enrolled: ${tls.enrolled.length}, wildcard-covered: ${tls.wildcardCovered.length})`,
+  ]
+  for (const error of tls.errors.slice(0, 5)) {
+    const scope = [error.owner, error.hostname].filter((part) => part !== undefined).join(" ")
+    lines.push(`TLS error${scope === "" ? "" : ` [${scope}]`}: ${error.operation}: ${error.errorMessage}`)
+  }
+  if (tls.errors.length > 5) lines.push(`... and ${tls.errors.length - 5} more TLS errors`)
   return lines
 }
 
@@ -349,6 +369,7 @@ export function projectRegistryCliOutputFormat(
     if (status.error !== undefined) lines.push(`Error: ${status.error}`)
     lines.push(...cloudflareDnsStatusLines(status.cloudflareDns))
     lines.push(...privateDnsStatusLines(status.privateDns))
+    lines.push(...privateTlsStatusLines(status.privateTls))
     return createResult(`${lines.join("\n")}\n`)
   }
   if (command.kind === "project-create" || command.kind === "project-edit" || command.kind === "project-delete") {

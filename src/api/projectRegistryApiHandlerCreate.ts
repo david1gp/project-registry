@@ -39,6 +39,7 @@ import type { ProjectRegistryDaemonRequestHandler } from "../runtime/ProjectRegi
 import type { ProjectRegistryDaemonSocketAccessResolve } from "../runtime/ProjectRegistryDaemonSocketAccessResolve.js"
 import type { ProjectRegistryDaemonCloudflareDnsStatus } from "../runtime/projectRegistryDaemonCloudflareDnsStatusSchema.js"
 import type { ProjectRegistryDaemonPrivateDnsStatus } from "../runtime/projectRegistryDaemonPrivateDnsStatusSchema.js"
+import type { ProjectRegistryDaemonPrivateTlsStatus } from "../runtime/projectRegistryDaemonPrivateTlsStatusSchema.js"
 
 type ApiHandlerOptions = {
   repository: ProjectRepository
@@ -54,6 +55,7 @@ type ApiHandlerOptions = {
   cloudflareCredentials?: Pick<ProjectRegistryDaemonCloudflareCredentials, "tokenSet">
   cloudflareDnsStatus?: () => ProjectRegistryDaemonCloudflareDnsStatus | undefined
   privateDnsStatus?: () => ProjectRegistryDaemonPrivateDnsStatus | undefined
+  privateTlsStatus?: () => ProjectRegistryDaemonPrivateTlsStatus | undefined
   socketAccessResolve?: ProjectRegistryDaemonSocketAccessResolve
   projectCreateAfterPersistence?: (project: Project, options: { noDns: boolean }) => void
   projectEditAfterPersistence?: (previous: Project, project: Project) => void
@@ -1719,10 +1721,35 @@ export function projectRegistryApiHandlerCreate(options: ApiHandlerOptions): Pro
         // CLI reports DNS status as unavailable instead of healthy.
         privateDns = undefined
       }
+      let privateTls: ProjectRegistryDaemonPrivateTlsStatus | undefined
+      try {
+        const tlsStatus = options.privateTlsStatus?.()
+        if (tlsStatus !== undefined) {
+          let diagnosticOwner = context.transport === "unix" ? username : undefined
+          if (context.transport === "http" && access !== undefined) {
+            const actor = await access.actorResolve()
+            if (actor.success) diagnosticOwner = actor.data.username
+          }
+          // Owner-scoped like the DNS diagnostics: TLS errors carry owner
+          // and hostname only, so global entries stay visible to everyone.
+          privateTls = {
+            ...tlsStatus,
+            errors: tlsStatus.errors.filter(
+              (error) =>
+                (diagnosticOwner !== undefined && error.owner === diagnosticOwner) ||
+                (error.owner === undefined && error.hostname === undefined),
+            ),
+          }
+        }
+      } catch {
+        // A failing TLS queue must not break Caddy status reads either.
+        privateTls = undefined
+      }
       return successResponse({
         ...caddyStatus,
         ...(cloudflareDns === undefined ? {} : { cloudflareDns }),
         ...(privateDns === undefined ? {} : { privateDns }),
+        ...(privateTls === undefined ? {} : { privateTls }),
       })
     } catch {
       return errorResponse(

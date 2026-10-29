@@ -97,8 +97,10 @@ The claim is validated first; rejected claims resolve nothing.
   `tls.automation` section (per-zone DNS-01 issuer policies plus the
   `certificates.automate` loader), the atomic baseline install, regenerate
   settle, and the trusted-TLS gate (the `~/ds` `leoBatchTlsPrepare` steps);
-  `caddyConfigGenerate` emits no `tls` section today. The tracker is also
-  not yet wired into `projectRegistryDaemonCreate` or `status` output.
+  `caddyConfigGenerate` emits no `tls` section today. Wired since: the
+  tracker runs on the private-DNS switch (no separate config), feeds
+  `privateTls` into API status (owner-scoped errors) and `Private TLS:`
+  CLI lines, and hooks create/edit/delete.
 - Rollback CLI landed: `project-registry tailscale split-dns rollback
   (--state-file <path> | --owner <owner> --state-dir <dir>)`, a local admin
   command (no daemon round-trip) around `tailscaleSplitDnsRollback` with

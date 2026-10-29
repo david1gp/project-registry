@@ -553,7 +553,7 @@ describe("projectRegistryCliRun", () => {
         args: ["status"],
         data: status,
         output:
-          "Caddy: pending\nDesired: new\nApplied: old\nPending: new\nCloudflare DNS: unavailable (older/degraded daemon; not healthy)\nPrivate DNS: unavailable (older/degraded daemon; not healthy)\n",
+          "Caddy: pending\nDesired: new\nApplied: old\nPending: new\nCloudflare DNS: unavailable (older/degraded daemon; not healthy)\nPrivate DNS: unavailable (older/degraded daemon; not healthy)\nPrivate TLS: unavailable (older/degraded daemon; not healthy)\n",
       },
       {
         args: ["version"],
@@ -1710,7 +1710,7 @@ describe("projectRegistryCliRun", () => {
 
     expect(exitCode).toBe(0)
     expect(stdout.join("")).toBe(
-      "Caddy: pending\nDesired: new\nApplied: old\nPending: new\nCloudflare DNS: healthy (pending projects: 0, pending deletions: 0)\nPrivate DNS: unavailable (older/degraded daemon; not healthy)\n",
+      "Caddy: pending\nDesired: new\nApplied: old\nPending: new\nCloudflare DNS: healthy (pending projects: 0, pending deletions: 0)\nPrivate DNS: unavailable (older/degraded daemon; not healthy)\nPrivate TLS: unavailable (older/degraded daemon; not healthy)\n",
     )
   })
 
@@ -1737,7 +1737,7 @@ describe("projectRegistryCliRun", () => {
 
     expect(exitCode).toBe(0)
     expect(stdout.join("")).toBe(
-      "Caddy: pending\nDesired: new\nApplied: old\nPending: new\nCloudflare DNS: disabled\nPrivate DNS: unavailable (older/degraded daemon; not healthy)\n",
+      "Caddy: pending\nDesired: new\nApplied: old\nPending: new\nCloudflare DNS: disabled\nPrivate DNS: unavailable (older/degraded daemon; not healthy)\nPrivate TLS: unavailable (older/degraded daemon; not healthy)\n",
     )
   })
 
@@ -1777,7 +1777,50 @@ describe("projectRegistryCliRun", () => {
       "Caddy: pending\nDesired: new\nApplied: old\nPending: new\n" +
         "Cloudflare DNS: unavailable (older/degraded daemon; not healthy)\n" +
         "Private DNS: error (pending projects: 1, pending deletions: 0)\n" +
-        "DNS error [claim] leo/app app.wonder1.de: not claimable (attempts: 0)\n",
+        "DNS error [claim] leo/app app.wonder1.de: not claimable (attempts: 0)\n" +
+        "Private TLS: unavailable (older/degraded daemon; not healthy)\n",
+    )
+  })
+
+  test("reports private TLS status alongside Caddy status", async () => {
+    const stdout: string[] = []
+    const exitCode = await projectRegistryCliRun(
+      ["status"],
+      runOptions(
+        {
+          ...status,
+          privateTls: {
+            enabled: true,
+            pendingOwners: 1,
+            enrolled: ["api.wonder1.de"],
+            wildcardCovered: ["shop.wonder1.de"],
+            challengeResolvers: ["1.1.1.1", "8.8.8.8"],
+            errors: [
+              {
+                owner: "leo",
+                hostname: "deep.api.wonder1.de",
+                operation: "tls-token",
+                errorMessage: 'Private TLS credentials for owner "leo" are missing',
+                attempts: 2,
+                occurredAt: 1_700_000_000_000,
+                nextRetryAt: 1_700_000_060_000,
+              },
+            ],
+          },
+        },
+        [],
+        stdout,
+        [],
+      ),
+    )
+
+    expect(exitCode).toBe(0)
+    expect(stdout.join("")).toBe(
+      "Caddy: pending\nDesired: new\nApplied: old\nPending: new\n" +
+        "Cloudflare DNS: unavailable (older/degraded daemon; not healthy)\n" +
+        "Private DNS: unavailable (older/degraded daemon; not healthy)\n" +
+        "Private TLS: error (pending owners: 1, enrolled: 1, wildcard-covered: 1)\n" +
+        'TLS error [leo deep.api.wonder1.de]: tls-token: Private TLS credentials for owner "leo" are missing\n',
     )
   })
 
@@ -1834,7 +1877,7 @@ describe("projectRegistryCliRun", () => {
         "Tracking: blocked (state unavailable)\n" +
         "DNS error [reconcile] david/site site.example: Cloudflare DNS request failed (attempts: 3 status=503 cf=10000 retry=2023-11-14T22:14:20.000Z)\n" +
         "DNS error [delete] david/site record record-id: Cloudflare DNS delete failed (attempts: 1)\n" +
-        "Private DNS: unavailable (older/degraded daemon; not healthy)\n",
+        "Private DNS: unavailable (older/degraded daemon; not healthy)\nPrivate TLS: unavailable (older/degraded daemon; not healthy)\n",
     )
   })
 
