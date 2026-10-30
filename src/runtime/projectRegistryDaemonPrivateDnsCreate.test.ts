@@ -242,6 +242,63 @@ describe("projectRegistryDaemonPrivateDnsCreate claims", () => {
     await dnsR.data.shutdown()
   })
 
+  test("converges a grandfathered apex hostname with no claim error", async () => {
+    const stored = filesystemCreate()
+    const calls: string[] = []
+    const live = new Map<string, string[]>()
+    const { fetch } = splitDnsFetchCreate(live, calls)
+    let reloads = 0
+    const dnsR = projectRegistryDaemonPrivateDnsCreate(
+      optionsCreate({
+        filesystem: stored.filesystem,
+        fetch,
+        credentialResolve: async () => createResult("tskey-test"),
+        resolverReload: async () => {
+          reloads += 1
+          return createResult(undefined)
+        },
+        grandfatheredHostnames: ["wonder1.de"],
+      }),
+    )
+    if (!dnsR.success) throw new Error("setup failed")
+    expect(dnsR.data.start().success).toBe(true)
+    dnsR.data.projectCreateAfterPersistence(project(["wonder1.de"], { visibility: "private" }), { noDns: false })
+    await settle(8)
+    expect([...live.entries()]).toEqual([["wonder1.de", [nodeAddress]]])
+    const config = stored.files.get("/etc/project-registry/private-dnsmasq.conf") ?? ""
+    expect(config).toContain("host-record=wonder1.de,100.122.200.114")
+    expect(reloads).toBe(1)
+    expect(dnsR.data.status().errors).toEqual([])
+    await dnsR.data.shutdown()
+  })
+
+  test("still excludes the apex hostname without a grandfather entry", async () => {
+    const stored = filesystemCreate()
+    const { fetch } = splitDnsFetchCreate(new Map<string, string[]>(), [])
+    const dnsR = projectRegistryDaemonPrivateDnsCreate(
+      optionsCreate({
+        filesystem: stored.filesystem,
+        fetch,
+        credentialResolve: async () => createResult("tskey-test"),
+        resolverReload: async () => createResult(undefined),
+      }),
+    )
+    if (!dnsR.success) throw new Error("setup failed")
+    expect(dnsR.data.start().success).toBe(true)
+    dnsR.data.projectCreateAfterPersistence(project(["wonder1.de"], { visibility: "private" }), { noDns: false })
+    await settle(8)
+    const config = stored.files.get("/etc/project-registry/private-dnsmasq.conf") ?? ""
+    expect(config).not.toContain("wonder1.de")
+    expect(dnsR.data.status().errors.map((entry) => entry.operation)).toEqual(["claim"])
+    await dnsR.data.shutdown()
+  })
+
+  test("rejects wildcard grandfathered hostnames", () => {
+    expect(
+      projectRegistryDaemonPrivateDnsCreate(optionsCreate({ grandfatheredHostnames: ["*.wonder1.de"] })).success,
+    ).toBe(false)
+  })
+
   test("ignores public and disabled routes", async () => {
     const stored = filesystemCreate()
     const calls: string[] = []
@@ -338,6 +395,7 @@ describe("projectRegistryDaemonConfigFromEnv private DNS", () => {
     if (!result.success) return
     expect(result.data.privateDns).toEqual({
       enabled: true,
+      grandfatheredHostnames: [],
       tailnet: "example.com",
       nodeAddress: "100.122.200.114",
       apiBaseUrl: "https://tailscale.example.com/api",
@@ -346,6 +404,21 @@ describe("projectRegistryDaemonConfigFromEnv private DNS", () => {
       upstreamResolvers: ["9.9.9.9", "149.112.112.112"],
       credentialsDirectory: "/etc/project-registry/tailscale-custom",
     })
+  })
+
+  test("reads grandfathered hostnames and rejects non-exact entries", () => {
+    const result = projectRegistryDaemonConfigFromEnv({
+      PROJECT_REGISTRY_REPOSITORY_PATH: "/tmp/repository",
+      PROJECT_REGISTRY_PRIVATE_DNS_GRANDFATHERED_HOSTS: "wonder1.de, EXAMPLE.com.",
+    })
+    expect(result.success).toBe(true)
+    if (!result.success) return
+    expect(result.data.privateDns.grandfatheredHostnames).toEqual(["wonder1.de", "EXAMPLE.com."])
+    const wildcard = projectRegistryDaemonConfigFromEnv({
+      PROJECT_REGISTRY_REPOSITORY_PATH: "/tmp/repository",
+      PROJECT_REGISTRY_PRIVATE_DNS_GRANDFATHERED_HOSTS: "*.wonder1.de",
+    })
+    expect(wildcard.success).toBe(false)
   })
 
   test("requires tailnet and node address when enabled, and rejects bad input", () => {

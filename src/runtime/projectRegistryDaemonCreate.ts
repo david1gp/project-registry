@@ -338,6 +338,7 @@ export function projectRegistryDaemonCreate(options: ProjectRegistryDaemonOption
   if (!privateDnsCredentialsR.success) return privateDnsCredentialsR
   const privateDnsR = projectRegistryDaemonPrivateDnsCreate({
     enabled: config.privateDns.enabled,
+    grandfatheredHostnames: config.privateDns.grandfatheredHostnames,
     tailnet: config.privateDns.tailnet ?? "",
     nodeAddress: config.privateDns.nodeAddress ?? "",
     apiBaseUrl: config.privateDns.apiBaseUrl,

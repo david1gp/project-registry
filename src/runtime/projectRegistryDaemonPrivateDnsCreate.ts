@@ -11,6 +11,7 @@ import { projectLocalCaddyEntries } from "../project/projectLocalCaddyEntries.js
 import { projectTailscaleZoneClaimValidate, projectTailscaleZonePolicy } from "../project/projectTailscaleZonePolicy.js"
 import type { TailscaleSplitDnsFetch } from "../tailscale/TailscaleSplitDnsFetch.js"
 import { tailscaleDnsmasqConfigRender } from "../tailscale/tailscaleDnsmasqConfigRender.js"
+import { tailscaleHostnameNormalize } from "../tailscale/tailscaleHostnameNormalize.js"
 import { tailscaleSplitDnsApply } from "../tailscale/tailscaleSplitDnsApply.js"
 import { tailscaleSplitDnsErrorDetailsRead } from "../tailscale/tailscaleSplitDnsErrorDetailsRead.js"
 import { tailscaleSplitDnsRemove } from "../tailscale/tailscaleSplitDnsRemove.js"
@@ -182,6 +183,7 @@ function tailscaleZoneSuffixes(): string[] {
 
 export function projectRegistryDaemonPrivateDnsCreate(options: {
   enabled: boolean
+  grandfatheredHostnames?: readonly string[]
   tailnet: string
   nodeAddress: string
   apiBaseUrl?: string
@@ -268,6 +270,13 @@ export function projectRegistryDaemonPrivateDnsCreate(options: {
   if (options.resolverReload !== undefined && typeof options.resolverReload !== "function") {
     return createResultError(op, "Private DNS resolver reload is invalid")
   }
+  if (
+    options.grandfatheredHostnames !== undefined &&
+    (!Array.isArray(options.grandfatheredHostnames) ||
+      options.grandfatheredHostnames.some((hostname) => tailscaleHostnameNormalize(hostname) === undefined))
+  ) {
+    return createResultError(op, "Private DNS grandfathered hostnames must be exact private FQDNs")
+  }
   if (options.logger !== undefined && typeof options.logger !== "function") {
     return createResultError(op, "Private DNS logger is invalid")
   }
@@ -286,6 +295,11 @@ export function projectRegistryDaemonPrivateDnsCreate(options: {
   const nodeAddress = options.nodeAddress
   const apiBaseUrl = options.apiBaseUrl ?? tailscaleApiBaseUrlDefault
   const upstreamResolvers = [...options.upstreamResolvers]
+  const grandfatheredHostnames = new Set<string>()
+  for (const hostname of options.grandfatheredHostnames ?? []) {
+    const normalized = tailscaleHostnameNormalize(hostname)
+    if (normalized !== undefined) grandfatheredHostnames.add(normalized)
+  }
   const dnsmasqConfigPath = options.dnsmasqConfigPath
   const splitDnsStateDirectory = options.splitDnsStateDirectory
   const filesystem = options.filesystem
@@ -670,8 +684,14 @@ export function projectRegistryDaemonPrivateDnsCreate(options: {
     for (const hostname of privateHostnames(project)) {
       const claimR = projectTailscaleZoneClaimValidate(project.owner, hostname, op)
       if (!claimR.success) {
-        // Legacy or conflicting claims never enter the desired set; they stay
-        // visible as claim errors until an edit removes or fixes them.
+        // Grandfathered pre-migration names keep converging until an edit
+        // removes them; every other legacy or conflicting claim stays out
+        // and stays visible as a claim error.
+        if (grandfatheredHostnames.has(hostname)) {
+          successClearHostname(hostname, project.owner, project.name)
+          desired.push({ hostname, zone: hostname })
+          continue
+        }
         claimErrorRecord(project.owner, project.name, hostname, claimR.errorMessage)
         continue
       }

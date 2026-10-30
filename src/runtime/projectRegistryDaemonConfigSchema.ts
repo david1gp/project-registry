@@ -4,6 +4,7 @@ import { projectAccessLogRootSchema } from "../access-log/projectAccessLogRootSc
 import { caddyConfigOptionsSchema } from "../caddy/caddyConfigOptionsSchema.js"
 import { caddyInstanceConfigSchema } from "../caddy/caddyInstanceConfigSchema.js"
 import { localDomainsOptionsSchema } from "../local-domains/localDomainsOptionsSchema.js"
+import { tailscaleHostnameNormalize } from "../tailscale/tailscaleHostnameNormalize.js"
 
 const loopbackHostnameSchema = a.union([a.literal("127.0.0.1"), a.literal("::1")])
 
@@ -185,8 +186,17 @@ const systemdUnitSchema = a.pipe(
   a.check((value) => !value.includes("/") && !value.includes("\0"), "systemd unit name is invalid"),
 )
 
+const grandfatheredHostnamesSchema = a.pipe(
+  a.array(a.string()),
+  a.check(
+    (value) => value.every((hostname) => tailscaleHostnameNormalize(hostname) !== undefined),
+    "grandfathered hostnames must be exact private FQDNs",
+  ),
+)
+
 const privateDnsSchema = a.strictObject({
   enabled: a.optional(a.boolean(), false),
+  grandfatheredHostnames: a.optional(grandfatheredHostnamesSchema, []),
   tailnet: a.optional(boundedIdentityValueSchema),
   nodeAddress: a.optional(ipv4Schema),
   apiBaseUrl: a.optional(tailscaleApiBaseUrlSchema, "https://api.tailscale.com/api/v2"),

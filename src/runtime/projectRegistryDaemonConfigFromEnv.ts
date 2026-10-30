@@ -81,6 +81,7 @@ export function projectRegistryDaemonConfigFromEnv(
       "PROJECT_REGISTRY_PRIVATE_DNS_RESOLVER_UNIT",
       "PROJECT_REGISTRY_PRIVATE_DNS_UPSTREAMS",
       "PROJECT_REGISTRY_PRIVATE_DNS_CREDENTIALS_DIR",
+      "PROJECT_REGISTRY_PRIVATE_DNS_GRANDFATHERED_HOSTS",
     ]
     for (const name of names) {
       const value = values[name]
@@ -198,6 +199,15 @@ export function projectRegistryDaemonConfigFromEnv(
         .filter(Boolean)
     }
 
+    const privateDnsGrandfatheredValue = values.PROJECT_REGISTRY_PRIVATE_DNS_GRANDFATHERED_HOSTS?.trim()
+    let privateDnsGrandfathered: string[] | undefined
+    if (privateDnsGrandfatheredValue !== undefined && privateDnsGrandfatheredValue !== "") {
+      privateDnsGrandfathered = privateDnsGrandfatheredValue
+        .split(",")
+        .map((hostname) => hostname.trim())
+        .filter(Boolean)
+    }
+
     return projectRegistryDaemonConfigValidate({
       mode,
       ...(localDomainsEnabled === true
@@ -295,6 +305,7 @@ export function projectRegistryDaemonConfigFromEnv(
           ? { resolverUnit: values.PROJECT_REGISTRY_PRIVATE_DNS_RESOLVER_UNIT.trim() }
           : {}),
         ...(privateDnsUpstreams === undefined ? {} : { upstreamResolvers: privateDnsUpstreams }),
+        ...(privateDnsGrandfathered === undefined ? {} : { grandfatheredHostnames: privateDnsGrandfathered }),
         ...(!values.PROJECT_REGISTRY_PRIVATE_DNS_CREDENTIALS_DIR?.trim()
           ? mode === "user" && configDirectory
             ? { credentialsDirectory: `${configDirectory}/project-registry/tailscale` }

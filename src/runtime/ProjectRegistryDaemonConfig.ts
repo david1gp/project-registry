@@ -53,6 +53,7 @@ export type ProjectRegistryDaemonConfig = {
   }
   privateDns: {
     enabled: boolean
+    grandfatheredHostnames: string[]
     tailnet?: string
     nodeAddress?: string
     apiBaseUrl: string

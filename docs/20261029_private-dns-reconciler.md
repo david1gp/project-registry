@@ -44,6 +44,17 @@ Supporting files:
   conf file on reload; only a restart applies it). The unit's `--conf-file`
   must point at this path.
 
+## Grandfathered pre-migration names
+
+`privateDns.grandfatheredHostnames` (`PROJECT_REGISTRY_PRIVATE_DNS_GRANDFATHERED_HOSTS`,
+comma-separated) lists exact FQDNs that keep converging even though the zone
+policy rejects them — currently only a bare apex or a cross-zone name that
+predates the policy. Entries must normalize to exact hosts (wildcards fail
+the config closed); only names a reconciled project actually claims enter the
+desired set, and they clear like any converged host. Everything else rejected
+by the policy still surfaces as a persistent `claim` error. Remove an entry
+from the registry and it converges out on the next run like any deletion.
+
 ## Behavior
 
 - Desired set = registry private hostnames (enabled routes only; disabled,
