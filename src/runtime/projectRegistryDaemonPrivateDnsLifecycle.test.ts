@@ -403,4 +403,78 @@ describe("projectRegistryDaemonPrivateDns lifecycle", () => {
     expect(status.errors).toEqual([])
     await queueR.data.shutdown()
   })
+
+  test("idle retry ticks perform no repository reads and no split-DNS calls until a project command arrives", async () => {
+    const timer = timerCreate()
+    const live = new Map<string, string[]>()
+    const calls: string[] = []
+    const bodies: unknown[] = []
+    const { fetch } = splitDnsFetchCreate(live, calls, bodies)
+    const stored = trackingCreate({ version: 1, hosts: [] })
+    const files = filesystemCreate()
+    let reloads = 0
+    let projects: Project[] = []
+    let reads = 0
+    const queueR = projectRegistryDaemonPrivateDnsCreate({
+      enabled: true,
+      tailnet: "example.com",
+      nodeAddress,
+      upstreamResolvers: ["1.1.1.1"],
+      dnsmasqConfigPath,
+      splitDnsStateDirectory: "/var/lib/project-registry/private-dns",
+      credentialResolve: async () => createResult("tskey-test"),
+      fetch,
+      filesystem: files.filesystem,
+      resolverReload: async () => {
+        reloads += 1
+        return createResult(undefined)
+      },
+      tracking: stored.tracking,
+      repositoryProjectsCurrent: async () => {
+        reads += 1
+        return createResult(projects)
+      },
+      timer: timer.timer,
+    })
+    if (!queueR.success) throw new Error("setup failed")
+    expect(queueR.data.start().success).toBe(true)
+
+    const app = project("app", ["app.wonder1.de"])
+    projects = [app]
+    queueR.data.projectCreateAfterPersistence(app, { noDns: false })
+    await settle()
+    expect(live.get("app.wonder1.de")).toEqual([nodeAddress])
+    expect(queueR.data.status().pendingProjects).toBe(0)
+    const readsAfterConverge = reads
+    const callsAfterConverge = calls.length
+    const reloadsAfterConverge = reloads
+
+    // A reconciled queue is idle: ticks must not re-read the repository or
+    // re-apply split-DNS. This pins the removal of the former per-second
+    // full polling loop.
+    timer.tick()
+    await settle()
+    timer.tick()
+    await settle()
+    timer.tick()
+    await settle()
+    expect(reads).toBe(readsAfterConverge)
+    expect(calls.length).toBe(callsAfterConverge)
+    expect(reloads).toBe(reloadsAfterConverge)
+
+    // Out-of-band repository edits are not picked up by polling either.
+    const other = project("other", ["other.wonder1.de"])
+    projects = [app, other]
+    timer.tick()
+    await settle()
+    expect(reads).toBe(readsAfterConverge)
+    expect(live.get("other.wonder1.de")).toBeUndefined()
+
+    // The next project command reconciles the new project exactly once.
+    queueR.data.projectCreateAfterPersistence(other, { noDns: false })
+    await settle()
+    expect(live.get("other.wonder1.de")).toEqual([nodeAddress])
+    expect(queueR.data.status().pendingProjects).toBe(0)
+    await queueR.data.shutdown()
+  })
 })

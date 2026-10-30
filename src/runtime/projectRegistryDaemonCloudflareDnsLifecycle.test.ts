@@ -1306,4 +1306,69 @@ describe("projectRegistryDaemonCloudflareDns lifecycle", () => {
     expect(writes).toBe(0)
     await queueR.data.shutdown()
   })
+
+  test("idle retry ticks perform no repository reads and no Cloudflare calls until a project command arrives", async () => {
+    const timer = timerCreate()
+    const records = new Map<
+      string,
+      { id: string; name: string; type: string; content: string; ttl: number; proxied: boolean }
+    >()
+    const calls: string[] = []
+    const stored = trackingCreate({ version: 1, records: [] })
+    let projects: Project[] = []
+    let reads = 0
+    const queueR = projectRegistryDaemonCloudflareDnsCreate({
+      enabled: true,
+      credentialResolve: async () => createResult("token"),
+      timeoutMs: 1000,
+      serverIpCurrent: () => "203.0.113.10",
+      timer: timer.timer,
+      tracking: stored.tracking,
+      repositoryProjectsCurrent: async () => {
+        reads += 1
+        return createResult(projects)
+      },
+      fetch: fetchCreate(records, calls),
+    })
+    expect(queueR.success).toBe(true)
+    if (!queueR.success) return
+    queueR.data.start()
+
+    const app = canonicalProject("app", "registry")
+    projects = [app]
+    queueR.data.projectCreateAfterPersistence(app, { noDns: false })
+    await settle()
+    expect(records.size).toBe(1)
+    expect(queueR.data.status().pendingProjects).toBe(0)
+    const readsAfterConverge = reads
+    const callsAfterConverge = calls.length
+
+    // A reconciled queue is idle: ticks must not re-read the repository or
+    // re-call Cloudflare. This pins the removal of the former per-second
+    // full polling loop.
+    timer.tick()
+    await settle()
+    timer.tick()
+    await settle()
+    timer.tick()
+    await settle()
+    expect(reads).toBe(readsAfterConverge)
+    expect(calls.length).toBe(callsAfterConverge)
+
+    // Out-of-band repository edits are not picked up by polling either.
+    const other = canonicalProject("other", "registry")
+    projects = [app, other]
+    timer.tick()
+    await settle()
+    expect(reads).toBe(readsAfterConverge)
+    expect(calls.length).toBe(callsAfterConverge)
+    expect(records.size).toBe(1)
+
+    // The next project command reconciles the new project exactly once.
+    queueR.data.projectCreateAfterPersistence(other, { noDns: false })
+    await settle()
+    expect(records.size).toBe(2)
+    expect(queueR.data.status().pendingProjects).toBe(0)
+    await queueR.data.shutdown()
+  })
 })

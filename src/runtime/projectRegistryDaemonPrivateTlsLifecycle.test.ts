@@ -338,4 +338,70 @@ describe("projectRegistryDaemonPrivateTls lifecycle", () => {
     expect(gate.current()).toEqual({ enrolled: [], wildcardCovered: [], proven: [] })
     await queueR.data.shutdown()
   })
+
+  test("idle retry ticks perform no repository reads until a project command arrives", async () => {
+    let now = 4_000_000
+    const timer = timerCreate()
+    const tokens = new Map<string, string | undefined>([["leo", undefined]])
+    let projects: Project[] = []
+    let reads = 0
+    let credentials = 0
+    const queueR = projectRegistryDaemonPrivateTlsCreate({
+      enabled: true,
+      credentialResolve: async (owner) => {
+        credentials += 1
+        return createResult(tokens.get(owner))
+      },
+      repositoryProjectsCurrent: async () => {
+        reads += 1
+        return createResult(projects)
+      },
+      clock: () => now,
+      timer: timer.timer,
+    })
+    if (!queueR.success) throw new Error("setup failed")
+    expect(queueR.data.start().success).toBe(true)
+
+    // Defer once so the retry timer arms then disarms on success; later
+    // idle ticks must find nothing to do.
+    const first = project("app", ["api.preview.wonder1.de", "checkout.wonder1.de"])
+    projects = [first]
+    queueR.data.projectCreateAfterPersistence(first)
+    await settle()
+    expect(queueR.data.status().enrolled).toEqual([])
+    tokens.set("leo", "leo-token")
+    now += 2_001
+    timer.tick()
+    await settle()
+    expect(queueR.data.status().enrolled).toEqual(["api.preview.wonder1.de"])
+    expect(queueR.data.status().pendingOwners).toBe(0)
+    const readsAfterConverge = reads
+    const credentialsAfterConverge = credentials
+
+    // A reconciled tracker is idle: ticks must not re-read the repository or
+    // re-resolve credentials. This pins the removal of the former per-second
+    // full polling loop.
+    timer.tick()
+    await settle()
+    timer.tick()
+    await settle()
+    timer.tick()
+    await settle()
+    expect(reads).toBe(readsAfterConverge)
+    expect(credentials).toBe(credentialsAfterConverge)
+
+    // Out-of-band repository edits are not picked up by polling either.
+    const second = project("other", ["api.other.wonder1.de"])
+    projects = [first, second]
+    timer.tick()
+    await settle()
+    expect(reads).toBe(readsAfterConverge)
+    expect(queueR.data.status().enrolled).toEqual(["api.preview.wonder1.de"])
+
+    // The next project command enrolls the new hostname exactly once.
+    queueR.data.projectCreateAfterPersistence(second)
+    await settle()
+    expect(queueR.data.status().enrolled).toEqual(["api.other.wonder1.de", "api.preview.wonder1.de"])
+    await queueR.data.shutdown()
+  })
 })
