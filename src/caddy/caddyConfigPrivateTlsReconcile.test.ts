@@ -148,7 +148,7 @@ describe("caddyConfigPrivateTlsReconcileCreate", () => {
     ])
   })
 
-  test("unions onto base TLS and refuses overlapping subjects", async () => {
+  test("unions onto base TLS and skips base-covered subjects", async () => {
     const projects = [project("app", ["api.preview.wonder1.de"])]
     const generated = generatePrivate(projects)
     const withBase: CaddyConfig = {
@@ -192,16 +192,55 @@ describe("caddyConfigPrivateTlsReconcileCreate", () => {
         },
       },
     }
-    const refused = await reconcileR.data(overlapping, projects)
-    expect(refused.success).toBe(false)
-    if (refused.success) return
-    expect(refused.errorMessage).toContain("api.preview.wonder1.de")
+    // Pilot-enrolled subjects stay on the base configuration instead of
+    // failing the whole render; the route passes through with base TLS.
+    const skipped = await reconcileR.data(overlapping, projects)
+    expect(skipped.success).toBe(true)
+    if (!skipped.success) return
+    expect(skipped.data.apps.tls?.automation?.policies?.map((policy) => policy.subjects)).toEqual([
+      ["api.preview.wonder1.de"],
+    ])
+    expect(skipped.data.apps.tls?.certificates?.automate).toEqual([])
+    expect(routeHosts(skipped.data)).toEqual([["api.preview.wonder1.de"]])
 
     const malformed: CaddyConfig = {
       ...generated,
       apps: { ...generated.apps, tls: { automation: { policies: "nope" } } as unknown as CaddyConfig["apps"]["tls"] },
     }
     expect((await reconcileR.data(malformed, projects)).success).toBe(false)
+  })
+
+  test("enrolls uncovered names while skipping base-covered siblings", async () => {
+    const projects = [project("app", ["api.preview.wonder1.de", "deep.api.wonder1.de"])]
+    const generated = generatePrivate(projects)
+    const withBase: CaddyConfig = {
+      ...generated,
+      apps: {
+        ...generated.apps,
+        tls: {
+          automation: { policies: [{ subjects: ["api.preview.wonder1.de"], issuers: [] }] },
+          certificates: { automate: [] },
+        },
+      },
+    }
+    const reconcileR = caddyConfigPrivateTlsReconcileCreate({
+      enabled: true,
+      snapshotCurrent: () => ({
+        enrolled: ["deep.api.wonder1.de"],
+        wildcardCovered: [],
+        proven: ["deep.api.wonder1.de"],
+      }),
+    })
+    if (!reconcileR.success) throw new Error("setup failed")
+    const reconciled = await reconcileR.data(withBase, projects)
+    expect(reconciled.success).toBe(true)
+    if (!reconciled.success) return
+    expect(reconciled.data.apps.tls?.automation?.policies?.map((policy) => policy.subjects)).toEqual([
+      ["api.preview.wonder1.de"],
+      ["deep.api.wonder1.de"],
+    ])
+    expect(reconciled.data.apps.tls?.certificates?.automate).toEqual(["deep.api.wonder1.de"])
+    expect(routeHosts(reconciled.data)).toEqual([["api.preview.wonder1.de", "deep.api.wonder1.de"]])
   })
 
   test("skips pre-migration out-of-zone claims while rendering valid ones", async () => {

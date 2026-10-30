@@ -164,8 +164,22 @@ export function caddyConfigPrivateTlsReconcileCreate(options: {
       .filter((claim) => claim.hostnames.length > 0)
     if (claims.length === 0) return createResult(config)
 
+    const existingR = tlsMergeRead((config as CaddyConfig).apps?.tls, op)
+    if (!existingR.success) return existingR
+    const existing = existingR.data
+    const existingSubjects = new Set(existing.subjects)
+    // Subjects the base already enrolls (pilot-enrolled exact names) stay on
+    // the base configuration: filter them from the claims so the render only
+    // enrolls what is missing. Their routes pass through with base-config TLS
+    // untouched, and one legacy overlap can never fail the whole render.
+    const uncovered = claims
+      .map((claim) => ({
+        ...claim,
+        hostnames: claim.hostnames.filter((hostname) => !existingSubjects.has(hostname)),
+      }))
+      .filter((claim) => claim.hostnames.length > 0)
     const renderedR = projectPrivateTlsAutomationRender({
-      claims,
+      claims: uncovered,
       ...(tokenEnvVars === undefined ? {} : { tokenEnvVars }),
       ...(resolvers === undefined ? {} : { resolvers }),
       ...(privateListenerAddresses === undefined ? {} : { privateAddresses: privateListenerAddresses }),
@@ -174,10 +188,6 @@ export function caddyConfigPrivateTlsReconcileCreate(options: {
     if (!renderedR.success) return renderedR
     const rendered = renderedR.data
 
-    const existingR = tlsMergeRead((config as CaddyConfig).apps?.tls, op)
-    if (!existingR.success) return existingR
-    const existing = existingR.data
-    const existingSubjects = new Set(existing.subjects)
     for (const hostname of rendered.enrolled) {
       if (existingSubjects.has(hostname)) {
         return createResultError(
