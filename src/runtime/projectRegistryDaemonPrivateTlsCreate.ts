@@ -12,7 +12,11 @@ import type { ProjectPrivateTlsGateSnapshot } from "../project/projectPrivateTls
 import { projectPrivateTlsTokenResolve } from "../project/projectPrivateTlsTokenSelect.js"
 import type { ProjectRegistryDaemonPrivateTlsStatus } from "./projectRegistryDaemonPrivateTlsStatusSchema.js"
 
-const reconcileIntervalMs = 1_000
+// Retry wake-up cadence. Tracking is event-driven: project commands drain
+// immediately and this timer only exists to retry deferred enrollment and
+// trust proof. It is disarmed whenever nothing is waiting, so a reconciled
+// daemon performs no periodic repository reads at all.
+const retryTickMs = 1_000
 const retryBaseMs = 1_000
 const retryMaximumMs = 60_000
 const maxStatusErrors = 20
@@ -171,6 +175,7 @@ export function projectRegistryDaemonPrivateTlsCreate(options: {
   let intervalHandle: unknown
   let drainPromise: Promise<void> = Promise.resolve()
   let shutdownPromise: PromiseResult<void> | undefined
+  let snapshotFailed = false
 
   function log(message: string): void {
     try {
@@ -283,8 +288,10 @@ export function projectRegistryDaemonPrivateTlsCreate(options: {
     if ("error" in snapshot) {
       statusErrorUpsert({ operation: "snapshot", errorMessage: snapshot.error, attempts: 0, occurredAt: clock() })
       logEvent("snapshot", "failure", { operation: "snapshot", reason: snapshot.error })
+      snapshotFailed = true
       return
     }
+    snapshotFailed = false
     statusErrorsClear((entry) => entry.operation === "snapshot")
 
     const desiredByOwner = new Map<string, Set<string>>()
@@ -500,11 +507,80 @@ export function projectRegistryDaemonPrivateTlsCreate(options: {
     }
   }
 
+  function intervalClear(): void {
+    if (intervalHandle === undefined) return
+    try {
+      options.timer.clearInterval(intervalHandle)
+    } catch {
+      // Shutdown continues even when the timer refuses to clear.
+    }
+    intervalHandle = undefined
+  }
+
+  function intervalRelease(): void {
+    if (intervalHandle === undefined) return
+    intervalClear()
+  }
+
+  function intervalEnsure(): void {
+    if (!active || stopped || intervalHandle !== undefined) return
+    try {
+      intervalHandle = options.timer.setInterval(intervalTick, retryTickMs)
+    } catch {
+      logEvent("snapshot", "failure", { operation: "timer", reason: "retry-timer-unavailable" })
+      statusErrorUpsert({
+        operation: "timer",
+        errorMessage: "Private TLS retry timer unavailable",
+        attempts: 0,
+        occurredAt: clock(),
+      })
+    }
+  }
+
+  function retriesDue(): boolean {
+    const now = clock()
+    for (const retry of ownerRetries.values()) {
+      if (retry.nextAt <= now) return true
+    }
+    for (const retry of proofRetries.values()) {
+      if (retry.nextAt <= now) return true
+    }
+    return false
+  }
+
+  function queueIdle(): boolean {
+    return ownerRetries.size === 0 && proofRetries.size === 0 && !snapshotFailed
+  }
+
+  function intervalTick(): void {
+    if (!active || stopped || !started) return
+    if (queueIdle()) {
+      // Nothing is waiting for enrollment, proof, or a snapshot retry:
+      // stop ticking until a project command drains again.
+      intervalRelease()
+      return
+    }
+    if (!snapshotFailed && !retriesDue()) return
+    drainKick()
+  }
+
+  function settleTimer(): void {
+    if (stopped) return
+    // Deferred enrollment and trust proof re-arm the retry timer; a clean
+    // drain disarms it so idle tracking performs no repository reads.
+    if (queueIdle()) intervalRelease()
+    else intervalEnsure()
+  }
+
   function drainKick(): void {
     if (!active || stopped || !started) return
     drainPromise = drainPromise.then(
       () => drainOnce(),
       () => drainOnce(),
+    )
+    void drainPromise.then(
+      () => settleTimer(),
+      () => settleTimer(),
     )
   }
 
@@ -517,23 +593,15 @@ export function projectRegistryDaemonPrivateTlsCreate(options: {
       if (stopped) return createResultError(op, "Private TLS queue is shut down")
       if (started) return createResultError(op, "Private TLS queue is already started")
       started = true
-      if (active) {
-        intervalHandle = options.timer.setInterval(drainKick, reconcileIntervalMs)
-        drainKick()
-      }
+      // No timer arm here: the drain below runs immediately, and settleTimer
+      // arms the retry timer only when enrollment or proof stays deferred.
+      if (active) drainKick()
       return createResult(undefined)
     },
     shutdown(): PromiseResult<void> {
       if (shutdownPromise !== undefined) return shutdownPromise
       stopped = true
-      if (intervalHandle !== undefined) {
-        try {
-          options.timer.clearInterval(intervalHandle)
-        } catch {
-          // Shutdown continues even when the timer refuses to clear.
-        }
-        intervalHandle = undefined
-      }
+      intervalClear()
       shutdownPromise = drainPromise.then(
         () => createResult(undefined),
         () => createResult(undefined),

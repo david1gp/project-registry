@@ -552,7 +552,13 @@ describe("projectRegistryDaemonCloudflareDns lifecycle", () => {
     const putsBeforeRecurring = calls.filter((call) => call.startsWith("PUT ")).length
     const restoredRecord = records.get("record-1")
     if (restoredRecord !== undefined) restoredRecord.content = "198.51.100.21"
+    // Out-of-band drift is not repaired by polling: an idle retry tick
+    // performs no repository read and no Cloudflare calls.
     timer.tick()
+    await settle()
+    expect(calls.filter((call) => call.startsWith("PUT "))).toHaveLength(putsBeforeRecurring)
+    // The next project command repairs the drift it reconciles.
+    queueR.data.projectEditAfterPersistence(restored, restored)
     await settle()
     expect(calls.filter((call) => call.startsWith("PUT ")).length).toBeGreaterThan(putsBeforeRecurring)
 
@@ -1241,11 +1247,13 @@ describe("projectRegistryDaemonCloudflareDns lifecycle", () => {
     queue.data.start()
     await settle()
     expect(queue.data.status().errors).toMatchObject([
-      { owner: "leo", project: "app", errorMessage: "owner-credential-missing", nextRetryAt: 1000 },
+      { owner: "leo", project: "app", errorMessage: "owner-credential-missing", nextRetryAt: 2000 },
     ])
     now = 1000
     timer.tick()
     await settle()
+    // The backoff deadline has not lapsed: the tick performs no repository
+    // read and logs nothing new.
     expect(logs).toHaveLength(1)
     token = "token"
     now = 2000
@@ -1258,10 +1266,14 @@ describe("projectRegistryDaemonCloudflareDns lifecycle", () => {
     now = 3000
     timer.tick()
     await settle()
+    // A reconciled queue is idle: the tick stops the retry timer and performs
+    // no repository read, so nothing is logged.
     expect(logs).toHaveLength(recoveredLogs)
     token = undefined
     now = 4000
-    timer.tick()
+    // A revoked credential is noticed by the next project command, not by
+    // polling: requeueing the unchanged project redeems the deferral.
+    queue.data.projectCreateAfterPersistence(project("app", [current.name]), { noDns: false })
     await settle()
     expect(logs).toHaveLength(recoveredLogs + 1)
     await queue.data.shutdown()

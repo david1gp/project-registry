@@ -25,7 +25,11 @@ import {
   projectRegistryDaemonPrivateDnsStatusSchema,
 } from "./projectRegistryDaemonPrivateDnsStatusSchema.js"
 
-const reconcileIntervalMs = 1_000
+// Retry wake-up cadence. The queue is event-driven: project commands queue
+// work immediately and this timer only exists to retry deferred work. It is
+// disarmed whenever the queue is fully idle, so a reconciled daemon performs
+// no periodic repository reads at all.
+const retryTickMs = 1_000
 const retryBaseMs = 1_000
 const retryMaximumMs = 60_000
 const maxStatusErrors = 20
@@ -429,14 +433,20 @@ export function projectRegistryDaemonPrivateDnsCreate(options: {
     return pendingDeletions.get(key) ?? { attempts: 0, nextAt: 0, sequence: nextSequence++ }
   }
 
-  function retryProject(key: string, retry: RetryState, deferred: boolean): void {
-    const attempts = deferred ? retry.attempts : retry.attempts + 1
+  function retryProject(key: string, retry: RetryState): void {
+    // Deferred work (missing server IP or credentials) backs off exactly
+    // like failed work: a fixed one-second retry would re-read the repository
+    // and re-resolve credentials every second for as long as the environment
+    // stays unavailable. An appearing server IP wakes deferred work early
+    // through the tick's address-change check.
+    const attempts = retry.attempts + 1
     pendingProjects.delete(key)
     pendingProjects.set(key, {
       attempts,
-      nextAt: clock() + (deferred ? retryBaseMs : retryDelay(attempts)),
+      nextAt: clock() + retryDelay(attempts),
       sequence: retry.sequence,
     })
+    intervalEnsure()
   }
 
   function retryDeletion(key: string): { attempts: number; nextRetryMs: number } {
@@ -444,6 +454,7 @@ export function projectRegistryDaemonPrivateDnsCreate(options: {
     const attempts = retry.attempts + 1
     const nextRetryMs = retryDelay(attempts)
     pendingDeletions.set(key, { attempts, nextAt: clock() + nextRetryMs, sequence: retry.sequence })
+    intervalEnsure()
     return { attempts, nextRetryMs }
   }
 
@@ -496,16 +507,54 @@ export function projectRegistryDaemonPrivateDnsCreate(options: {
     return retry.nextAt <= clock()
   }
 
+  function queueIdle(): boolean {
+    return pendingProjects.size === 0 && pendingDeletions.size === 0 && startupRetry === undefined
+  }
+
+  function intervalClear(): void {
+    if (intervalHandle === undefined) return
+    try {
+      options.timer.clearInterval(intervalHandle)
+    } catch {
+      // Queue cancellation continues even when timer cleanup fails.
+    }
+    intervalHandle = undefined
+  }
+
+  function intervalRelease(): void {
+    if (intervalHandle === undefined) return
+    intervalClear()
+  }
+
+  function intervalTick(): void {
+    if (!active || !started || stopped) return
+    if (trackingBlocked) {
+      // A blocked queue never proceeds again until restart: stop ticking.
+      intervalClear()
+      return
+    }
+    if (queueIdle()) {
+      // No deferred work is waiting for a retry: stop ticking until new
+      // work is queued by a project command.
+      intervalRelease()
+      return
+    }
+    if (!hasDueWork()) {
+      // Nothing is due: stay armed but perform no repository read until a
+      // retry comes due.
+      return
+    }
+    if (options.repositoryProjectsCurrent === undefined) {
+      drainSchedule(true)
+      return
+    }
+    void recurringReconcile()
+  }
+
   function intervalEnsure(): void {
     if (!active || stopped || intervalHandle !== undefined) return
     try {
-      intervalHandle = options.timer.setInterval(() => {
-        if (options.repositoryProjectsCurrent === undefined) {
-          drainSchedule(true)
-          return
-        }
-        void recurringReconcile()
-      }, reconcileIntervalMs)
+      intervalHandle = options.timer.setInterval(intervalTick, retryTickMs)
     } catch {
       logEvent("reconciliation", "failure", { operation: "timer", reason: "retry-timer-unavailable" })
       statusErrorUpsert({
@@ -524,6 +573,7 @@ export function projectRegistryDaemonPrivateDnsCreate(options: {
       nextAt: clock() + retryDelay(attempts),
       sequence: startupRetry?.sequence ?? nextSequence++,
     }
+    intervalEnsure()
   }
 
   async function currentProjects(): Promise<Result<ProjectSnapshot>> {
@@ -554,6 +604,10 @@ export function projectRegistryDaemonPrivateDnsCreate(options: {
     }
   }
 
+  function projectSnapshotKey(project: Project): string {
+    return JSON.stringify(project)
+  }
+
   async function recurringReconcile(): Promise<void> {
     if (!active || !started || stopped) return
     const projectsR = await currentProjects()
@@ -562,8 +616,13 @@ export function projectRegistryDaemonPrivateDnsCreate(options: {
       return
     }
 
+    // The scan only feeds genuinely new or changed projects into the queue.
+    // Already-reconciled projects stay out: reprocessing them every second
+    // re-read the repository and re-applied split-DNS for zero effect.
     for (const project of projectsR.data) {
       const key = projectKeyValue(project)
+      const previous = desiredProjects.get(key)
+      if (previous !== undefined && projectSnapshotKey(previous) === projectSnapshotKey(project)) continue
       desiredProjects.set(key, project)
       if (!pendingProjects.has(key)) pendingProjects.set(key, { attempts: 0, nextAt: 0, sequence: nextSequence++ })
     }
@@ -873,14 +932,15 @@ export function projectRegistryDaemonPrivateDnsCreate(options: {
     reason: "owner-credential-missing" | "owner-credential-unavailable" | "owner-credential-invalid",
     operation: string,
   ): void {
-    logEvent("credential", "deferred", { ...fields, attempt: attempts, nextRetryMs: retryBaseMs, reason })
+    const deferredRetryMs = retryDelay(attempts + 1)
+    logEvent("credential", "deferred", { ...fields, attempt: attempts, nextRetryMs: deferredRetryMs, reason })
     statusErrorUpsert({
       ...fields,
       operation,
       errorMessage: reason,
       attempts,
       occurredAt: clock(),
-      nextRetryAt: clock() + retryBaseMs,
+      nextRetryAt: clock() + deferredRetryMs,
     })
   }
 
@@ -1073,11 +1133,14 @@ export function projectRegistryDaemonPrivateDnsCreate(options: {
     }
     // An owner with pending project work may still reconcile a replacement
     // hostname; wait for that run instead of deleting based on stale state.
+    // The wait backs off: a fixed one-second retry would re-read the
+    // repository every second while the sibling run stays deferred.
     if (host.projectKeys.some((key) => pendingProjects.has(projectKeyValue(key)))) {
       const retry = deletionStateRetry(hostname)
+      const attempts = retry.attempts + 1
       pendingDeletions.set(hostname, {
-        attempts: retry.attempts,
-        nextAt: clock() + retryBaseMs,
+        attempts,
+        nextAt: clock() + retryDelay(attempts),
         sequence: retry.sequence,
       })
       return "failed"
@@ -1427,14 +1490,15 @@ export function projectRegistryDaemonPrivateDnsCreate(options: {
         continue
       }
       const retry = dueProject![1]
-      // Force wakes each deferred project once, not repeatedly within this
-      // drain: missing credentials must still honor their retry deadline.
+      // Force wakes each fresh project once, not repeatedly within this
+      // drain: backoff retries must still honor their retry deadline.
       forcedProjects.add(dueProject![0])
       const outcome = await projectRun(dueProject![0], retry.sequence)
-      if (outcome === "failed" && pendingProjects.get(dueProject![0])?.sequence === retry.sequence)
-        retryProject(dueProject![0], retry, false)
-      if (outcome === "deferred" && pendingProjects.get(dueProject![0])?.sequence === retry.sequence)
-        retryProject(dueProject![0], retry, true)
+      if (
+        (outcome === "failed" || outcome === "deferred") &&
+        pendingProjects.get(dueProject![0])?.sequence === retry.sequence
+      )
+        retryProject(dueProject![0], retry)
       // A project with unavailable credentials or an inaccessible tailnet must
       // not prevent unrelated owners' projects from reconciling.
     }
@@ -1474,13 +1538,23 @@ export function projectRegistryDaemonPrivateDnsCreate(options: {
     void current.then(() => {
       if (drainPromise !== current) return
       drainPromise = undefined
-      if (!stopped && hasDueWork()) drainSchedule()
+      if (stopped) return
+      if (hasDueWork()) {
+        drainSchedule()
+        return
+      }
+      // The drain settled with no deferred work left: stop ticking until a
+      // project command queues new work. Deferred retries re-arm the timer
+      // through retryProject/retryDeletion.
+      if (queueIdle()) intervalRelease()
+      else intervalEnsure()
     })
   }
 
   function projectQueueSet(project: Project): void {
     if (!active || !started || stopped) return
-    intervalEnsure()
+    // No timer arm here: the drain below runs immediately, and any deferral
+    // inside it re-arms the retry timer itself.
     const key = projectKeyValue(project)
     desiredProjects.set(key, project)
     pendingProjects.set(key, {
@@ -1502,7 +1576,8 @@ export function projectRegistryDaemonPrivateDnsCreate(options: {
 
   function projectDeleteAfterPersistence(project: Project): void {
     if (!active || !started || stopped) return
-    intervalEnsure()
+    // No timer arm here: the drain below runs immediately, and any deferral
+    // inside it re-arms the retry timer itself.
     const key = projectKeyValue(project)
     desiredProjects.delete(key)
     pendingProjects.set(key, {
@@ -1566,14 +1641,7 @@ export function projectRegistryDaemonPrivateDnsCreate(options: {
     if (shutdownPromise !== undefined) return shutdownPromise
     stopped = true
     controller.abort()
-    if (intervalHandle !== undefined) {
-      try {
-        options.timer.clearInterval(intervalHandle)
-      } catch {
-        // Queue cancellation continues even when timer cleanup fails.
-      }
-      intervalHandle = undefined
-    }
+    intervalClear()
     pendingProjects.clear()
     pendingDeletions.clear()
     const current = drainPromise

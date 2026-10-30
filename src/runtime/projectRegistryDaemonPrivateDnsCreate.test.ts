@@ -295,7 +295,7 @@ describe("projectRegistryDaemonPrivateDnsCreate credentials", () => {
     let status = dnsR.data.status()
     expect(status.pendingProjects).toBe(1)
     expect(status.errors.map((entry) => entry.errorMessage)).toEqual(["owner-credential-missing"])
-    expect(status.errors[0]?.nextRetryAt).toBe(now + 1_000)
+    expect(status.errors[0]?.nextRetryAt).toBe(now + 2_000)
     // The retry deadline is honored: no split-DNS traffic before it lapses.
     expect(calls.length).toBe(0)
     now += 1_001

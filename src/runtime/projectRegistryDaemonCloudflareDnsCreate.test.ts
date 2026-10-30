@@ -343,7 +343,8 @@ describe("projectRegistryDaemonCloudflareDnsCreate", () => {
     expect(authorizations).toEqual([])
 
     token = "appeared-token"
-    now = 1_000
+    // The first deferral backs off: the retry runs once its deadline lapses.
+    now = 2_000
     timer.tick()
     await settle()
     expect(authorizations).toContain("Bearer appeared-token")
