@@ -62,12 +62,14 @@ describe("projectTailscalePrivateRoutesValidate", () => {
   })
 
   test("grandfathers already-served private domains but validates new ones", () => {
-    const legacy = { caddy: { port: 3000, domains: ["api.preview.akademie.contentoren.de"], networkVisibility: "private" } }
+    const legacy = {
+      caddy: { port: 3000, domains: ["api.preview.akademie.contentoren.de"], networkVisibility: "private" },
+    }
     expect(projectTailscalePrivateRouteDomains(legacy)).toEqual(["api.preview.akademie.contentoren.de"])
     // Unrelated edits keep the legacy claim working.
-    expect(projectTailscalePrivateRoutesValidate(legacy, "leo", "op", ["api.preview.akademie.contentoren.de"]).success).toBe(
-      true,
-    )
+    expect(
+      projectTailscalePrivateRoutesValidate(legacy, "leo", "op", ["api.preview.akademie.contentoren.de"]).success,
+    ).toBe(true)
     // Newly added out-of-zone domains are still rejected.
     const added = {
       caddy: {
@@ -94,9 +96,9 @@ describe("projectTailscalePrivateRoutesValidate", () => {
         upstream: "10.1.2.3",
       },
     }
-    expect(projectTailscalePrivateRoutesValidate(badUpstream, "leo", "op", ["api.preview.akademie.contentoren.de"]).success).toBe(
-      false,
-    )
+    expect(
+      projectTailscalePrivateRoutesValidate(badUpstream, "leo", "op", ["api.preview.akademie.contentoren.de"]).success,
+    ).toBe(false)
   })
 
   test("rejects non-loopback upstreams on private routes", () => {

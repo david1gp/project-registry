@@ -215,12 +215,7 @@ export async function projectEdit(
   if (!projectR.success) return projectR
   // Post-normalize pass: see projectCreate for why the pre-normalize check
   // alone is not enough (default-domain injection happens inside normalize).
-  const tailscaleNormalizedR = projectTailscalePrivateRoutesValidate(
-    projectR.data,
-    key.owner,
-    op,
-    grandfatheredDomains,
-  )
+  const tailscaleNormalizedR = projectTailscalePrivateRoutesValidate(projectR.data, key.owner, op, grandfatheredDomains)
   if (!tailscaleNormalizedR.success) return tailscaleNormalizedR
   if (!projectKeyEqual(projectR.data, key))
     return createResultErrorCode(op, "project owner and name are immutable", "request.invalid")
