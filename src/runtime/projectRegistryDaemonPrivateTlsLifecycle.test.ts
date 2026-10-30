@@ -175,6 +175,29 @@ describe("projectRegistryDaemonPrivateTls lifecycle", () => {
     await queueR.data.shutdown()
   })
 
+  test("passes grandfathered apex hostnames through with no claim error", async () => {
+    const timer = timerCreate()
+    let projects: Project[] = []
+    const queueR = projectRegistryDaemonPrivateTlsCreate({
+      enabled: true,
+      grandfatheredHostnames: ["wonder1.de"],
+      credentialResolve: async (owner) => createResult(`${owner}-token`),
+      repositoryProjectsCurrent: async () => createResult(projects),
+      timer: timer.timer,
+    })
+    if (!queueR.success) throw new Error("setup failed")
+    expect(queueR.data.start().success).toBe(true)
+
+    const apex = project("dashboard", ["wonder1.de"])
+    projects = [apex]
+    queueR.data.projectCreateAfterPersistence(apex)
+    await settle()
+    const status = queueR.data.status()
+    expect(status.enrolled).toEqual([])
+    expect(status.errors).toEqual([])
+    await queueR.data.shutdown()
+  })
+
   test("stays idle while disabled and refuses the private listener as a challenge resolver", async () => {
     let calls = 0
     const disabledR = projectRegistryDaemonPrivateTlsCreate({

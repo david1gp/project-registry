@@ -10,6 +10,7 @@ import {
 } from "../project/projectPrivateTlsEnrollment.js"
 import type { ProjectPrivateTlsGateSnapshot } from "../project/projectPrivateTlsGate.js"
 import { projectPrivateTlsTokenResolve } from "../project/projectPrivateTlsTokenSelect.js"
+import { tailscaleGrandfatheredHostnamesNormalize } from "../tailscale/tailscaleGrandfatheredHostnamesNormalize.js"
 import type { ProjectRegistryDaemonPrivateTlsStatus } from "./projectRegistryDaemonPrivateTlsStatusSchema.js"
 
 // Retry wake-up cadence. Tracking is event-driven: project commands drain
@@ -89,6 +90,7 @@ function privateHostnames(project: Project): string[] {
  */
 export function projectRegistryDaemonPrivateTlsCreate(options: {
   enabled: boolean
+  grandfatheredHostnames?: readonly string[]
   challengeResolvers?: readonly string[]
   privateListenerAddresses?: readonly string[]
   credentialResolve?: (owner: string) => PromiseResult<string | undefined>
@@ -151,6 +153,12 @@ export function projectRegistryDaemonPrivateTlsCreate(options: {
   if (options.logger !== undefined && typeof options.logger !== "function") {
     return createResultError(op, "Private TLS logger is invalid")
   }
+  if (
+    options.grandfatheredHostnames !== undefined &&
+    tailscaleGrandfatheredHostnamesNormalize(options.grandfatheredHostnames) === undefined
+  ) {
+    return createResultError(op, "Private TLS grandfathered hostnames must be exact private FQDNs")
+  }
   if (typeof options.timer !== "object" || options.timer === null) {
     return createResultError(op, "Private TLS timer is required")
   }
@@ -160,6 +168,9 @@ export function projectRegistryDaemonPrivateTlsCreate(options: {
 
   const active = options.enabled
   const challengeResolvers = resolversR.data
+  const grandfatheredHostnames = new Set(
+    tailscaleGrandfatheredHostnamesNormalize(options.grandfatheredHostnames ?? []) ?? [],
+  )
   const knownProjects = new Map<string, Project>()
   const enrolled = new Map<string, EnrolledHost>()
   const proven = new Map<string, EnrolledHost>()
@@ -311,6 +322,14 @@ export function projectRegistryDaemonPrivateTlsCreate(options: {
     const claimedOwners = new Set<string>()
     for (const [owner, hostnames] of desiredByOwner) {
       for (const hostname of hostnames) {
+        // Grandfathered names stay on their base-configuration certificate:
+        // no enrollment, no claim error, routes pass through untouched.
+        if (grandfatheredHostnames.has(hostname)) {
+          statusErrorsClear(
+            (entry) => entry.owner === owner && entry.hostname === hostname && entry.operation === "claim",
+          )
+          continue
+        }
         const planR = projectPrivateTlsEnrollmentPlanCreate(owner, [hostname], op)
         if (!planR.success) {
           claimErrorRecord(owner, hostname, planR.errorMessage)

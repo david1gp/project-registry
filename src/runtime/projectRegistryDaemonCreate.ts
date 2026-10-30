@@ -386,6 +386,7 @@ export function projectRegistryDaemonCreate(options: ProjectRegistryDaemonOption
   }
   const privateTlsR = projectRegistryDaemonPrivateTlsCreate({
     enabled: config.privateDns.enabled,
+    grandfatheredHostnames: config.privateDns.grandfatheredHostnames,
     ...(config.privateDns.nodeAddress === undefined
       ? {}
       : { privateListenerAddresses: [config.privateDns.nodeAddress] }),

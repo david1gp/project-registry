@@ -11,7 +11,7 @@ import { projectLocalCaddyEntries } from "../project/projectLocalCaddyEntries.js
 import { projectTailscaleZoneClaimValidate, projectTailscaleZonePolicy } from "../project/projectTailscaleZonePolicy.js"
 import type { TailscaleSplitDnsFetch } from "../tailscale/TailscaleSplitDnsFetch.js"
 import { tailscaleDnsmasqConfigRender } from "../tailscale/tailscaleDnsmasqConfigRender.js"
-import { tailscaleHostnameNormalize } from "../tailscale/tailscaleHostnameNormalize.js"
+import { tailscaleGrandfatheredHostnamesNormalize } from "../tailscale/tailscaleGrandfatheredHostnamesNormalize.js"
 import { tailscaleSplitDnsApply } from "../tailscale/tailscaleSplitDnsApply.js"
 import { tailscaleSplitDnsErrorDetailsRead } from "../tailscale/tailscaleSplitDnsErrorDetailsRead.js"
 import { tailscaleSplitDnsRemove } from "../tailscale/tailscaleSplitDnsRemove.js"
@@ -272,8 +272,7 @@ export function projectRegistryDaemonPrivateDnsCreate(options: {
   }
   if (
     options.grandfatheredHostnames !== undefined &&
-    (!Array.isArray(options.grandfatheredHostnames) ||
-      options.grandfatheredHostnames.some((hostname) => tailscaleHostnameNormalize(hostname) === undefined))
+    tailscaleGrandfatheredHostnamesNormalize(options.grandfatheredHostnames) === undefined
   ) {
     return createResultError(op, "Private DNS grandfathered hostnames must be exact private FQDNs")
   }
@@ -295,11 +294,9 @@ export function projectRegistryDaemonPrivateDnsCreate(options: {
   const nodeAddress = options.nodeAddress
   const apiBaseUrl = options.apiBaseUrl ?? tailscaleApiBaseUrlDefault
   const upstreamResolvers = [...options.upstreamResolvers]
-  const grandfatheredHostnames = new Set<string>()
-  for (const hostname of options.grandfatheredHostnames ?? []) {
-    const normalized = tailscaleHostnameNormalize(hostname)
-    if (normalized !== undefined) grandfatheredHostnames.add(normalized)
-  }
+  const grandfatheredHostnames = new Set(
+    tailscaleGrandfatheredHostnamesNormalize(options.grandfatheredHostnames ?? []) ?? [],
+  )
   const dnsmasqConfigPath = options.dnsmasqConfigPath
   const splitDnsStateDirectory = options.splitDnsStateDirectory
   const filesystem = options.filesystem

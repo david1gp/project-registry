@@ -4,7 +4,7 @@ import { projectAccessLogRootSchema } from "../access-log/projectAccessLogRootSc
 import { caddyConfigOptionsSchema } from "../caddy/caddyConfigOptionsSchema.js"
 import { caddyInstanceConfigSchema } from "../caddy/caddyInstanceConfigSchema.js"
 import { localDomainsOptionsSchema } from "../local-domains/localDomainsOptionsSchema.js"
-import { tailscaleHostnameNormalize } from "../tailscale/tailscaleHostnameNormalize.js"
+import { tailscaleGrandfatheredHostnamesNormalize } from "../tailscale/tailscaleGrandfatheredHostnamesNormalize.js"
 
 const loopbackHostnameSchema = a.union([a.literal("127.0.0.1"), a.literal("::1")])
 
@@ -189,7 +189,7 @@ const systemdUnitSchema = a.pipe(
 const grandfatheredHostnamesSchema = a.pipe(
   a.array(a.string()),
   a.check(
-    (value) => value.every((hostname) => tailscaleHostnameNormalize(hostname) !== undefined),
+    (value) => tailscaleGrandfatheredHostnamesNormalize(value) !== undefined,
     "grandfathered hostnames must be exact private FQDNs",
   ),
 )
