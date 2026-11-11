@@ -248,6 +248,7 @@ export function projectRegistryDaemonCreate(options: ProjectRegistryDaemonOption
   let privateDnsCredentialsFilesystemOption: ProjectRegistryDaemonOptions["privateDnsCredentialsFilesystem"]
   let privateDnsResolverReloadOption: ProjectRegistryDaemonOptions["privateDnsResolverReload"]
   let devTrackingOption: ProjectRegistryDaemonOptions["devTracking"]
+  let devActivityOption: ProjectRegistryDaemonOptions["devActivity"]
   let devTrackingFilesystemOption: ProjectRegistryDaemonOptions["devTrackingFilesystem"]
   let devProcessRunnerOption: ProjectRegistryDaemonOptions["devProcessRunner"]
   let devCommandFilesystemOption: ProjectRegistryDaemonOptions["devCommandFilesystem"]
@@ -284,6 +285,7 @@ export function projectRegistryDaemonCreate(options: ProjectRegistryDaemonOption
     privateDnsCredentialsFilesystemOption = options.privateDnsCredentialsFilesystem
     privateDnsResolverReloadOption = options.privateDnsResolverReload
     devTrackingOption = options.devTracking
+    devActivityOption = options.devActivity
     devTrackingFilesystemOption = options.devTrackingFilesystem
     devProcessRunnerOption = options.devProcessRunner
     devCommandFilesystemOption = options.devCommandFilesystem
@@ -409,6 +411,15 @@ export function projectRegistryDaemonCreate(options: ProjectRegistryDaemonOption
       : createResult(devTrackingOption)
   if (!devTrackingR.success) return devTrackingR
   const devTracking = devTrackingR.data
+  if (
+    devActivityOption !== undefined &&
+    (typeof devActivityOption !== "object" ||
+      devActivityOption === null ||
+      typeof devActivityOption.hostsCurrent !== "function")
+  ) {
+    return createResultError(op, "Dev activity source is invalid")
+  }
+  const devActivity = devActivityOption
   if (devProcessRunnerOption !== undefined && typeof devProcessRunnerOption !== "function") {
     return createResultError(op, "Dev process runner is invalid")
   }
@@ -1688,6 +1699,7 @@ export function projectRegistryDaemonCreate(options: ProjectRegistryDaemonOption
           tracking: devTracking,
           runner: devProcessRunner,
           clock: devClock,
+          ...(devActivity === undefined ? {} : { activity: devActivity }),
         })
         if (!devStartupR.success) {
           // Fall through: the registry must serve even with a stale sidecar.
@@ -1721,6 +1733,7 @@ export function projectRegistryDaemonCreate(options: ProjectRegistryDaemonOption
               runner: devProcessRunner,
               clock: devClock,
               regenerate: () => caddyApplication.regenerate(),
+              ...(devActivity === undefined ? {} : { activity: devActivity }),
             }).then(
               () => undefined,
               () => undefined,

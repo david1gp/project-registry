@@ -2380,6 +2380,96 @@ describe("projectRegistryDaemonCreate dev lifecycle", () => {
     }
   })
 
+  test("observed HTTP activity keeps an idle lease alive across reaper ticks", async () => {
+    const daemonConfig = config({ dev: { enabled: true, projectsRoot: "/projects" } })
+    const files = new Map<string, string>()
+    const writerR = devLeaseTrackingCreate({
+      path: devLeaseTrackingPath(daemonConfig.serverIpCachePath),
+      filesystem: trackingFilesystemCreate(files),
+    })
+    expect(writerR.success).toBe(true)
+    if (!writerR.success) return
+    // Idle far past its TTL: without the activity signal the next tick reaps it.
+    const idle = { ...leaseCreate({ name: "neu" }), unit: "dev-tim-neu.service", lastSeenAt: 0, ttlMs: 1_000 }
+    await expect(writerR.data.write({ version: 1 as const, leases: [idle] })).resolves.toMatchObject({
+      success: true,
+    })
+
+    const calls: RunnerCall[] = []
+    const intervals: Array<{ callback: () => void; delayMs: number }> = []
+    let regenerations = 0
+    const application: CaddyApplication = {
+      start: async () => createResult({ revision: "r", changed: true, applied: true, attempts: 1 }),
+      startup: async () => createResult({ revision: "r", changed: true, applied: true, attempts: 1 }),
+      regenerate: async () => {
+        regenerations += 1
+        return createResult({ revision: "r", changed: true, applied: true, attempts: 1 })
+      },
+      projectChange: async () => createResult({ revision: "r", changed: false, applied: true, attempts: 0 }),
+      status: () => ({ pending: false }),
+      stop: async () => undefined,
+    }
+    const activitySeenAt = Date.now()
+    const fakeFilesystem = filesystemCreate()
+    const fakeServers = serverFactoryCreate(fakeFilesystem.entries)
+    const daemonR = projectRegistryDaemonCreate({
+      config: daemonConfig,
+      repository: repository(),
+      caddyApplication: application,
+      filesystem: fakeFilesystem.filesystem,
+      serverFactory: fakeServers.factory,
+      serverIpFetch: async () => new Response("203.0.113.10\n"),
+      devTrackingFilesystem: trackingFilesystemCreate(files),
+      devActivity: {
+        hostsCurrent: async () => [{ host: "tim-neu.wonder1.de", seenAt: activitySeenAt }],
+      },
+      devProcessRunner: async (command, args) => {
+        calls.push({ command, args })
+        if (command === "systemctl" && args[0] === "is-active") {
+          const unit = args[1] ?? ""
+          const alive = unit === "dev-tim-neu.service"
+          return createResult({ exitCode: alive ? 0 : 3, stdout: alive ? "active\n" : "inactive\n", stderr: "" })
+        }
+        return createResult({ exitCode: 0, stdout: "", stderr: "" })
+      },
+      timer: {
+        wait: async () => undefined,
+        setInterval: (callback: () => void, delayMs: number) => {
+          intervals.push({ callback, delayMs })
+          return intervals.length
+        },
+        clearInterval: () => undefined,
+      },
+      requireRoot: false,
+    })
+    expect(daemonR.success).toBe(true)
+    if (!daemonR.success) return
+    try {
+      expect((await daemonR.data.start()).success).toBe(true)
+      // Reseed after startup so the tick below is what touches the lease.
+      await expect(writerR.data.write({ version: 1 as const, leases: [idle] })).resolves.toMatchObject({
+        success: true,
+      })
+      const reap = intervals.find((entry) => entry.delayMs === 60_000)
+      expect(reap).toBeDefined()
+      reap!.callback()
+      await conditionWait(() => {
+        const value = files.get(devLeaseTrackingPath(daemonConfig.serverIpCachePath))
+        return value?.includes(`"lastSeenAt":${activitySeenAt}`) ?? false
+      })
+      // A touch persists the lease but changes no route: no Caddy reload, no stop.
+      const reapedR = await writerR.data.read()
+      expect(reapedR.success).toBe(true)
+      if (!reapedR.success) return
+      expect(reapedR.data.leases).toHaveLength(1)
+      expect(reapedR.data.leases[0]?.lastSeenAt).toBe(activitySeenAt)
+      expect(regenerations).toBe(0)
+      expect(calls).not.toContainEqual({ command: "systemctl", args: ["stop", "dev-tim-neu.service"] })
+    } finally {
+      await daemonR.data.shutdown()
+    }
+  })
+
   test("registers no reap interval while the dev flag is dark", async () => {
     const fakeFilesystem = filesystemCreate()
     const fakeServers = serverFactoryCreate(fakeFilesystem.entries)
