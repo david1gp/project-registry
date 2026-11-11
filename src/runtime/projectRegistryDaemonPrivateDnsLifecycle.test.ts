@@ -477,4 +477,145 @@ describe("projectRegistryDaemonPrivateDns lifecycle", () => {
     expect(queueR.data.status().pendingProjects).toBe(0)
     await queueR.data.shutdown()
   })
+
+  test("restores an out-of-band edited dnsmasq file on next converge", async () => {
+    const live = new Map<string, string[]>()
+    const { fetch } = splitDnsFetchCreate(live, [], [])
+    const stored = trackingCreate({ version: 1, hosts: [] })
+    const files = filesystemCreate()
+    let reloads = 0
+    const projects = [project("app", ["app.wonder1.de"])]
+    const queueR = projectRegistryDaemonPrivateDnsCreate({
+      enabled: true,
+      tailnet: "example.com",
+      nodeAddress,
+      upstreamResolvers: ["1.1.1.1"],
+      dnsmasqConfigPath,
+      splitDnsStateDirectory: "/var/lib/project-registry/private-dns",
+      credentialResolve: async () => createResult("tskey-test"),
+      fetch,
+      filesystem: files.filesystem,
+      resolverReload: async () => {
+        reloads += 1
+        return createResult(undefined)
+      },
+      tracking: stored.tracking,
+      repositoryProjectsCurrent: async () => createResult(projects),
+      timer: timerCreate().timer,
+    })
+    if (!queueR.success) throw new Error("setup failed")
+    expect(queueR.data.start().success).toBe(true)
+    queueR.data.projectCreateAfterPersistence(projects[0]!, { noDns: false })
+    await settle()
+    const converged = files.files.get(dnsmasqConfigPath) ?? ""
+    expect(converged).toContain("host-record=app.wonder1.de,100.122.200.114")
+    expect(reloads).toBe(1)
+
+    // An out-of-band writer edits the file without touching tracking state.
+    files.files.set(dnsmasqConfigPath, "# hand-edited by another writer\n")
+    queueR.data.projectEditAfterPersistence(projects[0]!, projects[0]!)
+    await settle()
+    expect(files.files.get(dnsmasqConfigPath)).toBe(converged)
+    expect(reloads).toBe(2)
+    expect(queueR.data.status().errors).toEqual([])
+    await queueR.data.shutdown()
+  })
+
+  test("rewrites a missing dnsmasq file on next converge", async () => {
+    const live = new Map<string, string[]>()
+    const { fetch } = splitDnsFetchCreate(live, [], [])
+    const stored = trackingCreate({ version: 1, hosts: [] })
+    const files = filesystemCreate()
+    let reloads = 0
+    const projects = [project("app", ["app.wonder1.de"])]
+    const queueR = projectRegistryDaemonPrivateDnsCreate({
+      enabled: true,
+      tailnet: "example.com",
+      nodeAddress,
+      upstreamResolvers: ["1.1.1.1"],
+      dnsmasqConfigPath,
+      splitDnsStateDirectory: "/var/lib/project-registry/private-dns",
+      credentialResolve: async () => createResult("tskey-test"),
+      fetch,
+      filesystem: files.filesystem,
+      resolverReload: async () => {
+        reloads += 1
+        return createResult(undefined)
+      },
+      tracking: stored.tracking,
+      repositoryProjectsCurrent: async () => createResult(projects),
+      timer: timerCreate().timer,
+    })
+    if (!queueR.success) throw new Error("setup failed")
+    expect(queueR.data.start().success).toBe(true)
+    queueR.data.projectCreateAfterPersistence(projects[0]!, { noDns: false })
+    await settle()
+    const converged = files.files.get(dnsmasqConfigPath) ?? ""
+    expect(converged).toContain("host-record=app.wonder1.de,100.122.200.114")
+    expect(reloads).toBe(1)
+
+    // The file disappears out-of-band while tracking still claims convergence.
+    files.files.delete(dnsmasqConfigPath)
+    queueR.data.projectEditAfterPersistence(projects[0]!, projects[0]!)
+    await settle()
+    expect(files.files.get(dnsmasqConfigPath)).toBe(converged)
+    expect(reloads).toBe(2)
+    expect(queueR.data.status().errors).toEqual([])
+    await queueR.data.shutdown()
+  })
+
+  test("leaves an unchanged dnsmasq file alone without restarting the resolver", async () => {
+    const live = new Map<string, string[]>()
+    const { fetch } = splitDnsFetchCreate(live, [], [])
+    const stored = trackingCreate({ version: 1, hosts: [] })
+    const files = filesystemCreate()
+    let reloads = 0
+    const projects = [project("app", ["app.wonder1.de"])]
+    const queueR = projectRegistryDaemonPrivateDnsCreate({
+      enabled: true,
+      tailnet: "example.com",
+      nodeAddress,
+      upstreamResolvers: ["1.1.1.1"],
+      dnsmasqConfigPath,
+      splitDnsStateDirectory: "/var/lib/project-registry/private-dns",
+      credentialResolve: async () => createResult("tskey-test"),
+      fetch,
+      filesystem: files.filesystem,
+      resolverReload: async () => {
+        reloads += 1
+        return createResult(undefined)
+      },
+      tracking: stored.tracking,
+      repositoryProjectsCurrent: async () => createResult(projects),
+      timer: timerCreate().timer,
+    })
+    if (!queueR.success) throw new Error("setup failed")
+    expect(queueR.data.start().success).toBe(true)
+    queueR.data.projectCreateAfterPersistence(projects[0]!, { noDns: false })
+    await settle()
+    const converged = files.files.get(dnsmasqConfigPath) ?? ""
+    expect(converged).toContain("host-record=app.wonder1.de,100.122.200.114")
+    expect(reloads).toBe(1)
+
+    let writes = 0
+    let renames = 0
+    const innerWrite = files.filesystem.writeFile
+    files.filesystem.writeFile = async (path, value, mode) => {
+      writes += 1
+      return innerWrite(path, value, mode)
+    }
+    const innerRename = files.filesystem.rename
+    files.filesystem.rename = async (source, destination) => {
+      renames += 1
+      return innerRename(source, destination)
+    }
+    queueR.data.projectEditAfterPersistence(projects[0]!, projects[0]!)
+    await settle()
+    expect(files.files.get(dnsmasqConfigPath)).toBe(converged)
+    expect(writes).toBe(0)
+    expect(renames).toBe(0)
+    expect(reloads).toBe(1)
+    expect(queueR.data.status().errors).toEqual([])
+    await queueR.data.shutdown()
+  })
 })
