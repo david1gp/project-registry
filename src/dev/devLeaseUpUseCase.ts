@@ -2,6 +2,7 @@ import { createResult, createResultError, createResultErrorCode, type PromiseRes
 import type { CaddyApplicationResult } from "../caddy/CaddyApplicationResult.js"
 import type { Project } from "../project/Project.js"
 import type { ProjectPortRange } from "../project/projectPortNext.js"
+import type { ProjectService } from "../project/projectServiceSchema.js"
 import type { DevLeaseTracking } from "./DevLeaseTracking.js"
 import type { DevCommandOverride } from "./DevCommandOverride.js"
 import { devCommandResolve } from "./devCommandResolve.js"
@@ -41,6 +42,32 @@ export type DevLeaseUpUseCaseOptions = {
   healthTimeoutMs?: number
   healthIntervalMs?: number
   regenerate: () => PromiseResult<CaddyApplicationResult>
+}
+
+const devLeaseLoopbackHost = "127.0.0.1"
+
+function rowDevCommandFind(
+  projects: readonly Project[],
+  user: string,
+  name: string,
+  serviceId?: string,
+): string | undefined {
+  const row = projects.find((project) => project.owner === user && project.name === name)
+  if (row === undefined) return undefined
+  const services = row.services
+  if (!Array.isArray(services)) return undefined
+  const candidates = services.filter(
+    (service): service is ProjectService => typeof service === "object" && service !== null,
+  )
+  if (candidates.length !== services.length) return undefined
+  const picked =
+    serviceId === undefined
+      ? candidates.length === 1
+        ? candidates[0]
+        : undefined
+      : candidates.find((service) => service.id === serviceId)
+  const command = picked?.dev?.command
+  return typeof command === "string" ? command : undefined
 }
 
 function leaseKeyMatch(lease: DevLeaseRecord, user: string, name: string, serviceId?: string): boolean {
@@ -144,15 +171,20 @@ async function upInternal(options: DevLeaseUpUseCaseOptions, op: string): Promis
     ...(options.commandFilesystem === undefined ? {} : { filesystem: options.commandFilesystem }),
   })
   if (!directoryR.success) return directoryR
+  const portR = devPortAllocate(options.projects, base, options.portRange)
+  if (!portR.success) return portR
+  const rowCommand = rowDevCommandFind(options.projects, options.user, options.name, options.serviceId)
   const commandR = await devCommandResolve({
     directory: directoryR.data,
     projectsRoot: options.projectsRoot,
     ...(options.commandFilesystem === undefined ? {} : { filesystem: options.commandFilesystem }),
     ...(options.command === undefined ? {} : { override: options.command }),
+    ...(rowCommand === undefined ? {} : { rowCommand }),
+    port: portR.data,
+    host: devLeaseLoopbackHost,
+    project: `${options.user}/${options.name}`,
   })
   if (!commandR.success) return commandR
-  const portR = devPortAllocate(options.projects, base, options.portRange)
-  if (!portR.success) return portR
   const unitR = devUnitName({
     user: options.user,
     project: options.name,

@@ -111,6 +111,17 @@ function harnessCreate(
   return harness
 }
 
+function projectRow(services: { id: string; dev?: { command: string } }[]): Project {
+  return {
+    schemaVersion: 2,
+    owner: "tim",
+    name: "akademie",
+    order: 0,
+    labels: {},
+    services: services.map((service) => ({ units: [], caddy: null, ownership: "registry" as const, ...service })),
+  }
+}
+
 function leaseCreate(overrides: Partial<DevLeaseRecord> = {}): DevLeaseRecord {
   return {
     projectKey: { owner: "tim", name: "akademie" },
@@ -287,6 +298,85 @@ describe("devLeaseUpUseCase", () => {
       args: ["stop", "dev-tim-akademie.service"],
       input: "",
     })
+  })
+
+  test("a row dev.command beats the package.json dev script with substituted placeholders", async () => {
+    const harness = harnessCreate()
+    const projects: Project[] = [
+      projectRow([{ id: "web", dev: { command: "bun run vite --host {host} --port {port}" } }]),
+    ]
+    const result = await devLeaseUpUseCase(harness.options({ projects }))
+
+    expect(result.success).toBe(true)
+    if (!result.success) return
+    const spawn = harness.calls.find((call) => call.command === "systemd-run")
+    expect(spawn).toBeDefined()
+    expect(spawn!.args.slice(-6)).toEqual(["run", "vite", "--host", "127.0.0.1", "--port", "4400"])
+    expect(spawn!.args).toContain("--setenv=PORT=4400")
+  })
+
+  test("an explicit argv override still beats the row dev.command", async () => {
+    const harness = harnessCreate()
+    const projects: Project[] = [projectRow([{ id: "web", dev: { command: "bun run vite --port {port}" } }])]
+    const result = await devLeaseUpUseCase(
+      harness.options({ projects, command: { command: "node", args: ["./server.mjs"] } }),
+    )
+
+    expect(result.success).toBe(true)
+    if (!result.success) return
+    const spawn = harness.calls.find((call) => call.command === "systemd-run")
+    expect(spawn!.args.slice(-2)).toEqual(["node", "./server.mjs"])
+  })
+
+  test("a service id selects its own dev.command among several services", async () => {
+    const harness = harnessCreate()
+    const projects: Project[] = [
+      projectRow([
+        { id: "web", dev: { command: "bun run vite --port {port}" } },
+        { id: "api", dev: { command: "bun run ./api.ts --port {port}" } },
+      ]),
+    ]
+    const result = await devLeaseUpUseCase(harness.options({ projects, serviceId: "api" }))
+
+    expect(result.success).toBe(true)
+    if (!result.success) return
+    const spawn = harness.calls.find((call) => call.command === "systemd-run")
+    expect(spawn!.args.slice(-4)).toEqual(["run", "./api.ts", "--port", "4400"])
+  })
+
+  test("several services without a service id fall back to the package.json dev script", async () => {
+    const harness = harnessCreate()
+    const projects: Project[] = [
+      projectRow([
+        { id: "web", dev: { command: "bun run vite --port {port}" } },
+        { id: "api", dev: { command: "bun run ./api.ts --port {port}" } },
+      ]),
+    ]
+    const result = await devLeaseUpUseCase(harness.options({ projects }))
+
+    expect(result.success).toBe(true)
+    if (!result.success) return
+    const spawn = harness.calls.find((call) => call.command === "systemd-run")
+    expect(spawn!.args.slice(-3)).toEqual(["bun", "run", "dev"])
+  })
+
+  test("neither row nor manifest reports the project in the missing-contract error", async () => {
+    const harness = harnessCreate()
+    const filesystem: DevProjectFilesystem = {
+      readFile: async () => JSON.stringify({ name: "akademie" }),
+      realpath: async (path) => path,
+      stat: async () => ({ isDirectory: () => true }),
+    }
+    const projects: Project[] = [projectRow([])]
+    const result = await devLeaseUpUseCase(harness.options({ projects, commandFilesystem: filesystem }))
+
+    expect(result.success).toBe(false)
+    if (result.success) return
+    expect(result.code).toBe("request.invalid")
+    expect(result.errorMessage).toBe(
+      "dev command for project tim/akademie is not configured (dev package.json has no dev script)",
+    )
+    expect(harness.calls).toEqual([])
   })
 
   test("a stale lease with a dead unit is replaced instead of touched", async () => {

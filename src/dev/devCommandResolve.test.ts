@@ -89,6 +89,99 @@ describe("devCommandResolve", () => {
     expect(result.errorMessage).toBe("dev package.json escapes its projects root")
   })
 
+  test("a row dev.command beats the package.json dev script with substituted placeholders", async () => {
+    const result = await devCommandResolve({
+      directory: "/projects/akademie",
+      projectsRoot: "/projects",
+      filesystem: filesystemCreate(manifestWith({ dev: "vite --port 9999" })),
+      rowCommand: "bun run vite --host {host} --port {port} --strictPort",
+      port: 4400,
+      host: "127.0.0.1",
+    })
+
+    expect(result).toEqual({
+      success: true,
+      data: {
+        command: "bun",
+        args: ["run", "vite", "--host", "127.0.0.1", "--port", "4400", "--strictPort"],
+      },
+    })
+  })
+
+  test("a row dev.command without placeholders needs no port or host", async () => {
+    const result = await devCommandResolve({
+      directory: "/projects/akademie",
+      projectsRoot: "/projects",
+      filesystem: filesystemCreate({}),
+      rowCommand: "bun run ./server.ts",
+    })
+
+    expect(result).toEqual({ success: true, data: { command: "bun", args: ["run", "./server.ts"] } })
+  })
+
+  test("a row dev.command works when the manifest is missing", async () => {
+    const result = await devCommandResolve({
+      directory: "/projects/akademie",
+      projectsRoot: "/projects",
+      filesystem: filesystemCreate({}),
+      rowCommand: "bun run dev",
+    })
+
+    expect(result).toEqual({ success: true, data: { command: "bun", args: ["run", "dev"] } })
+  })
+
+  test("an invalid row dev.command fails instead of falling back", async () => {
+    for (const rowCommand of ["bun run dev && evil", "/usr/bin/vite dev", "bun run vite --port {nope}", "   "]) {
+      const result = await devCommandResolve({
+        directory: "/projects/akademie",
+        projectsRoot: "/projects",
+        filesystem: filesystemCreate(manifestWith({ dev: "vite" })),
+        rowCommand,
+        port: 4400,
+        host: "127.0.0.1",
+      })
+      expect(result.success).toBe(false)
+    }
+  })
+
+  test("row placeholders without a port or host fail loudly", async () => {
+    const noPort = await devCommandResolve({
+      directory: "/projects/akademie",
+      projectsRoot: "/projects",
+      filesystem: filesystemCreate({}),
+      rowCommand: "bun run vite --port {port}",
+      host: "127.0.0.1",
+    })
+    expect(noPort.success).toBe(false)
+    if (!noPort.success) expect(noPort.errorMessage).toBe("dev command placeholders need a port")
+
+    const noHost = await devCommandResolve({
+      directory: "/projects/akademie",
+      projectsRoot: "/projects",
+      filesystem: filesystemCreate({}),
+      rowCommand: "bun run vite --host {host}",
+      port: 4400,
+    })
+    expect(noHost.success).toBe(false)
+    if (!noHost.success) expect(noHost.errorMessage).toBe("dev command placeholders need a host")
+  })
+
+  test("neither row nor manifest names the missing contract for the project", async () => {
+    const result = await devCommandResolve({
+      directory: "/projects/akademie",
+      projectsRoot: "/projects",
+      filesystem: filesystemCreate(manifestWith({})),
+      project: "tim/akademie",
+    })
+
+    expect(result.success).toBe(false)
+    if (result.success) return
+    expect(result.code).toBe("request.invalid")
+    expect(result.errorMessage).toBe(
+      "dev command for project tim/akademie is not configured (dev package.json has no dev script)",
+    )
+  })
+
   test("ignores unrelated manifest keys and non-string dev scripts", async () => {
     const result = await devCommandResolve({
       directory: "/projects/akademie",
