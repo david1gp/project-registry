@@ -3451,3 +3451,215 @@ describe("dev servers API (dark-gated)", () => {
     expect(stopped.body).toMatchObject({ success: false, error: { code: "caddy.unavailable" } })
   })
 })
+
+describe("dev servers API enabled lifecycle (D2)", () => {
+  const socketContext = { transport: "unix", username: "tim" } as const
+
+  type RunnerCall = { command: string; args: readonly string[]; input: string }
+
+  function wiredHandlerCreate(
+    options: {
+      leases?: DevLeaseRecord[]
+      runnerBehavior?: (call: RunnerCall) => { exitCode: number; stdout: string; stderr: string }
+      commandFilesystem?: {
+        readFile: (path: string) => Promise<string>
+        realpath: (path: string) => Promise<string>
+        stat: (path: string) => Promise<{ isDirectory(): boolean }>
+      }
+      fetchBehavior?: () => Promise<Response>
+    } = {},
+  ) {
+    const calls: RunnerCall[] = []
+    let state: DevLeaseTrackingState = { version: 1, leases: options.leases ?? [] }
+    const tracking: DevLeaseTracking = {
+      read: async () => createResult(state),
+      write: async (next) => {
+        state = next
+        return createResult(undefined)
+      },
+    }
+    const runner = async (command: string, args: readonly string[], input: string) => {
+      calls.push({ command, args, input })
+      const behavior = options.runnerBehavior ?? (() => ({ exitCode: 0, stdout: "", stderr: "" }))
+      return createResult(behavior({ command, args, input }))
+    }
+    const application = caddyApplicationCreate()
+    const handler = projectRegistryApiHandlerCreate({
+      repository: repositoryCreate(),
+      caddyApplication: application,
+      portRange: { from: 4400, to: 4402 },
+      dev: {
+        enabled: true,
+        tracking,
+        processRunner: runner,
+        projectsRoot: "/projects",
+        userResolve: async () => createResult({ uid: 1002 }),
+        commandFilesystem: options.commandFilesystem ?? {
+          readFile: async (path: string) => {
+            if (path.endsWith("package.json")) return JSON.stringify({ scripts: { dev: "vite" } })
+            throw new Error(`ENOENT: ${path}`)
+          },
+          realpath: async (path: string) => path,
+          stat: async () => ({ isDirectory: () => true }),
+        },
+        pathValue: "/usr/bin",
+        fetch: options.fetchBehavior ?? (async () => new Response("ok", { status: 200 })),
+        clock: () => 1_700_000_000_000,
+        wait: async () => undefined,
+      },
+    })
+    return { handler, application, calls, stateGet: () => state }
+  }
+
+  test("up spawns the user-sliced unit and returns the active lease", async () => {
+    const wired = wiredHandlerCreate()
+    const started = await requestJson(wired.handler, "/api/v1/users/tim/dev", socketContext, "POST", {
+      project: "akademie",
+    })
+
+    expect(started.response.status).toBe(200)
+    expect(started.body).toMatchObject({
+      success: true,
+      data: {
+        hostname: "tim-akademie.wonder1.de",
+        port: 4400,
+        unit: "dev-tim-akademie.service",
+        state: "active",
+        user: "tim",
+        projectKey: { owner: "tim", name: "akademie" },
+      },
+    })
+    const spawn = wired.calls.find((call) => call.command === "systemd-run")
+    expect(spawn?.args).toContain("--property=User=tim")
+    expect(spawn?.args).toContain("--property=Slice=user-1002.slice")
+    expect(spawn?.args).toContain("--working-directory=/projects/akademie")
+    expect(wired.application.regenerations).toBe(1)
+    expect(wired.stateGet().leases).toHaveLength(1)
+  })
+
+  test("up stays dark-gated off and rejects cross-owner routes", async () => {
+    const wired = wiredHandlerCreate()
+    const dark = projectRegistryApiHandlerCreate({
+      repository: repositoryCreate(),
+      caddyApplication: caddyApplicationCreate(),
+    })
+    const listed = await requestJson(dark, "/api/v1/users/tim/dev", socketContext)
+    expect(listed.response.status).toBe(409)
+    expect(listed.body).toMatchObject({ error: { code: "dev.disabled" } })
+
+    const foreign = await requestJson(wired.handler, "/api/v1/users/leo/dev", socketContext, "POST", {
+      project: "akademie",
+    })
+    expect(foreign.response.status).toBe(403)
+  })
+
+  test("a second up touches the lease without spawning or regenerating again", async () => {
+    const wired = wiredHandlerCreate({
+      runnerBehavior: (call) =>
+        call.command === "systemctl" && call.args[0] === "is-active"
+          ? { exitCode: 0, stdout: "active\n", stderr: "" }
+          : { exitCode: 0, stdout: "", stderr: "" },
+    })
+    const first = await requestJson(wired.handler, "/api/v1/users/tim/dev", socketContext, "POST", {
+      project: "akademie",
+    })
+    expect(first.response.status).toBe(200)
+    const spawnsBefore = wired.calls.filter((call) => call.command === "systemd-run").length
+
+    const second = await requestJson(wired.handler, "/api/v1/users/tim/dev", socketContext, "POST", {
+      project: "akademie",
+    })
+    expect(second.response.status).toBe(200)
+    expect(second.body).toMatchObject({ success: true, data: { port: 4400 } })
+    expect(wired.calls.filter((call) => call.command === "systemd-run")).toHaveLength(spawnsBefore)
+    expect(wired.application.regenerations).toBe(1)
+  })
+
+  test("down stops the unit, deletes the lease, and regenerates", async () => {
+    const wired = wiredHandlerCreate()
+    const started = await requestJson(wired.handler, "/api/v1/users/tim/dev", socketContext, "POST", {
+      project: "akademie",
+    })
+    expect(started.response.status).toBe(200)
+
+    const stopped = await requestJson(wired.handler, "/api/v1/users/tim/dev/akademie", socketContext, "DELETE", {})
+    expect(stopped.response.status).toBe(200)
+    expect(stopped.body).toMatchObject({
+      success: true,
+      data: { project: "akademie", owner: "tim", hostname: "tim-akademie.wonder1.de", stopped: true },
+    })
+    expect(wired.calls).toContainEqual({
+      command: "systemctl",
+      args: ["stop", "dev-tim-akademie.service"],
+      input: "",
+    })
+    expect(wired.stateGet().leases).toEqual([])
+    expect(wired.application.regenerations).toBe(2)
+
+    const listed = await requestJson(wired.handler, "/api/v1/users/tim/dev", socketContext)
+    expect(listed.body).toMatchObject({ success: true, data: { leases: [] } })
+  })
+
+  test("down for an unknown lease reports not found", async () => {
+    const wired = wiredHandlerCreate()
+    const stopped = await requestJson(wired.handler, "/api/v1/users/tim/dev/akademie", socketContext, "DELETE", {})
+
+    expect(stopped.response.status).toBe(404)
+    expect(stopped.body).toMatchObject({ success: false, error: { code: "projects.not-found" } })
+  })
+
+  test("up maps a spawn failure to 503 with no lease residue", async () => {
+    const wired = wiredHandlerCreate({
+      runnerBehavior: (call) =>
+        call.command === "systemd-run"
+          ? { exitCode: 1, stdout: "", stderr: "Failed" }
+          : { exitCode: 0, stdout: "", stderr: "" },
+    })
+    const started = await requestJson(wired.handler, "/api/v1/users/tim/dev", socketContext, "POST", {
+      project: "akademie",
+    })
+
+    expect(started.response.status).toBe(503)
+    expect(started.body).toMatchObject({ success: false, error: { code: "caddy.unavailable" } })
+    expect(wired.stateGet().leases).toEqual([])
+    expect(wired.application.regenerations).toBe(0)
+  })
+
+  test("up maps a missing project directory to 404 without spawning", async () => {
+    const wired = wiredHandlerCreate({
+      commandFilesystem: {
+        readFile: async () => {
+          throw new Error("ENOENT")
+        },
+        realpath: async () => {
+          throw new Error("ENOENT")
+        },
+        stat: async () => ({ isDirectory: () => true }),
+      },
+    })
+    const started = await requestJson(wired.handler, "/api/v1/users/tim/dev", socketContext, "POST", {
+      project: "akademie",
+    })
+
+    expect(started.response.status).toBe(404)
+    expect(started.body).toMatchObject({ success: false, error: { code: "dev.not-found" } })
+    expect(wired.calls).toEqual([])
+  })
+
+  test("up maps a missing dev script to 400 without spawning", async () => {
+    const wired = wiredHandlerCreate({
+      commandFilesystem: {
+        readFile: async () => JSON.stringify({ name: "akademie" }),
+        realpath: async (path: string) => path,
+        stat: async () => ({ isDirectory: () => true }),
+      },
+    })
+    const started = await requestJson(wired.handler, "/api/v1/users/tim/dev", socketContext, "POST", {
+      project: "akademie",
+    })
+
+    expect(started.response.status).toBe(400)
+    expect(started.body).toMatchObject({ success: false, error: { code: "request.invalid" } })
+    expect(wired.calls).toEqual([])
+  })
+})

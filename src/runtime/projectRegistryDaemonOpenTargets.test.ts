@@ -9,6 +9,9 @@ import type { CaddyConfig } from "../caddy/CaddyConfig.js"
 import type { Project } from "../project/Project.js"
 import type { ProjectRepository } from "../project-store/ProjectRepository.js"
 import { caddyInstanceTargetsResolve } from "../caddy/caddyInstanceTargetsResolve.js"
+import { devLeaseTrackingCreate } from "../dev/devLeaseTrackingCreate.js"
+import { devLeaseTrackingPath } from "../dev/devLeaseTrackingPath.js"
+import type { DevLeaseRecord } from "../dev/devLeaseRecordSchema.js"
 import { projectRegistryDaemonConfigValidate } from "./projectRegistryDaemonConfigValidate.js"
 import { projectRegistryDaemonCaddyTargetCreate } from "./projectRegistryDaemonCaddyTargetCreate.js"
 import { projectRegistryDaemonOpen } from "./projectRegistryDaemonOpen.js"
@@ -209,6 +212,91 @@ test("daemon reads required private baseline before opening repository or loadin
     }),
   ).toMatchObject({ success: false, op: "caddyConfigBaseRead" })
   expect(harness.loaded).toEqual([])
+})
+
+test("private target serves the active dev lease while the public target stays clean", async () => {
+  const files = new Map<string, string>()
+  const leaseFilesystem = {
+    async readFile(path: string) {
+      const value = files.get(path)
+      if (value === undefined) throw Object.assign(new Error("missing"), { code: "ENOENT" })
+      return value
+    },
+    async mkdir() {},
+    async writeFile(path: string, value: string) {
+      files.set(path, value)
+    },
+    async rename(source: string, destination: string) {
+      const value = files.get(source)
+      if (value === undefined) throw new Error("missing rename source")
+      files.set(destination, value)
+      files.delete(source)
+    },
+    async unlink(path: string) {
+      files.delete(path)
+    },
+  }
+  const lease: DevLeaseRecord = {
+    projectKey: { owner: "tim", name: "akademie" },
+    user: "tim",
+    port: 4400,
+    unit: "dev-tim-akademie.service",
+    hostname: "tim-akademie.wonder1.de",
+    state: "active",
+    ttlMs: 14_400_000,
+    lastSeenAt: 1_700_000_000_000,
+    createdAt: 1_700_000_000_000,
+  }
+  // The daemon derives the sidecar path from the server-IP cache path; the
+  // writer below must use the same derived path (shared helper, not a copy).
+  const writerR = devLeaseTrackingCreate({
+    path: devLeaseTrackingPath("/var/lib/project-registry/server-ip"),
+    filesystem: leaseFilesystem,
+  })
+  expect(writerR.success).toBe(true)
+  if (!writerR.success) return
+  await expect(writerR.data.write({ version: 1, leases: [lease] })).resolves.toMatchObject({ success: true })
+
+  const root = await mkdtemp(join(tmpdir(), "registry-targets-dev-"))
+  const privatePath = join(root, "private.json")
+  const privateBase = {
+    admin: { listen: "127.0.0.1:2020" },
+    apps: { http: { servers: { srv0: { listen: ["100.122.200.114:443"], routes: [] } } } },
+  }
+  try {
+    await writeFile(privatePath, JSON.stringify(privateBase))
+    const harness = dependencies([project("private")])
+    const daemonR = await projectRegistryDaemonOpen({
+      ...harness.options,
+      devTrackingFilesystem: leaseFilesystem,
+      config: {
+        repositoryPath: "/tmp/opencode/registry-targets",
+        caddyBinary: "/validation/plugin-superset-wrapper",
+        dev: { enabled: true },
+        caddyInstances: {
+          public: { adminUrl: "http://127.0.0.1:2019", httpsListeners: ["203.0.113.10:443"] },
+          private: {
+            adminUrl: "http://127.0.0.1:2020",
+            httpsListeners: ["100.122.200.114:443"],
+            baseConfigPath: privatePath,
+          },
+        },
+      },
+    })
+    expect(daemonR.success).toBe(true)
+    if (!daemonR.success) return
+    expect((await daemonR.data.caddyApplication.startup()).success).toBe(true)
+    const privateLoad = harness.loaded.find((entry) => entry.url === "http://127.0.0.1:2020/load")
+    const publicLoad = harness.loaded.find((entry) => entry.url === "http://127.0.0.1:2019/load")
+    expect(privateLoad).toBeDefined()
+    expect(publicLoad).toBeDefined()
+    expect(caddyConfigHostnames(privateLoad!.config)).toContain("tim-akademie.wonder1.de")
+    expect(caddyConfigHostnames(publicLoad!.config)).not.toContain("tim-akademie.wonder1.de")
+    expect(JSON.stringify(privateLoad!.config)).toContain("127.0.0.1:4400")
+    await daemonR.data.caddyApplication.stop()
+  } finally {
+    await rm(root, { recursive: true, force: true })
+  }
 })
 
 test("target construction inherits global OIDC and binary but uses each target's listeners and log root", async () => {

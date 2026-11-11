@@ -11,6 +11,9 @@ import { posixUserDirectoryCreate } from "../identity/posixUserDirectoryCreate.j
 import { localDomainsCaddyConfigReconcileCreate } from "../local-domains/localDomainsCaddyConfigReconcileCreate.js"
 import { projectPrivateTlsGateStateCreate } from "../project/projectPrivateTlsGate.js"
 import { projectRepositoryOpen } from "../project-store/projectRepositoryOpen.js"
+import { devLeaseTrackingCreate } from "../dev/devLeaseTrackingCreate.js"
+import { devLeaseTrackingFilesystemDefault } from "../dev/devLeaseTrackingFilesystemDefault.js"
+import { devLeaseTrackingPath } from "../dev/devLeaseTrackingPath.js"
 import { sessionStoreCreate } from "../session/sessionStoreCreate.js"
 import { tokenReferenceStoreCreate } from "../session/tokenReferenceStoreCreate.js"
 import { zitadelIdentityDirectoryCreate } from "../zitadel/zitadelIdentityDirectoryCreate.js"
@@ -111,6 +114,20 @@ export async function projectRegistryDaemonOpen(
   }
 
   const config = configR.data
+  // The dev-lease sidecar is created once here and shared: the private Caddy
+  // target reads live leases for route injection while daemonCreate owns all
+  // writes (up/down/reaper) through the same instance, so the write
+  // serialization queue stays single-writer.
+  const devTrackingR = devLeaseTrackingCreate({
+    path: devLeaseTrackingPath(config.serverIpCachePath),
+    filesystem: options.devTrackingFilesystem ?? devLeaseTrackingFilesystemDefault(),
+  })
+  if (!devTrackingR.success) return devTrackingR
+  const devTracking = devTrackingR.data
+  const devLeasesCurrent = async () => {
+    const readR = await devTracking.read()
+    return readR.success ? createResult(readR.data.leases) : readR
+  }
   const instances = caddyInstanceTargetsResolve(config)
   // The TLS gate cell is shared by the tracker (writer, via daemonCreate)
   // and the private regenerate hook (reader). It exists only behind the
@@ -130,7 +147,9 @@ export async function projectRegistryDaemonOpen(
         instances.private,
         config,
         privateTlsGate === undefined
-          ? undefined
+          ? {
+              devLeases: { enabled: config.dev.enabled, leasesCurrent: devLeasesCurrent },
+            }
           : {
               privateTls: {
                 enabled: config.privateDns.enabled,
@@ -139,6 +158,7 @@ export async function projectRegistryDaemonOpen(
                   ? {}
                   : { privateListenerAddresses: [config.privateDns.nodeAddress] }),
               },
+              devLeases: { enabled: config.dev.enabled, leasesCurrent: devLeasesCurrent },
             },
       )
       if (!privateR.success) return privateR
@@ -220,6 +240,7 @@ export async function projectRegistryDaemonOpen(
     config,
     repository: repositoryR.data,
     caddyApplication: caddyR.data,
+    devTracking,
     posix,
     browserAuth: authR.data,
     ...(socketAccessResolve === undefined ? {} : { socketAccessResolve }),

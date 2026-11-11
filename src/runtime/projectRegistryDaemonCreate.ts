@@ -38,8 +38,10 @@ import { projectRegistryDaemonPrivateDnsCredentialsCreate } from "./projectRegis
 import { projectRegistryDaemonPrivateDnsResolverReloadDefault } from "./projectRegistryDaemonPrivateDnsResolverReloadDefault.js"
 import { projectRegistryDaemonPrivateDnsTrackingCreate } from "./projectRegistryDaemonPrivateDnsTrackingCreate.js"
 import { projectRegistryDaemonPrivateDnsTrackingFilesystemDefault } from "./projectRegistryDaemonPrivateDnsTrackingFilesystemDefault.js"
+import { devLeaseReconcile } from "../dev/devLeaseReconcile.js"
 import { devLeaseTrackingCreate } from "../dev/devLeaseTrackingCreate.js"
 import { devLeaseTrackingFilesystemDefault } from "../dev/devLeaseTrackingFilesystemDefault.js"
+import { devLeaseTrackingPath } from "../dev/devLeaseTrackingPath.js"
 import { devProcessRunnerDefault } from "../dev/devProcessRunnerDefault.js"
 import { projectRegistryDaemonPrivateTlsCreate } from "./projectRegistryDaemonPrivateTlsCreate.js"
 import { projectRegistryDaemonServerDefault } from "./projectRegistryDaemonServerDefault.js"
@@ -206,6 +208,17 @@ function serverStop(server: ProjectRegistryDaemonServer): Promise<void> {
   return Promise.resolve().then(() => server.stop({ closeActiveConnections: true }))
 }
 
+const devLeaseReapIntervalMs = 60_000
+
+function timerHandleUnref(handle: unknown): void {
+  try {
+    const candidate = handle as { unref?: unknown }
+    if (typeof candidate?.unref === "function") candidate.unref()
+  } catch {
+    // Timer handles without unref (test fakes) simply keep the default behavior.
+  }
+}
+
 export function projectRegistryDaemonCreate(options: ProjectRegistryDaemonOptions): Result<ProjectRegistryDaemon> {
   const op = "projectRegistryDaemonCreate"
   if (typeof options !== "object" || options === null) return createResultError(op, "daemon options are required")
@@ -234,8 +247,13 @@ export function projectRegistryDaemonCreate(options: ProjectRegistryDaemonOption
   let privateDnsTrackingFilesystemOption: ProjectRegistryDaemonOptions["privateDnsTrackingFilesystem"]
   let privateDnsCredentialsFilesystemOption: ProjectRegistryDaemonOptions["privateDnsCredentialsFilesystem"]
   let privateDnsResolverReloadOption: ProjectRegistryDaemonOptions["privateDnsResolverReload"]
+  let devTrackingOption: ProjectRegistryDaemonOptions["devTracking"]
   let devTrackingFilesystemOption: ProjectRegistryDaemonOptions["devTrackingFilesystem"]
   let devProcessRunnerOption: ProjectRegistryDaemonOptions["devProcessRunner"]
+  let devCommandFilesystemOption: ProjectRegistryDaemonOptions["devCommandFilesystem"]
+  let devFetchOption: ProjectRegistryDaemonOptions["devFetch"]
+  let devClockOption: ProjectRegistryDaemonOptions["devClock"]
+  let devWaitOption: ProjectRegistryDaemonOptions["devWait"]
   let privateTlsTrustedProbeOption: ProjectRegistryDaemonOptions["privateTlsTrustedProbe"]
   let privateTlsGateStateOption: ProjectRegistryDaemonOptions["privateTlsGateState"]
   let wikiReconcileOption: ProjectRegistryDaemonOptions["wikiReconcile"]
@@ -265,8 +283,13 @@ export function projectRegistryDaemonCreate(options: ProjectRegistryDaemonOption
     privateDnsTrackingFilesystemOption = options.privateDnsTrackingFilesystem
     privateDnsCredentialsFilesystemOption = options.privateDnsCredentialsFilesystem
     privateDnsResolverReloadOption = options.privateDnsResolverReload
+    devTrackingOption = options.devTracking
     devTrackingFilesystemOption = options.devTrackingFilesystem
     devProcessRunnerOption = options.devProcessRunner
+    devCommandFilesystemOption = options.devCommandFilesystem
+    devFetchOption = options.devFetch
+    devClockOption = options.devClock
+    devWaitOption = options.devWait
     privateTlsTrustedProbeOption = options.privateTlsTrustedProbe
     privateTlsGateStateOption = options.privateTlsGateState
     wikiReconcileOption = options.wikiReconcile
@@ -368,17 +391,42 @@ export function projectRegistryDaemonCreate(options: ProjectRegistryDaemonOption
   })
   if (!privateDnsR.success) return privateDnsR
   const privateDns = privateDnsR.data
-  const devTrackingR = devLeaseTrackingCreate({
-    path: `${config.serverIpCachePath}.dev-leases.json`,
-    filesystem: devTrackingFilesystemOption ?? devLeaseTrackingFilesystemDefault(),
-  })
+  if (
+    devTrackingOption !== undefined &&
+    (typeof devTrackingOption !== "object" ||
+      devTrackingOption === null ||
+      typeof devTrackingOption.read !== "function" ||
+      typeof devTrackingOption.write !== "function")
+  ) {
+    return createResultError(op, "Dev lease tracking is invalid")
+  }
+  const devTrackingR =
+    devTrackingOption === undefined
+      ? devLeaseTrackingCreate({
+          path: devLeaseTrackingPath(config.serverIpCachePath),
+          filesystem: devTrackingFilesystemOption ?? devLeaseTrackingFilesystemDefault(),
+        })
+      : createResult(devTrackingOption)
   if (!devTrackingR.success) return devTrackingR
+  const devTracking = devTrackingR.data
   if (devProcessRunnerOption !== undefined && typeof devProcessRunnerOption !== "function") {
     return createResultError(op, "Dev process runner is invalid")
   }
-  // D2 consumes devProcessRunner for systemd-run spawning; until then the
-  // erroring default keeps the seam wired without starting anything.
   const devProcessRunner = devProcessRunnerOption ?? devProcessRunnerDefault()
+  if (devCommandFilesystemOption !== undefined && typeof devCommandFilesystemOption !== "object") {
+    return createResultError(op, "Dev command filesystem is invalid")
+  }
+  if (devFetchOption !== undefined && typeof devFetchOption !== "function") {
+    return createResultError(op, "Dev fetch is invalid")
+  }
+  if (devClockOption !== undefined && typeof devClockOption !== "function") {
+    return createResultError(op, "Dev clock is invalid")
+  }
+  if (devWaitOption !== undefined && typeof devWaitOption !== "function") {
+    return createResultError(op, "Dev wait is invalid")
+  }
+  const devClock = devClockOption ?? Date.now
+  const devFetch = devFetchOption ?? ((input: string, init?: RequestInit) => globalThis.fetch(input, init))
   // Private TLS readiness rides on the private-DNS switch: no separate
   // config section. The tracker resolves claiming-owner Cloudflare tokens
   // to confirm availability (never logged), proves trusted handshakes
@@ -438,6 +486,7 @@ export function projectRegistryDaemonCreate(options: ProjectRegistryDaemonOption
   const signalCleanups: Array<() => void> = []
   let webServer: ProjectRegistryDaemonServer | undefined
   let userRefreshHandle: unknown
+  let devReapHandle: unknown
   let socketRefreshPromise: PromiseResult<ProjectRegistryDaemonSocketRefresh> | undefined
   let startPromise: PromiseResult<void> | undefined
   let shutdownPromise: PromiseResult<void> | undefined
@@ -1170,6 +1219,14 @@ export function projectRegistryDaemonCreate(options: ProjectRegistryDaemonOption
       }
       userRefreshHandle = undefined
     }
+    if (devReapHandle !== undefined) {
+      try {
+        timer.clearInterval(devReapHandle)
+      } catch (error) {
+        failures.push(`dev reap timer: ${errorMessage(error)}`)
+      }
+      devReapHandle = undefined
+    }
     while (signalCleanups.length > 0) {
       const cleanup = signalCleanups.pop()
       try {
@@ -1345,7 +1402,17 @@ export function projectRegistryDaemonCreate(options: ProjectRegistryDaemonOption
       },
       portRange: config.portRange,
       defaultUserDomains: config.defaultUserDomains,
-      dev: { enabled: config.dev.enabled, tracking: devTrackingR.data, processRunner: devProcessRunner },
+      dev: {
+        enabled: config.dev.enabled,
+        tracking: devTracking,
+        processRunner: devProcessRunner,
+        ...(config.dev.projectsRoot === undefined ? {} : { projectsRoot: config.dev.projectsRoot }),
+        userResolve: async (username: string) => posix.userResolve(username),
+        ...(devCommandFilesystemOption === undefined ? {} : { commandFilesystem: devCommandFilesystemOption }),
+        fetch: devFetch,
+        clock: devClock,
+        ...(devWaitOption === undefined ? {} : { wait: devWaitOption }),
+      },
       cloudflareCredentials: cloudflareCredentialsR.data,
       cloudflareDnsStatus: () => {
         try {
@@ -1611,6 +1678,23 @@ export function projectRegistryDaemonCreate(options: ProjectRegistryDaemonOption
       if (!socketsR.success) return startupFailure(socketsR.errorMessage)
       if (state !== "starting") return startupFailure("daemon shutdown started")
 
+      // Reconcile sidecar leases against unit liveness before Caddy loads: dead
+      // units are dropped so their routes never load, and the reaper interval
+      // below keeps converging afterwards. A reconcile failure never fails
+      // startup (the registry must serve); the error surfaces through Caddy
+      // readiness and the next tick retries.
+      if (config.dev.enabled) {
+        const devStartupR = await devLeaseReconcile({
+          tracking: devTracking,
+          runner: devProcessRunner,
+          clock: devClock,
+        })
+        if (!devStartupR.success) {
+          // Fall through: the registry must serve even with a stale sidecar.
+        }
+      }
+      if (state !== "starting") return startupFailure("daemon shutdown started")
+
       caddyStartAttempted = true
       const caddyR = await caddyApplication.startup()
       if (!caddyR.success) return startupFailure(caddyR.errorMessage)
@@ -1626,6 +1710,24 @@ export function projectRegistryDaemonCreate(options: ProjectRegistryDaemonOption
         userRefreshHandle = timer.setInterval(() => {
           if (state === "running") void refreshSockets()
         }, config.userRefreshIntervalMs)
+        if (config.dev.enabled) {
+          devReapHandle = timer.setInterval(() => {
+            if (state !== "running") return
+            // Fire-and-forget like the refresh above: the tick is
+            // self-healing (it retries every interval) and reconcile never
+            // throws across the runner seam.
+            void devLeaseReconcile({
+              tracking: devTracking,
+              runner: devProcessRunner,
+              clock: devClock,
+              regenerate: () => caddyApplication.regenerate(),
+            }).then(
+              () => undefined,
+              () => undefined,
+            )
+          }, devLeaseReapIntervalMs)
+          timerHandleUnref(devReapHandle)
+        }
       } catch {
         return startupFailure("daemon timer setup failed")
       }

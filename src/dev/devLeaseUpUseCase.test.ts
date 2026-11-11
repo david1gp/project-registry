@@ -1,0 +1,312 @@
+import { describe, expect, test } from "bun:test"
+import { createResult } from "#result"
+import type { Project } from "../project/Project.js"
+import type { DevLeaseTracking } from "./DevLeaseTracking.js"
+import type { DevProcessRunner } from "./DevProcessRunner.js"
+import type { DevProjectFilesystem } from "./DevProjectFilesystem.js"
+import type { DevLeaseRecord } from "./devLeaseRecordSchema.js"
+import type { DevLeaseTrackingState } from "./devLeaseTrackingState.js"
+import { devLeaseUpUseCase, type DevLeaseUpUseCaseOptions } from "./devLeaseUpUseCase.js"
+
+type RunnerCall = { command: string; args: readonly string[]; input: string }
+
+function trackingCreate(initial: DevLeaseRecord[] = []): DevLeaseTracking & { state: DevLeaseTrackingState } {
+  const value = {
+    state: { version: 1 as const, leases: initial },
+    read: async () => createResult(value.state),
+    write: async (next: DevLeaseTrackingState) => {
+      value.state = next
+      return createResult(undefined)
+    },
+  }
+  return value
+}
+
+function runnerCreate(
+  calls: RunnerCall[],
+  behavior: (call: RunnerCall) => { exitCode: number; stdout: string; stderr: string } = () => ({
+    exitCode: 0,
+    stdout: "",
+    stderr: "",
+  }),
+): DevProcessRunner {
+  return async (command, args, input) => {
+    calls.push({ command, args, input })
+    return createResult(behavior({ command, args, input }))
+  }
+}
+
+function filesystemCreate(): DevProjectFilesystem {
+  return {
+    readFile: async (path) => {
+      if (path.endsWith("package.json")) return JSON.stringify({ name: "x", scripts: { dev: "vite" } })
+      throw new Error(`ENOENT: ${path}`)
+    },
+    realpath: async (path) => path,
+    stat: async () => ({ isDirectory: () => true }),
+  }
+}
+
+function clockCreate(start = 1_700_000_000_000): { now: () => number; advance: (ms: number) => void } {
+  let now = start
+  return { now: () => now, advance: (ms) => void (now += ms) }
+}
+
+type Harness = {
+  calls: RunnerCall[]
+  tracking: DevLeaseTracking & { state: DevLeaseTrackingState }
+  clock: { now: () => number; advance: (ms: number) => void }
+  regenerations: number
+  fetchCalls: number
+  options: (overrides?: Partial<DevLeaseUpUseCaseOptions>) => DevLeaseUpUseCaseOptions
+}
+
+function harnessCreate(
+  options: {
+    leases?: DevLeaseRecord[]
+    runnerBehavior?: (call: RunnerCall) => { exitCode: number; stdout: string; stderr: string }
+    fetchBehavior?: () => Promise<Response>
+    now?: number
+    regenerateFailure?: string
+  } = {},
+): Harness {
+  const calls: RunnerCall[] = []
+  const tracking = trackingCreate(options.leases ?? [])
+  const clock = clockCreate(options.now)
+  const fetchBehavior =
+    options.fetchBehavior ??
+    (async () => {
+      harness.fetchCalls += 1
+      return new Response("ok", { status: 200 })
+    })
+  const harness: Harness = {
+    calls,
+    tracking,
+    clock,
+    regenerations: 0,
+    fetchCalls: 0,
+    options: (overrides = {}) => ({
+      user: "tim",
+      name: "akademie",
+      projects: [] as Project[],
+      portRange: { from: 4400, to: 4402 },
+      tracking,
+      runner: runnerCreate(calls, options.runnerBehavior),
+      userResolve: async () => createResult({ uid: 1002 }),
+      projectsRoot: "/projects",
+      commandFilesystem: filesystemCreate(),
+      pathValue: "/usr/bin",
+      fetch: fetchBehavior,
+      clock: clock.now,
+      wait: async (ms: number) => void clock.advance(ms),
+      regenerate: async () => {
+        harness.regenerations += 1
+        return options.regenerateFailure === undefined
+          ? createResult({ revision: "r", changed: true, applied: true, attempts: 1 })
+          : { success: false as const, op: "test", errorMessage: options.regenerateFailure }
+      },
+      ...overrides,
+    }),
+  }
+  return harness
+}
+
+function leaseCreate(overrides: Partial<DevLeaseRecord> = {}): DevLeaseRecord {
+  return {
+    projectKey: { owner: "tim", name: "akademie" },
+    user: "tim",
+    port: 4400,
+    unit: "dev-tim-akademie.service",
+    hostname: "tim-akademie.wonder1.de",
+    state: "active",
+    ttlMs: 14_400_000,
+    lastSeenAt: 1_700_000_000_000,
+    createdAt: 1_700_000_000_000,
+    ...overrides,
+  }
+}
+
+describe("devLeaseUpUseCase", () => {
+  test("starts the unit with the systemd argv shape, persists the active lease, and regenerates", async () => {
+    const harness = harnessCreate()
+    const result = await devLeaseUpUseCase(harness.options())
+
+    expect(result.success).toBe(true)
+    if (!result.success) return
+    expect(result.data).toMatchObject({
+      hostname: "tim-akademie.wonder1.de",
+      port: 4400,
+      unit: "dev-tim-akademie.service",
+      state: "active",
+      user: "tim",
+    })
+    expect(harness.tracking.state.leases).toHaveLength(1)
+    expect(harness.tracking.state.leases[0]).toMatchObject({ state: "active" })
+    expect(harness.regenerations).toBe(1)
+    const spawn = harness.calls.find((call) => call.command === "systemd-run")
+    expect(spawn).toBeDefined()
+    expect(spawn!.args).toContain("--property=User=tim")
+    expect(spawn!.args).toContain("--property=Slice=user-1002.slice")
+    expect(spawn!.args).toContain("--working-directory=/projects/akademie")
+    expect(spawn!.args).toContain("--setenv=PORT=4400")
+    expect(spawn!.args).toContain("--setenv=HOST=127.0.0.1")
+    expect(spawn!.args).toContain("--setenv=DEV_URL=https://tim-akademie.wonder1.de")
+    expect(spawn!.args.slice(-3)).toEqual(["bun", "run", "dev"])
+  })
+
+  test("an idempotent up for the same lease touches lastSeenAt without spawning or regenerating", async () => {
+    const harness = harnessCreate({
+      now: 1_700_000_001_000,
+      leases: [leaseCreate({ lastSeenAt: 1_700_000_000_000 })],
+      runnerBehavior: (call) =>
+        call.command === "systemctl"
+          ? { exitCode: 0, stdout: "active\n", stderr: "" }
+          : { exitCode: 0, stdout: "", stderr: "" },
+    })
+    const result = await devLeaseUpUseCase(harness.options())
+
+    expect(result.success).toBe(true)
+    if (!result.success) return
+    expect(result.data.lastSeenAt).toBe(1_700_000_001_000)
+    expect(result.data.port).toBe(4400)
+    expect(harness.calls.some((call) => call.command === "systemd-run")).toBe(false)
+    expect(harness.regenerations).toBe(0)
+    expect(harness.tracking.state.leases).toHaveLength(1)
+  })
+
+  test("a spawn failure stops the unit, deletes the lease, and frees the port", async () => {
+    const harness = harnessCreate({
+      runnerBehavior: (call) =>
+        call.command === "systemd-run"
+          ? { exitCode: 1, stdout: "", stderr: "Failed" }
+          : { exitCode: 0, stdout: "", stderr: "" },
+    })
+    const result = await devLeaseUpUseCase(harness.options())
+
+    expect(result.success).toBe(false)
+    if (result.success) return
+    expect(result.code).toBe("caddy.unavailable")
+    expect(harness.tracking.state.leases).toEqual([])
+    expect(harness.calls).toContainEqual({
+      command: "systemctl",
+      args: ["stop", "dev-tim-akademie.service"],
+      input: "",
+    })
+    expect(harness.regenerations).toBe(0)
+  })
+
+  test("a health timeout stops the unit and deletes the lease", async () => {
+    const harness = harnessCreate({
+      now: 0,
+      fetchBehavior: async () => {
+        throw new Error("ECONNREFUSED")
+      },
+    })
+    const result = await devLeaseUpUseCase(
+      harness.options({
+        healthTimeoutMs: 2000,
+        healthIntervalMs: 500,
+        fetch: async () => {
+          throw new Error("ECONNREFUSED")
+        },
+      }),
+    )
+
+    expect(result.success).toBe(false)
+    if (result.success) return
+    expect(result.code).toBe("caddy.unavailable")
+    expect(result.errorMessage).toBe("dev server health check timed out")
+    expect(harness.tracking.state.leases).toEqual([])
+    expect(harness.calls).toContainEqual({
+      command: "systemctl",
+      args: ["stop", "dev-tim-akademie.service"],
+      input: "",
+    })
+    expect(harness.regenerations).toBe(0)
+  })
+
+  test("three concurrent leases for one user get distinct ports", async () => {
+    const harness = harnessCreate()
+    const ports: number[] = []
+    for (const name of ["akademie", "werkstatt", "intranet"]) {
+      const result = await devLeaseUpUseCase(harness.options({ name }))
+      expect(result.success).toBe(true)
+      if (!result.success) return
+      ports.push(result.data.port)
+    }
+
+    expect(new Set(ports).size).toBe(3)
+    expect(ports).toEqual([4400, 4401, 4402])
+  })
+
+  test("a missing project directory fails without spawning", async () => {
+    const harness = harnessCreate()
+    const failingFilesystem: DevProjectFilesystem = {
+      readFile: async () => {
+        throw new Error("ENOENT")
+      },
+      realpath: async () => {
+        throw new Error("ENOENT")
+      },
+      stat: async () => ({ isDirectory: () => true }),
+    }
+    const result = await devLeaseUpUseCase(harness.options({ commandFilesystem: failingFilesystem }))
+
+    expect(result.success).toBe(false)
+    if (result.success) return
+    expect(result.code).toBe("dev.not-found")
+    expect(harness.calls).toEqual([])
+    expect(harness.tracking.state.leases).toEqual([])
+  })
+
+  test("a missing dev script fails without spawning", async () => {
+    const harness = harnessCreate()
+    const filesystem: DevProjectFilesystem = {
+      readFile: async () => JSON.stringify({ name: "akademie" }),
+      realpath: async (path) => path,
+      stat: async () => ({ isDirectory: () => true }),
+    }
+    const result = await devLeaseUpUseCase(harness.options({ commandFilesystem: filesystem }))
+
+    expect(result.success).toBe(false)
+    if (result.success) return
+    expect(result.code).toBe("request.invalid")
+    expect(harness.calls).toEqual([])
+    expect(harness.tracking.state.leases).toEqual([])
+  })
+
+  test("a regenerate failure stops the unit and deletes the lease", async () => {
+    const harness = harnessCreate({ regenerateFailure: "Caddy admin is down" })
+    const result = await devLeaseUpUseCase(harness.options())
+
+    expect(result.success).toBe(false)
+    if (!result.success) expect(result.errorMessage).toBe("Caddy admin is down")
+    expect(harness.tracking.state.leases).toEqual([])
+    expect(harness.calls).toContainEqual({
+      command: "systemctl",
+      args: ["stop", "dev-tim-akademie.service"],
+      input: "",
+    })
+  })
+
+  test("a stale lease with a dead unit is replaced instead of touched", async () => {
+    const harness = harnessCreate({
+      now: 1_700_000_001_000,
+      leases: [leaseCreate({ lastSeenAt: 1_700_000_000_000 })],
+      runnerBehavior: (call) => {
+        if (call.command === "systemctl" && call.args[0] === "is-active") {
+          return { exitCode: 3, stdout: "inactive\n", stderr: "" }
+        }
+        return { exitCode: 0, stdout: "", stderr: "" }
+      },
+    })
+    const result = await devLeaseUpUseCase(harness.options())
+
+    expect(result.success).toBe(true)
+    if (!result.success) return
+    expect(result.data.state).toBe("active")
+    expect(harness.tracking.state.leases).toHaveLength(1)
+    expect(harness.regenerations).toBe(1)
+    expect(harness.calls.some((call) => call.command === "systemd-run")).toBe(true)
+  })
+})

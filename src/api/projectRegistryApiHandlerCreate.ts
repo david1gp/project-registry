@@ -1,5 +1,12 @@
 import { isAbsolute, resolve } from "node:path"
-import { createResult, createResultError, createResultErrorCode, type Result, type ResultErr } from "#result"
+import {
+  createResult,
+  createResultError,
+  createResultErrorCode,
+  type PromiseResult,
+  type Result,
+  type ResultErr,
+} from "#result"
 import type { Actor } from "../access/Actor.js"
 import type { ProjectAccess } from "../access/ProjectAccess.js"
 import type { ProjectAccessLogSource } from "../access-log/ProjectAccessLogSource.js"
@@ -28,8 +35,12 @@ import { projectOrganize } from "../project/projectOrganize.js"
 import { projectOwnerAuthorize } from "../project/projectOwnerAuthorize.js"
 import type { ProjectPortRange } from "../project/projectPortNext.js"
 import { type ProjectStaticAclRepairOptions, projectStaticAclRepair } from "../project/projectStaticAclRepair.js"
+import type { DevCommandOverride } from "../dev/DevCommandOverride.js"
 import type { DevLeaseTracking } from "../dev/DevLeaseTracking.js"
 import type { DevProcessRunner } from "../dev/DevProcessRunner.js"
+import type { DevProjectFilesystem } from "../dev/DevProjectFilesystem.js"
+import { devLeaseDownUseCase } from "../dev/devLeaseDownUseCase.js"
+import { devLeaseUpUseCase } from "../dev/devLeaseUpUseCase.js"
 import type { ProjectRepository } from "../project-store/ProjectRepository.js"
 import type { ProjectRepositoryMutation } from "../project-store/ProjectRepositoryMutation.js"
 import { projectRegistryVersion } from "../projectRegistryVersion.js"
@@ -49,7 +60,19 @@ type ApiHandlerOptions = {
   configOptions?: CaddyConfigOptions
   portRange?: ProjectPortRange
   defaultUserDomains?: Readonly<Record<string, string>>
-  dev?: { enabled: boolean; tracking?: DevLeaseTracking; processRunner?: DevProcessRunner }
+  dev?: {
+    enabled: boolean
+    tracking?: DevLeaseTracking
+    processRunner?: DevProcessRunner
+    projectsRoot?: string
+    userResolve?: (username: string) => PromiseResult<{ uid: number }>
+    commandFilesystem?: DevProjectFilesystem
+    command?: DevCommandOverride
+    pathValue?: string
+    fetch?: (input: string, init?: RequestInit) => Promise<Response>
+    clock?: () => number
+    wait?: (ms: number) => Promise<void>
+  }
   projectAccessLogSource?: ProjectAccessLogSource
   projectStaticAclRepair?: typeof projectStaticAclRepair
   routeCheckProbe?: typeof routeCheckProbe
@@ -111,6 +134,7 @@ const apiFailureStatus: Record<string, number> = {
   "caddy.not-found": 404,
   "caddy.unavailable": 503,
   "dev.disabled": 409,
+  "dev.not-found": 404,
   "documentation.disabled": 409,
   "documentation.invalid-configuration": 500,
   "documentation.invalid-options": 400,
@@ -1122,29 +1146,93 @@ export function projectRegistryApiHandlerCreate(options: ApiHandlerOptions): Pro
         if (body instanceof Response) return body
         const inputR = devUpInputParse(body)
         if (!inputR.success) return resultErrorResponse(inputR, false, "projects")
-        // D2 implements spawning (systemd-run + health wait + reaper); D1
-        // stops here so the lease table stays empty and generated
-        // Caddy/dnsmasq output stays byte-identical.
+        if (options.dev?.tracking === undefined) {
+          return errorResponse(
+            {
+              code: "platform.internal",
+              message: "Dev lease tracking is unavailable.",
+              op: "projectRegistryApiDevUp",
+              status: 500,
+            },
+            false,
+          )
+        }
+        if (options.dev.processRunner === undefined) {
+          return errorResponse(
+            {
+              code: "caddy.unavailable",
+              message: "Dev server spawning is not yet available.",
+              op: "projectRegistryApiDevUp",
+              status: 503,
+            },
+            false,
+          )
+        }
+        if (options.dev.userResolve === undefined) {
+          return errorResponse(
+            {
+              code: "platform.internal",
+              message: "Dev user resolution is unavailable.",
+              op: "projectRegistryApiDevUp",
+              status: 500,
+            },
+            false,
+          )
+        }
+        const snapshotR = await options.repository.read()
+        if (!snapshotR.success) return resultErrorResponse(snapshotR, false, "projects")
+        const upR = await devLeaseUpUseCase({
+          user: owner,
+          name: inputR.data.name,
+          ...(inputR.data.ttlMs === undefined ? {} : { ttlMs: inputR.data.ttlMs }),
+          projects: snapshotR.data.projects,
+          ...(useCaseOptions.portRange === undefined ? {} : { portRange: useCaseOptions.portRange }),
+          tracking: options.dev.tracking,
+          runner: options.dev.processRunner,
+          userResolve: options.dev.userResolve,
+          ...(options.dev.projectsRoot === undefined ? {} : { projectsRoot: options.dev.projectsRoot }),
+          ...(options.dev.commandFilesystem === undefined ? {} : { commandFilesystem: options.dev.commandFilesystem }),
+          ...(options.dev.command === undefined ? {} : { command: options.dev.command }),
+          ...(options.dev.pathValue === undefined ? {} : { pathValue: options.dev.pathValue }),
+          ...(options.dev.fetch === undefined ? {} : { fetch: options.dev.fetch }),
+          ...(options.dev.clock === undefined ? {} : { clock: options.dev.clock }),
+          ...(options.dev.wait === undefined ? {} : { wait: options.dev.wait }),
+          regenerate: () => options.caddyApplication.regenerate(),
+        })
+        if (!upR.success) return resultErrorResponse(upR, false, "projects")
+        return successResponse(upR.data)
+      }
+      if (options.dev?.tracking === undefined) {
+        return errorResponse(
+          {
+            code: "platform.internal",
+            message: "Dev lease tracking is unavailable.",
+            op: "projectRegistryApiDevDown",
+            status: 500,
+          },
+          false,
+        )
+      }
+      if (options.dev.processRunner === undefined) {
         return errorResponse(
           {
             code: "caddy.unavailable",
-            message: "Dev server spawning is not yet available.",
-            op: "projectRegistryApiDevUp",
+            message: "Dev server stopping is not yet available.",
+            op: "projectRegistryApiDevDown",
             status: 503,
           },
           false,
         )
       }
-      // route.kind === "dev-down": D2 implements stopping; see dev-up.
-      return errorResponse(
-        {
-          code: "caddy.unavailable",
-          message: "Dev server stopping is not yet available.",
-          op: "projectRegistryApiDevDown",
-          status: 503,
-        },
-        false,
-      )
+      const downR = await devLeaseDownUseCase({
+        user: owner,
+        name: route.name,
+        tracking: options.dev.tracking,
+        runner: options.dev.processRunner,
+        regenerate: () => options.caddyApplication.regenerate(),
+      })
+      if (!downR.success) return resultErrorResponse(downR, false, "projects")
+      return successResponse(downR.data)
     }
 
     if (route.kind === "default-domain") {

@@ -53,6 +53,7 @@ export type ProjectRegistryDaemonConfig = {
   }
   dev: {
     enabled: boolean
+    projectsRoot?: string
   }
   privateDns: {
     enabled: boolean

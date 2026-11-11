@@ -152,6 +152,7 @@ const cloudflareDnsSchema = a.strictObject({
 
 const devSchema = a.strictObject({
   enabled: a.optional(a.boolean(), false),
+  projectsRoot: a.optional(absolutePathSchema),
 })
 
 const ipv4Schema = a.pipe(

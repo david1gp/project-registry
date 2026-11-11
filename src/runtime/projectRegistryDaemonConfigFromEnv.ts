@@ -74,6 +74,7 @@ export function projectRegistryDaemonConfigFromEnv(
       "PROJECT_REGISTRY_CLOUDFLARE_CREDENTIALS_DIR",
       "PROJECT_REGISTRY_CLOUDFLARE_DNS_ENABLED",
       "PROJECT_REGISTRY_DEV_ENABLED",
+      "PROJECT_REGISTRY_DEV_PROJECTS_ROOT",
       "PROJECT_REGISTRY_PRIVATE_DNS_ENABLED",
       "PROJECT_REGISTRY_PRIVATE_DNS_TAILNET",
       "PROJECT_REGISTRY_PRIVATE_DNS_NODE_ADDRESS",
@@ -282,6 +283,9 @@ export function projectRegistryDaemonConfigFromEnv(
         // Deliberately inverted from this file's default-on idiom
         // (cloudflareDns above): dev verbs stay dark until the cutover.
         enabled: devEnabled === true,
+        ...(values.PROJECT_REGISTRY_DEV_PROJECTS_ROOT?.trim()
+          ? { projectsRoot: values.PROJECT_REGISTRY_DEV_PROJECTS_ROOT.trim() }
+          : {}),
       },
       cloudflareDns: {
         enabled: cloudflareDnsEnabled !== false,

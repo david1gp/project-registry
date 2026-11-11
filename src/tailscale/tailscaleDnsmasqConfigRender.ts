@@ -8,6 +8,10 @@ export type TailscaleDnsmasqConfigRenderInput = {
   upstreamResolvers: readonly string[]
   listenLoopback?: boolean
   publicPassthroughs?: readonly string[]
+  wildcardAnswer?: {
+    domain: string
+    address: string
+  }
 }
 
 /**
@@ -15,7 +19,9 @@ export type TailscaleDnsmasqConfigRenderInput = {
  * approved private hostnames only, AAAA returns NODATA (host-record + local),
  * everything else forwards upstream. Only exact-host `host-record=` and
  * `local=/host/` lines are ever emitted; whole-zone overrides are impossible
- * by construction (wildcards and malformed names are rejected).
+ * by construction (wildcards and malformed names are rejected), unless the
+ * off-by-default dead `wildcardAnswer` mode below is explicitly requested
+ * (still unvalidated hostnames are rejected).
  *
  * NOTE (DNS-01): private-Caddy `tls { dns ... }` challenge blocks must use
  * explicit public resolvers, never this listener: ACME propagation self-checks
@@ -46,6 +52,25 @@ export function tailscaleDnsmasqConfigRender(input: unknown): Result<string> {
   }
   if (candidate.publicPassthroughs !== undefined && !Array.isArray(candidate.publicPassthroughs)) {
     return createResultError(op, "dnsmasq public passthroughs are invalid")
+  }
+  // DEAD wildcard-answer mode (Track D): parses and renders but is never
+  // enabled by any production wiring in this increment. The canonical-DNS
+  // rollout (Tasks 5b/6) owns the single-writer converge/drift verifiers, so
+  // those verifiers are deliberately not amended here.
+  let wildcardLine: string | undefined
+  if (candidate.wildcardAnswer !== undefined) {
+    const wildcard = candidate.wildcardAnswer as Partial<{ domain: unknown; address: unknown }>
+    if (typeof wildcard !== "object" || wildcard === null) {
+      return createResultError(op, "dnsmasq wildcard answer is invalid")
+    }
+    const domain = tailscaleHostnameNormalize(wildcard.domain)
+    if (domain === undefined) {
+      return createResultError(op, "dnsmasq wildcard domain is not an exact FQDN")
+    }
+    if (typeof wildcard.address !== "string" || isIP(wildcard.address) !== 4) {
+      return createResultError(op, "dnsmasq wildcard address must be an IPv4 address")
+    }
+    wildcardLine = `address=/${domain}/${wildcard.address}`
   }
   const hostnames: string[] = []
   const seen = new Set<string>()
@@ -92,6 +117,7 @@ export function tailscaleDnsmasqConfigRender(input: unknown): Result<string> {
       (candidate.upstreamResolvers as readonly string[]).map((resolver) => `server=/${passthrough}/${resolver}`),
     ),
     ...hostnames.flatMap((hostname) => [`host-record=${hostname},${candidate.nodeAddress}`, `local=/${hostname}/`]),
+    ...(wildcardLine === undefined ? [] : [wildcardLine]),
   ]
   return createResult(`${lines.join("\n")}\n`)
 }

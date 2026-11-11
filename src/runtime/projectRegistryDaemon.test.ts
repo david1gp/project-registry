@@ -4,6 +4,9 @@ import { chmod as fsChmod, chown as fsChown, lstat as fsLstat, mkdtemp, rm, syml
 import { join } from "node:path"
 import { createResult, createResultError, createResultErrorCode } from "#result"
 import { caddyConfigGenerateFixtures } from "../../test/fixtures/caddyConfigGenerateFixtures.js"
+import { devLeaseTrackingCreate } from "../dev/devLeaseTrackingCreate.js"
+import { devLeaseTrackingPath } from "../dev/devLeaseTrackingPath.js"
+import type { DevLeaseRecord } from "../dev/devLeaseRecordSchema.js"
 import type { ProjectAccess } from "../access/ProjectAccess.js"
 import type { Role } from "../access/Role.js"
 import type { ProjectAccessLogSource } from "../access-log/ProjectAccessLogSource.js"
@@ -2237,6 +2240,174 @@ describe("projectRegistryDaemon socket directory", () => {
       expect((await daemonR.data.start()).success).toBe(false)
     } finally {
       await rm(directory, { recursive: true, force: true })
+    }
+  })
+})
+
+describe("projectRegistryDaemonCreate dev lifecycle", () => {
+  type RunnerCall = { command: string; args: readonly string[] }
+
+  function leaseCreate(overrides: {
+    name: string
+    state?: "starting" | "active" | "stopping"
+    lastSeenAt?: number
+    ttlMs?: number
+  }): DevLeaseRecord {
+    return {
+      projectKey: { owner: "tim", name: overrides.name },
+      user: "tim",
+      port: 4400,
+      unit: `dev-tim-${overrides.name}.service`,
+      hostname: `tim-${overrides.name}.wonder1.de`,
+      state: overrides.state ?? "active",
+      ttlMs: overrides.ttlMs ?? 14_400_000,
+      lastSeenAt: overrides.lastSeenAt ?? 1_700_000_000_000,
+      createdAt: 1_700_000_000_000,
+    }
+  }
+
+  function trackingFilesystemCreate(files: Map<string, string>) {
+    return {
+      async readFile(path: string) {
+        const value = files.get(path)
+        if (value === undefined) throw Object.assign(new Error("missing"), { code: "ENOENT" })
+        return value
+      },
+      async mkdir() {},
+      async writeFile(path: string, value: string) {
+        files.set(path, value)
+      },
+      async rename(source: string, destination: string) {
+        const value = files.get(source)
+        if (value === undefined) throw new Error("missing rename source")
+        files.set(destination, value)
+        files.delete(source)
+      },
+      async unlink(path: string) {
+        files.delete(path)
+      },
+    }
+  }
+
+  async function conditionWait(condition: () => boolean): Promise<void> {
+    for (let attempt = 0; attempt < 200 && !condition(); attempt += 1) {
+      await new Promise<void>((resolve) => globalThis.setTimeout(resolve, 0))
+    }
+  }
+
+  test("drops dead-unit leases at startup and reaps idle leases on the unref'd interval", async () => {
+    const daemonConfig = config({ dev: { enabled: true, projectsRoot: "/projects" } })
+    const files = new Map<string, string>()
+    const writerR = devLeaseTrackingCreate({
+      path: devLeaseTrackingPath(daemonConfig.serverIpCachePath),
+      filesystem: trackingFilesystemCreate(files),
+    })
+    expect(writerR.success).toBe(true)
+    if (!writerR.success) return
+    const deadLease = leaseCreate({ name: "alt", lastSeenAt: 1_700_000_000_000 })
+    await expect(writerR.data.write({ version: 1 as const, leases: [deadLease] })).resolves.toMatchObject({
+      success: true,
+    })
+
+    const calls: RunnerCall[] = []
+    const aliveUnits = new Set<string>()
+    const intervals: Array<{ callback: () => void; delayMs: number }> = []
+    let regenerations = 0
+    const application: CaddyApplication = {
+      start: async () => createResult({ revision: "r", changed: true, applied: true, attempts: 1 }),
+      startup: async () => createResult({ revision: "r", changed: true, applied: true, attempts: 1 }),
+      regenerate: async () => {
+        regenerations += 1
+        return createResult({ revision: "r", changed: true, applied: true, attempts: 1 })
+      },
+      projectChange: async () => createResult({ revision: "r", changed: false, applied: true, attempts: 1 }),
+      status: () => ({ pending: false }),
+      stop: async () => undefined,
+    }
+    const fakeFilesystem = filesystemCreate()
+    const fakeServers = serverFactoryCreate(fakeFilesystem.entries)
+    const daemonR = projectRegistryDaemonCreate({
+      config: daemonConfig,
+      repository: repository(),
+      caddyApplication: application,
+      filesystem: fakeFilesystem.filesystem,
+      serverFactory: fakeServers.factory,
+      serverIpFetch: async () => new Response("203.0.113.10\n"),
+      devTrackingFilesystem: trackingFilesystemCreate(files),
+      devProcessRunner: async (command, args) => {
+        calls.push({ command, args })
+        if (command === "systemctl" && args[0] === "is-active") {
+          const unit = args[1] ?? ""
+          return createResult({ exitCode: aliveUnits.has(unit) ? 0 : 3, stdout: "", stderr: "" })
+        }
+        return createResult({ exitCode: 0, stdout: "", stderr: "" })
+      },
+      timer: {
+        wait: async () => undefined,
+        setInterval: (callback: () => void, delayMs: number) => {
+          intervals.push({ callback, delayMs })
+          return intervals.length
+        },
+        clearInterval: () => undefined,
+      },
+      requireRoot: false,
+    })
+    expect(daemonR.success).toBe(true)
+    if (!daemonR.success) return
+    try {
+      expect((await daemonR.data.start()).success).toBe(true)
+      // The startup reconcile drops the dead-unit lease before Caddy loads.
+      const droppedR = await writerR.data.read()
+      expect(droppedR.success && droppedR.data.leases).toEqual([])
+      expect(calls).toContainEqual({ command: "systemctl", args: ["stop", "dev-tim-alt.service"] })
+
+      const reap = intervals.find((entry) => entry.delayMs === 60_000)
+      expect(reap).toBeDefined()
+      // An alive but long-idle lease expires on the next tick and regenerates.
+      aliveUnits.add("dev-tim-neu.service")
+      const idle = { ...leaseCreate({ name: "neu" }), unit: "dev-tim-neu.service", lastSeenAt: 0, ttlMs: 1_000 }
+      await expect(writerR.data.write({ version: 1 as const, leases: [idle] })).resolves.toMatchObject({
+        success: true,
+      })
+      reap!.callback()
+      await conditionWait(() => regenerations > 0)
+      const reapedR = await writerR.data.read()
+      expect(reapedR.success && reapedR.data.leases).toEqual([])
+      expect(calls).toContainEqual({ command: "systemctl", args: ["stop", "dev-tim-neu.service"] })
+      expect(regenerations).toBe(1)
+    } finally {
+      await daemonR.data.shutdown()
+    }
+  })
+
+  test("registers no reap interval while the dev flag is dark", async () => {
+    const fakeFilesystem = filesystemCreate()
+    const fakeServers = serverFactoryCreate(fakeFilesystem.entries)
+    const intervals: Array<{ delayMs: number }> = []
+    const daemonR = projectRegistryDaemonCreate({
+      config: config(),
+      repository: repository(),
+      caddyApplication: caddyApplication(),
+      filesystem: fakeFilesystem.filesystem,
+      serverFactory: fakeServers.factory,
+      serverIpFetch: async () => new Response("203.0.113.10\n"),
+      timer: {
+        wait: async () => undefined,
+        setInterval: (_callback: () => void, delayMs: number) => {
+          intervals.push({ delayMs })
+          return intervals.length
+        },
+        clearInterval: () => undefined,
+      },
+      requireRoot: false,
+    })
+    expect(daemonR.success).toBe(true)
+    if (!daemonR.success) return
+    try {
+      expect((await daemonR.data.start()).success).toBe(true)
+      expect(intervals.some((entry) => entry.delayMs === 60_000)).toBe(false)
+    } finally {
+      await daemonR.data.shutdown()
     }
   })
 })

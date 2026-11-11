@@ -33,4 +33,21 @@ describe("projectRegistryDaemonConfigFromEnv dev flag", () => {
     if (result.success) return
     expect(result.errorMessage).toBe("daemon environment contains an invalid number or boolean")
   })
+
+  test("reads the dev projects root and rejects a relative one", () => {
+    const rooted = projectRegistryDaemonConfigFromEnv({
+      PROJECT_REGISTRY_REPOSITORY_PATH: "/tmp/repo",
+      PROJECT_REGISTRY_DEV_ENABLED: "1",
+      PROJECT_REGISTRY_DEV_PROJECTS_ROOT: "/projects",
+    })
+    expect(rooted.success).toBe(true)
+    if (!rooted.success) return
+    expect(rooted.data.dev).toEqual({ enabled: true, projectsRoot: "/projects" })
+
+    const relative = projectRegistryDaemonConfigFromEnv({
+      PROJECT_REGISTRY_REPOSITORY_PATH: "/tmp/repo",
+      PROJECT_REGISTRY_DEV_PROJECTS_ROOT: "projects",
+    })
+    expect(relative.success).toBe(false)
+  })
 })

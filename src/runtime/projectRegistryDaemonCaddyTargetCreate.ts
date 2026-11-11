@@ -3,7 +3,9 @@ import type { CaddyApplicationTarget } from "../caddy/CaddyApplicationTarget.js"
 import type { CaddyConfig } from "../caddy/CaddyConfig.js"
 import { caddyConfigBaseMerge } from "../caddy/caddyConfigBaseMerge.js"
 import { caddyConfigBaseRead } from "../caddy/caddyConfigBaseRead.js"
+import { caddyConfigDevLeaseReconcileCreate } from "../caddy/caddyConfigDevLeaseReconcileCreate.js"
 import { caddyConfigPrivateTlsReconcileCreate } from "../caddy/caddyConfigPrivateTlsReconcile.js"
+import type { DevLeaseRecord } from "../dev/devLeaseRecordSchema.js"
 import type { CaddyInstanceTarget } from "../caddy/caddyInstanceTargetsResolve.js"
 import { localDomainsCaddyConfigReconcileCreate } from "../local-domains/localDomainsCaddyConfigReconcileCreate.js"
 import type { ProjectPrivateTlsGateSnapshot } from "../project/projectPrivateTlsGate.js"
@@ -18,6 +20,10 @@ export async function projectRegistryDaemonCaddyTargetCreate(
       enabled: boolean
       snapshotCurrent: () => ProjectPrivateTlsGateSnapshot
       privateListenerAddresses?: readonly unknown[]
+    }
+    devLeases?: {
+      enabled: boolean
+      leasesCurrent: () => PromiseResult<readonly DevLeaseRecord[]>
     }
   },
 ): PromiseResult<CaddyApplicationTarget> {
@@ -38,6 +44,15 @@ export async function projectRegistryDaemonCaddyTargetCreate(
         })
   if (!privateTlsR.success) return privateTlsR
   const privateTlsReconcile = privateTlsR.data
+  const devLeaseR =
+    options?.devLeases === undefined
+      ? createResult(undefined)
+      : caddyConfigDevLeaseReconcileCreate({
+          enabled: options.devLeases.enabled,
+          leasesCurrent: options.devLeases.leasesCurrent,
+        })
+  if (!devLeaseR.success) return devLeaseR
+  const devLeaseReconcile = devLeaseR.data
 
   return createResult({
     adminUrl: target.adminUrl,
@@ -47,7 +62,10 @@ export async function projectRegistryDaemonCaddyTargetCreate(
       oidc: config.oidc,
       ...(target.accessLogRoot === undefined ? {} : { caddyAccessLogRoot: target.accessLogRoot }),
     },
-    ...(baseR.data === undefined && localReconcile === undefined && privateTlsReconcile === undefined
+    ...(baseR.data === undefined &&
+    localReconcile === undefined &&
+    privateTlsReconcile === undefined &&
+    devLeaseReconcile === undefined
       ? {}
       : {
           configReconcile: async (generated, projects) => {
@@ -60,7 +78,14 @@ export async function projectRegistryDaemonCaddyTargetCreate(
               if (!tlsR.success) return tlsR
               merged = tlsR.data
             }
-            return localReconcile === undefined ? createResult(merged) : localReconcile(merged, projects)
+            const reconciled =
+              localReconcile === undefined ? createResult(merged) : await localReconcile(merged, projects)
+            if (!reconciled.success) return reconciled
+            // Dev-lease routes run last: private-TLS withholding and local
+            // reconciliation never see synthetic lease routes, and the
+            // application-level post-merge hostname guard still scans them.
+            if (devLeaseReconcile === undefined) return reconciled
+            return devLeaseReconcile(reconciled.data, projects)
           },
         }),
   })
