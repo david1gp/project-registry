@@ -23,7 +23,7 @@ against the `~/ds` scope manifest.
 | `PROJECT_REGISTRY_PRIVATE_DNS_NODE_ADDRESS`    | `privateDns.nodeAddress`          | (required when enabled, IPv4)                |
 | `PROJECT_REGISTRY_PRIVATE_DNS_API_BASE`        | `privateDns.apiBaseUrl`           | `https://api.tailscale.com/api/v2`           |
 | `PROJECT_REGISTRY_PRIVATE_DNS_DNSMASQ_CONFIG`  | `privateDns.dnsmasqConfigPath`    | `/etc/project-registry/private-dnsmasq.conf` |
-| `PROJECT_REGISTRY_PRIVATE_DNS_RESOLVER_UNIT`   | `privateDns.resolverUnit`         | `leo-tailscale-private-dns`                  |
+| `PROJECT_REGISTRY_PRIVATE_DNS_RESOLVER_UNIT`   | `privateDns.resolverUnit`         | `wonder1-tailscale-private-dns`              |
 | `PROJECT_REGISTRY_PRIVATE_DNS_UPSTREAMS`       | `privateDns.upstreamResolvers`    | `1.1.1.1,8.8.8.8` (comma-separated)          |
 | `PROJECT_REGISTRY_PRIVATE_DNS_CREDENTIALS_DIR` | `privateDns.credentialsDirectory` | `/etc/project-registry/tailscale`            |
 

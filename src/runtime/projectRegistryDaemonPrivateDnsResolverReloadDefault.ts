@@ -8,7 +8,7 @@ import { createResult, createResultError, type PromiseResult } from "#result"
  * enabled. Failure output is truncated and never contains credentials.
  */
 export function projectRegistryDaemonPrivateDnsResolverReloadDefault(
-  unit = "leo-tailscale-private-dns",
+  unit = "wonder1-tailscale-private-dns",
 ): () => PromiseResult<void> {
   return async () => {
     const op = "projectRegistryDaemonPrivateDnsResolverReload"

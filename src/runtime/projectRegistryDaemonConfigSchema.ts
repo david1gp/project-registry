@@ -206,7 +206,7 @@ const privateDnsSchema = a.strictObject({
   nodeAddress: a.optional(ipv4Schema),
   apiBaseUrl: a.optional(tailscaleApiBaseUrlSchema, "https://api.tailscale.com/api/v2"),
   dnsmasqConfigPath: a.optional(absolutePathSchema, "/etc/project-registry/private-dnsmasq.conf"),
-  resolverUnit: a.optional(systemdUnitSchema, "leo-tailscale-private-dns"),
+  resolverUnit: a.optional(systemdUnitSchema, "wonder1-tailscale-private-dns"),
   upstreamResolvers: a.optional(a.pipe(a.array(ipv4Schema), a.minLength(1)), ["1.1.1.1", "8.8.8.8"]),
   credentialsDirectory: a.optional(absolutePathSchema, "/etc/project-registry/tailscale"),
 })
