@@ -4,6 +4,7 @@ import type { CaddyApplication } from "../caddy/CaddyApplication.js"
 import type { CaddyFetch } from "../caddy/CaddyFetch.js"
 import type { CaddyProcessRunner } from "../caddy/CaddyProcessRunner.js"
 import type { CaddyTimer } from "../caddy/CaddyTimer.js"
+import type { DevLeaseActivitySource } from "../dev/DevLeaseActivitySource.js"
 import type { DevLeaseTracking } from "../dev/DevLeaseTracking.js"
 import type { DevLeaseTrackingFilesystem } from "../dev/DevLeaseTrackingFilesystem.js"
 import type { DevProcessRunner } from "../dev/DevProcessRunner.js"
@@ -49,6 +50,7 @@ export type ProjectRegistryDaemonOptions = {
   timer?: CaddyTimer
   caddyProcessRunner?: CaddyProcessRunner
   devTracking?: DevLeaseTracking
+  devActivity?: DevLeaseActivitySource
   devTrackingFilesystem?: DevLeaseTrackingFilesystem
   devProcessRunner?: DevProcessRunner
   devCommandFilesystem?: DevProjectFilesystem

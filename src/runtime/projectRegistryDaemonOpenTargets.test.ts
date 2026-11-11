@@ -293,6 +293,102 @@ test("private target serves the active dev lease while the public target stays c
     expect(caddyConfigHostnames(privateLoad!.config)).toContain("tim-akademie.wonder1.de")
     expect(caddyConfigHostnames(publicLoad!.config)).not.toContain("tim-akademie.wonder1.de")
     expect(JSON.stringify(privateLoad!.config)).toContain("127.0.0.1:4400")
+    // Without an access-log root the private config stays logger-free even
+    // with active leases: the dark path emits routes only.
+    expect(JSON.stringify(privateLoad!.config)).not.toContain("dev-leases")
+    await daemonR.data.caddyApplication.stop()
+  } finally {
+    await rm(root, { recursive: true, force: true })
+  }
+})
+
+test("private target logs active dev leases to a shared logger when a root is configured", async () => {
+  const files = new Map<string, string>()
+  const lease: DevLeaseRecord = {
+    projectKey: { owner: "tim", name: "akademie" },
+    user: "tim",
+    port: 4400,
+    unit: "dev-tim-akademie.service",
+    hostname: "tim-akademie.wonder1.de",
+    state: "active",
+    ttlMs: 14_400_000,
+    lastSeenAt: Date.now(),
+    createdAt: Date.now(),
+  }
+  const accessLogRoot = "/var/lib/project-registry/caddy-access-logs"
+  const root = await mkdtemp(join(tmpdir(), "registry-targets-dev-log-"))
+  const privatePath = join(root, "private.json")
+  try {
+    await writeFile(
+      privatePath,
+      JSON.stringify({
+        admin: { listen: "127.0.0.1:2020" },
+        apps: { http: { servers: { srv0: { listen: ["100.122.200.114:443"], routes: [] } } } },
+      }),
+    )
+    const harness = dependencies([project("private")])
+    const daemonR = await projectRegistryDaemonOpen({
+      ...harness.options,
+      // The unit is alive and the lease is fresh, so the startup reconcile
+      // keeps it on any machine, with or without systemd.
+      devProcessRunner: async () => createResult({ exitCode: 0, stdout: "active\n", stderr: "" }),
+      devTrackingFilesystem: {
+        async readFile(path: string) {
+          if (path.endsWith(".dev-leases.json")) return JSON.stringify({ version: 1, leases: [lease] })
+          const value = files.get(path)
+          if (value === undefined) throw Object.assign(new Error("missing"), { code: "ENOENT" })
+          return value
+        },
+        async mkdir() {},
+        async writeFile(path: string, value: string) {
+          files.set(path, value)
+        },
+        async rename(source: string, destination: string) {
+          const value = files.get(source)
+          if (value === undefined) throw new Error("missing rename source")
+          files.set(destination, value)
+          files.delete(source)
+        },
+        async unlink(path: string) {
+          files.delete(path)
+        },
+      },
+      config: {
+        repositoryPath: "/tmp/opencode/registry-targets",
+        caddyBinary: "/validation/plugin-superset-wrapper",
+        caddyAccessLogRoot: accessLogRoot,
+        dev: { enabled: true },
+        caddyInstances: {
+          public: { adminUrl: "http://127.0.0.1:2019", httpsListeners: ["203.0.113.10:443"] },
+          private: {
+            adminUrl: "http://127.0.0.1:2020",
+            httpsListeners: ["100.122.200.114:443"],
+            baseConfigPath: privatePath,
+          },
+        },
+      },
+    })
+    expect(daemonR.success).toBe(true)
+    if (!daemonR.success) return
+    expect((await daemonR.data.caddyApplication.startup()).success).toBe(true)
+    const privateLoad = harness.loaded.find((entry) => entry.url === "http://127.0.0.1:2020/load")
+    const publicLoad = harness.loaded.find((entry) => entry.url === "http://127.0.0.1:2019/load")
+    expect(privateLoad).toBeDefined()
+    expect(publicLoad).toBeDefined()
+    const logs = privateLoad!.config.logging?.logs as Record<string, Record<string, unknown>>
+    expect(logs["dev-leases"]).toMatchObject({
+      include: ["http.log.access.dev-leases"],
+      writer: {
+        output: "file",
+        filename: `${accessLogRoot}/dev-leases/access.jsonl`,
+        mode: "0600",
+        dir_mode: "0700",
+      },
+    })
+    expect(privateLoad!.config.apps.http.servers.srv0.logs?.logger_names).toMatchObject({
+      "tim-akademie.wonder1.de": ["dev-leases"],
+    })
+    expect(JSON.stringify(publicLoad!.config)).not.toContain("dev-leases")
     await daemonR.data.caddyApplication.stop()
   } finally {
     await rm(root, { recursive: true, force: true })

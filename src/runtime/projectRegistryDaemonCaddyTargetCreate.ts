@@ -24,6 +24,7 @@ export async function projectRegistryDaemonCaddyTargetCreate(
     devLeases?: {
       enabled: boolean
       leasesCurrent: () => PromiseResult<readonly DevLeaseRecord[]>
+      accessLogRoot?: string
     }
   },
 ): PromiseResult<CaddyApplicationTarget> {
@@ -50,6 +51,7 @@ export async function projectRegistryDaemonCaddyTargetCreate(
       : caddyConfigDevLeaseReconcileCreate({
           enabled: options.devLeases.enabled,
           leasesCurrent: options.devLeases.leasesCurrent,
+          ...(options.devLeases.accessLogRoot === undefined ? {} : { accessLogRoot: options.devLeases.accessLogRoot }),
         })
   if (!devLeaseR.success) return devLeaseR
   const devLeaseReconcile = devLeaseR.data

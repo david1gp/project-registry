@@ -70,7 +70,7 @@ describe("devLeaseReconcile", () => {
       },
     })
 
-    expect(result).toEqual({ success: true, data: { changed: true, removed: 1, activated: 0 } })
+    expect(result).toEqual({ success: true, data: { changed: true, removed: 1, activated: 0, touched: 0 } })
     expect(tracking.state.leases.map((lease) => lease.projectKey.name)).toEqual(["neu"])
     expect(calls).toContainEqual({ command: "systemctl", args: ["stop", "dev-tim-alt.service"] })
     expect(calls).not.toContainEqual({ command: "systemctl", args: ["stop", "dev-tim-neu.service"] })
@@ -85,7 +85,7 @@ describe("devLeaseReconcile", () => {
       clock: () => 5_000,
       regenerate: async () => createResult({ revision: "r", changed: false, applied: true, attempts: 0 }),
     })
-    expect(atResult).toEqual({ success: true, data: { changed: false, removed: 0, activated: 0 } })
+    expect(atResult).toEqual({ success: true, data: { changed: false, removed: 0, activated: 0, touched: 0 } })
     expect(at.state.leases).toHaveLength(1)
 
     const past = trackingCreate([leaseCreate({ name: "rand", lastSeenAt: 3_999, ttlMs: 1_000 })])
@@ -95,7 +95,7 @@ describe("devLeaseReconcile", () => {
       clock: () => 5_000,
       regenerate: async () => createResult({ revision: "r", changed: true, applied: true, attempts: 1 }),
     })
-    expect(pastResult).toEqual({ success: true, data: { changed: true, removed: 1, activated: 0 } })
+    expect(pastResult).toEqual({ success: true, data: { changed: true, removed: 1, activated: 0, touched: 0 } })
     expect(past.state.leases).toEqual([])
   })
 
@@ -113,7 +113,7 @@ describe("devLeaseReconcile", () => {
       },
     })
 
-    expect(result).toEqual({ success: true, data: { changed: true, removed: 1, activated: 0 } })
+    expect(result).toEqual({ success: true, data: { changed: true, removed: 1, activated: 0, touched: 0 } })
     expect(tracking.state.leases).toEqual([])
     expect(calls).toContainEqual({ command: "systemctl", args: ["stop", "dev-tim-akademie.service"] })
     expect(regenerations).toBe(1)
@@ -128,7 +128,7 @@ describe("devLeaseReconcile", () => {
       regenerate: async () => createResult({ revision: "r", changed: true, applied: true, attempts: 1 }),
     })
 
-    expect(result).toEqual({ success: true, data: { changed: true, removed: 0, activated: 1 } })
+    expect(result).toEqual({ success: true, data: { changed: true, removed: 0, activated: 1, touched: 0 } })
     expect(tracking.state.leases[0]).toMatchObject({ state: "active", lastSeenAt: 6_000 })
   })
 
@@ -142,7 +142,7 @@ describe("devLeaseReconcile", () => {
       regenerate: async () => createResult({ revision: "r", changed: true, applied: true, attempts: 1 }),
     })
 
-    expect(result).toEqual({ success: true, data: { changed: true, removed: 1, activated: 0 } })
+    expect(result).toEqual({ success: true, data: { changed: true, removed: 1, activated: 0, touched: 0 } })
     expect(tracking.state.leases).toEqual([])
     expect(calls).toContainEqual({ command: "systemctl", args: ["stop", "dev-tim-akademie.service"] })
   })
@@ -162,7 +162,7 @@ describe("devLeaseReconcile", () => {
       },
     })
 
-    expect(result).toEqual({ success: true, data: { changed: false, removed: 0, activated: 0 } })
+    expect(result).toEqual({ success: true, data: { changed: false, removed: 0, activated: 0, touched: 0 } })
     expect(tracking.state).toBe(before)
     expect(regenerations).toBe(0)
     expect(calls.some((call) => call.args[0] === "stop")).toBe(false)
@@ -179,5 +179,79 @@ describe("devLeaseReconcile", () => {
 
     expect(result.success).toBe(false)
     expect(tracking.state.leases).toHaveLength(1)
+  })
+
+  test("observed HTTP activity keeps an otherwise idle lease without regenerating Caddy", async () => {
+    const tracking = trackingCreate([leaseCreate({ name: "akademie", lastSeenAt: 0, ttlMs: 1_000 })])
+    let regenerations = 0
+    const result = await devLeaseReconcile({
+      tracking,
+      runner: runnerCreate([], ["dev-tim-akademie.service"]),
+      clock: () => 5_000,
+      regenerate: async () => {
+        regenerations += 1
+        return createResult({ revision: "r", changed: true, applied: true, attempts: 1 })
+      },
+      activity: { hostsCurrent: async () => [{ host: "tim-akademie.wonder1.de", seenAt: 5_000 }] },
+    })
+
+    expect(result).toEqual({ success: true, data: { changed: true, removed: 0, activated: 0, touched: 1 } })
+    expect(tracking.state.leases).toHaveLength(1)
+    expect(tracking.state.leases[0]?.lastSeenAt).toBe(5_000)
+    expect(regenerations).toBe(0)
+  })
+
+  test("activity for an unknown hostname writes and regenerates nothing", async () => {
+    const tracking = trackingCreate([leaseCreate({ name: "akademie", lastSeenAt: 5_000 })])
+    let regenerations = 0
+    const before = tracking.state
+    const result = await devLeaseReconcile({
+      tracking,
+      runner: runnerCreate([], ["dev-tim-akademie.service"]),
+      clock: () => 5_000,
+      regenerate: async () => {
+        regenerations += 1
+        return createResult({ revision: "r", changed: false, applied: true, attempts: 0 })
+      },
+      activity: { hostsCurrent: async () => [{ host: "tim-werkstatt.wonder1.de", seenAt: 5_000 }] },
+    })
+
+    expect(result).toEqual({ success: true, data: { changed: false, removed: 0, activated: 0, touched: 0 } })
+    expect(tracking.state).toBe(before)
+    expect(regenerations).toBe(0)
+  })
+
+  test("a failing activity source degrades to TTL expiry instead of pinning the lease", async () => {
+    const calls: RunnerCall[] = []
+    const tracking = trackingCreate([leaseCreate({ name: "akademie", lastSeenAt: 0, ttlMs: 1_000 })])
+    const result = await devLeaseReconcile({
+      tracking,
+      runner: runnerCreate(calls, ["dev-tim-akademie.service"]),
+      clock: () => 5_000,
+      regenerate: async () => createResult({ revision: "r", changed: true, applied: true, attempts: 1 }),
+      activity: {
+        hostsCurrent: async () => {
+          throw new Error("log unreadable")
+        },
+      },
+    })
+
+    expect(result).toEqual({ success: true, data: { changed: true, removed: 1, activated: 0, touched: 0 } })
+    expect(tracking.state.leases).toEqual([])
+    expect(calls).toContainEqual({ command: "systemctl", args: ["stop", "dev-tim-akademie.service"] })
+  })
+
+  test("traffic does not count as a touch for a starting lease", async () => {
+    const tracking = trackingCreate([leaseCreate({ name: "akademie", state: "starting", lastSeenAt: 5_000 })])
+    const result = await devLeaseReconcile({
+      tracking,
+      runner: runnerCreate([], ["dev-tim-akademie.service"]),
+      clock: () => 6_000,
+      regenerate: async () => createResult({ revision: "r", changed: true, applied: true, attempts: 1 }),
+      activity: { hostsCurrent: async () => [{ host: "tim-akademie.wonder1.de", seenAt: 6_000 }] },
+    })
+
+    expect(result).toEqual({ success: true, data: { changed: true, removed: 0, activated: 1, touched: 0 } })
+    expect(tracking.state.leases[0]).toMatchObject({ state: "active", lastSeenAt: 6_000 })
   })
 })

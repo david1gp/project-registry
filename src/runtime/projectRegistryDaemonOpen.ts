@@ -11,6 +11,10 @@ import { posixUserDirectoryCreate } from "../identity/posixUserDirectoryCreate.j
 import { localDomainsCaddyConfigReconcileCreate } from "../local-domains/localDomainsCaddyConfigReconcileCreate.js"
 import { projectPrivateTlsGateStateCreate } from "../project/projectPrivateTlsGate.js"
 import { projectRepositoryOpen } from "../project-store/projectRepositoryOpen.js"
+import type { DevLeaseActivitySource } from "../dev/DevLeaseActivitySource.js"
+import { devLeaseAccessLogPath } from "../dev/devLeaseAccessLogPath.js"
+import { devLeaseActivityFilesystemDefault } from "../dev/devLeaseActivityFilesystemDefault.js"
+import { devLeaseActivitySourceFileCreate } from "../dev/devLeaseActivitySourceFileCreate.js"
 import { devLeaseTrackingCreate } from "../dev/devLeaseTrackingCreate.js"
 import { devLeaseTrackingFilesystemDefault } from "../dev/devLeaseTrackingFilesystemDefault.js"
 import { devLeaseTrackingPath } from "../dev/devLeaseTrackingPath.js"
@@ -129,6 +133,32 @@ export async function projectRegistryDaemonOpen(
     return readR.success ? createResult(readR.data.leases) : readR
   }
   const instances = caddyInstanceTargetsResolve(config)
+  // The dev-lease access log shares the configured access-log root as a
+  // `dev-leases/` sibling of `projects/`: the private target never inherits
+  // the flat root (so both instances cannot share project logs), but only
+  // the private target writes the dev log, so no file is ever shared. An
+  // explicitly configured private root wins over the flat root. Without any
+  // root — or without a private target, the only place lease routes exist —
+  // there is no logger and no activity source: routes are still injected,
+  // and the reaper keeps its TTL-only behavior.
+  const devAccessLogRoot =
+    config.dev.enabled === true && instances.private !== undefined
+      ? (instances.private.accessLogRoot ?? config.caddyAccessLogRoot)
+      : undefined
+  // A test-injected activity source wins outright; otherwise tail the shared
+  // dev-lease log the private target writes. Either way the daemon reaper
+  // observes the same `hostsCurrent` contract.
+  let devActivity: DevLeaseActivitySource | undefined = options.devActivity
+  if (devActivity === undefined && devAccessLogRoot !== undefined) {
+    const activityPathR = devLeaseAccessLogPath(devAccessLogRoot)
+    if (activityPathR.success) {
+      const activityR = devLeaseActivitySourceFileCreate({
+        path: activityPathR.data,
+        filesystem: devLeaseActivityFilesystemDefault(),
+      })
+      if (activityR.success) devActivity = activityR.data
+    }
+  }
   // The TLS gate cell is shared by the tracker (writer, via daemonCreate)
   // and the private regenerate hook (reader). It exists only behind the
   // private-DNS switch on dual instances; otherwise both sides behave
@@ -148,7 +178,11 @@ export async function projectRegistryDaemonOpen(
         config,
         privateTlsGate === undefined
           ? {
-              devLeases: { enabled: config.dev.enabled, leasesCurrent: devLeasesCurrent },
+              devLeases: {
+                enabled: config.dev.enabled,
+                leasesCurrent: devLeasesCurrent,
+                ...(devAccessLogRoot === undefined ? {} : { accessLogRoot: devAccessLogRoot }),
+              },
             }
           : {
               privateTls: {
@@ -158,7 +192,11 @@ export async function projectRegistryDaemonOpen(
                   ? {}
                   : { privateListenerAddresses: [config.privateDns.nodeAddress] }),
               },
-              devLeases: { enabled: config.dev.enabled, leasesCurrent: devLeasesCurrent },
+              devLeases: {
+                enabled: config.dev.enabled,
+                leasesCurrent: devLeasesCurrent,
+                ...(devAccessLogRoot === undefined ? {} : { accessLogRoot: devAccessLogRoot }),
+              },
             },
       )
       if (!privateR.success) return privateR
@@ -241,6 +279,7 @@ export async function projectRegistryDaemonOpen(
     repository: repositoryR.data,
     caddyApplication: caddyR.data,
     devTracking,
+    ...(devActivity === undefined ? {} : { devActivity }),
     posix,
     browserAuth: authR.data,
     ...(socketAccessResolve === undefined ? {} : { socketAccessResolve }),
