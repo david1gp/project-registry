@@ -762,12 +762,28 @@ export function projectRegistryDaemonPrivateDnsCreate(options: {
       return "failed"
     }
     const hash = contentHash(renderedR.data)
-    if (state.resolver?.contentHash === hash) {
+    // The tracked hash alone cannot prove the live file is intact: an
+    // out-of-band writer can change the file without touching tracking state.
+    // A missing or unreadable file is a mismatch and is repaired below.
+    let current: string | undefined
+    try {
+      current = await filesystem.readFile(dnsmasqConfigPath)
+    } catch {
+      current = undefined
+    }
+    if (current === renderedR.data && state.resolver?.contentHash === hash) {
       successClearOperation("resolver-write")
       successClearOperation("resolver-reload")
       return "done"
     }
-    if (!(await fileWriteAtomic(dnsmasqConfigPath, renderedR.data, resolverDirectoryMode, resolverFileMode))) {
+    // The live file already holds the desired render when tracking is stale
+    // (a previous write landed but its reload failed, or tracking was reset):
+    // skip the rewrite but still reload, since only a successful reload proves
+    // the running resolver serves this render.
+    if (
+      current !== renderedR.data &&
+      !(await fileWriteAtomic(dnsmasqConfigPath, renderedR.data, resolverDirectoryMode, resolverFileMode))
+    ) {
       logEvent("resolver", "failure", { operation: "resolver-write", reason: "resolver-config-write-failed" })
       statusErrorUpsert({
         operation: "resolver-write",
