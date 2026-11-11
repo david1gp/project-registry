@@ -28,6 +28,8 @@ import { projectOrganize } from "../project/projectOrganize.js"
 import { projectOwnerAuthorize } from "../project/projectOwnerAuthorize.js"
 import type { ProjectPortRange } from "../project/projectPortNext.js"
 import { type ProjectStaticAclRepairOptions, projectStaticAclRepair } from "../project/projectStaticAclRepair.js"
+import type { DevLeaseTracking } from "../dev/DevLeaseTracking.js"
+import type { DevProcessRunner } from "../dev/DevProcessRunner.js"
 import type { ProjectRepository } from "../project-store/ProjectRepository.js"
 import type { ProjectRepositoryMutation } from "../project-store/ProjectRepositoryMutation.js"
 import { projectRegistryVersion } from "../projectRegistryVersion.js"
@@ -47,6 +49,7 @@ type ApiHandlerOptions = {
   configOptions?: CaddyConfigOptions
   portRange?: ProjectPortRange
   defaultUserDomains?: Readonly<Record<string, string>>
+  dev?: { enabled: boolean; tracking?: DevLeaseTracking; processRunner?: DevProcessRunner }
   projectAccessLogSource?: ProjectAccessLogSource
   projectStaticAclRepair?: typeof projectStaticAclRepair
   routeCheckProbe?: typeof routeCheckProbe
@@ -81,6 +84,9 @@ type ApiRoute =
   | { kind: "regenerate"; legacy: boolean }
   | { kind: "default-domain"; legacy: false; owner: string }
   | { kind: "cloudflare-token"; legacy: false; owner: string }
+  | { kind: "dev-ls"; legacy: false; owner: string }
+  | { kind: "dev-up"; legacy: false; owner: string }
+  | { kind: "dev-down"; legacy: false; owner: string; name: string }
 
 type ResultFailure = ResultErr & { hint?: string }
 
@@ -104,6 +110,7 @@ const apiFailureStatus: Record<string, number> = {
   "caddy.forbidden": 403,
   "caddy.not-found": 404,
   "caddy.unavailable": 503,
+  "dev.disabled": 409,
   "documentation.disabled": 409,
   "documentation.invalid-configuration": 500,
   "documentation.invalid-options": 400,
@@ -182,7 +189,7 @@ function segmentDecode(value: string, pattern: RegExp): string | undefined {
   }
 }
 
-function routeParse(path: string): ApiRoute | undefined {
+function routeParse(path: string, method: string): ApiRoute | undefined {
   if (path === "/projects") return { kind: "projects", legacy: true }
   if (path === "/config") return { kind: "config", legacy: true }
   if (path === "/history") return { kind: "history", legacy: true }
@@ -218,6 +225,22 @@ function routeParse(path: string): ApiRoute | undefined {
     const owner = segmentDecode(versionedCloudflareToken[1]!, ownerPattern)
     if (owner === undefined) return undefined
     return { kind: "cloudflare-token", legacy: false, owner }
+  }
+
+  const versionedDevDown = path.match(/^\/api\/v1\/users\/([^/]+)\/dev\/([^/]+)$/)
+  if (versionedDevDown !== null) {
+    const owner = segmentDecode(versionedDevDown[1]!, ownerPattern)
+    const name = segmentDecode(versionedDevDown[2]!, projectNamePattern)
+    if (owner === undefined || name === undefined) return undefined
+    return { kind: "dev-down", legacy: false, owner, name }
+  }
+
+  const versionedDev = path.match(/^\/api\/v1\/users\/([^/]+)\/dev$/)
+  if (versionedDev !== null) {
+    const owner = segmentDecode(versionedDev[1]!, ownerPattern)
+    if (owner === undefined) return undefined
+    if (method === "POST") return { kind: "dev-up", legacy: false, owner }
+    return { kind: "dev-ls", legacy: false, owner }
   }
 
   const versionedHistory = path.match(/^\/api\/v1\/users\/([^/]+)\/projects\/([^/]+)\/history$/)
@@ -352,7 +375,10 @@ function routeRequiresProjectAccess(route: ApiRoute): boolean {
     route.kind === "history" ||
     route.kind === "config" ||
     route.kind === "default-domain" ||
-    route.kind === "cloudflare-token"
+    route.kind === "cloudflare-token" ||
+    route.kind === "dev-ls" ||
+    route.kind === "dev-up" ||
+    route.kind === "dev-down"
   )
 }
 
@@ -467,6 +493,9 @@ function routeMethods(route: ApiRoute): readonly string[] {
   if (route.kind === "project-by-port") return ["DELETE"]
   if (route.kind === "default-domain") return ["GET", "PUT", "DELETE"]
   if (route.kind === "cloudflare-token") return ["PUT"]
+  if (route.kind === "dev-ls") return ["GET"]
+  if (route.kind === "dev-up") return ["POST"]
+  if (route.kind === "dev-down") return ["DELETE"]
   if (route.kind === "regenerate") return ["POST"]
   return ["GET"]
 }
@@ -504,6 +533,33 @@ function cloudflareTokenOwnerAuthorize(actor: Actor, owner: string): Result<void
   const op = "projectRegistryApiCloudflareTokenAuthorize"
   if (actor.username !== owner) return createResultErrorCode(op, "Access is forbidden.", "projects.forbidden")
   return createResult(undefined)
+}
+
+function devOwnerAuthorize(actor: Actor, owner: string): Result<void> {
+  const op = "projectRegistryApiDevAuthorize"
+  if (actor.username !== owner) return createResultErrorCode(op, "Access is forbidden.", "projects.forbidden")
+  return createResult(undefined)
+}
+
+const maximumDevTtlMs = 86_400_000
+
+function devUpInputParse(input: unknown): Result<{ name: string; ttlMs?: number }> {
+  const op = "projectRegistryApiDevUpInputParse"
+  const record = recordValue(input)
+  const name = record?.project
+  if (typeof name !== "string" || !projectNamePattern.test(name)) {
+    return createResultErrorCode(op, "A valid dev project name is required.", "request.invalid")
+  }
+  const ttlMs = record?.ttlMs
+  if (ttlMs === undefined) return createResult({ name })
+  if (!Number.isSafeInteger(ttlMs) || (ttlMs as number) <= 0 || (ttlMs as number) > maximumDevTtlMs) {
+    return createResultErrorCode(
+      op,
+      "Dev TTL must be a positive integer of milliseconds up to 86400000.",
+      "request.invalid",
+    )
+  }
+  return createResult({ name, ttlMs: ttlMs as number })
 }
 
 function cloudflareTokenIsValid(token: string): boolean {
@@ -818,7 +874,7 @@ export function projectRegistryApiHandlerCreate(options: ApiHandlerOptions): Pro
       )
     }
 
-    const route = routeParse(url.pathname)
+    const route = routeParse(url.pathname, request.method)
     if (route === undefined) {
       const legacy = !url.pathname.startsWith("/api/v1/")
       return errorResponse(
@@ -1024,6 +1080,71 @@ export function projectRegistryApiHandlerCreate(options: ApiHandlerOptions): Pro
         )
       }
       return successResponse({ updated: true })
+    }
+
+    if (route.kind === "dev-ls" || route.kind === "dev-up" || route.kind === "dev-down") {
+      const actorR = await resolvedAccess.actorResolve()
+      if (!actorR.success) return resultErrorResponse(actorR, false, "projects")
+      const authorizationR = devOwnerAuthorize(actorR.data, owner)
+      if (!authorizationR.success) return resultErrorResponse(authorizationR, false, "projects")
+      if (options.dev?.enabled !== true) {
+        return errorResponse(
+          {
+            code: "dev.disabled",
+            message: "Dev servers are disabled.",
+            op: "projectRegistryApiDevGate",
+            status: 409,
+            hint: "Set PROJECT_REGISTRY_DEV_ENABLED=true on the daemon and restart it, then retry.",
+          },
+          false,
+        )
+      }
+      if (route.kind === "dev-ls") {
+        if (options.dev.tracking === undefined) {
+          return errorResponse(
+            {
+              code: "platform.internal",
+              message: "Dev lease tracking is unavailable.",
+              op: "projectRegistryApiDevList",
+              status: 500,
+            },
+            false,
+          )
+        }
+        const leasesR = await options.dev.tracking.read()
+        if (!leasesR.success) return resultErrorResponse(leasesR, false, "projects")
+        return successResponse({
+          leases: leasesR.data.leases.filter((lease) => lease.projectKey.owner === owner),
+        })
+      }
+      if (route.kind === "dev-up") {
+        const body = await requestBodyJson(request, false)
+        if (body instanceof Response) return body
+        const inputR = devUpInputParse(body)
+        if (!inputR.success) return resultErrorResponse(inputR, false, "projects")
+        // D2 implements spawning (systemd-run + health wait + reaper); D1
+        // stops here so the lease table stays empty and generated
+        // Caddy/dnsmasq output stays byte-identical.
+        return errorResponse(
+          {
+            code: "caddy.unavailable",
+            message: "Dev server spawning is not yet available.",
+            op: "projectRegistryApiDevUp",
+            status: 503,
+          },
+          false,
+        )
+      }
+      // route.kind === "dev-down": D2 implements stopping; see dev-up.
+      return errorResponse(
+        {
+          code: "caddy.unavailable",
+          message: "Dev server stopping is not yet available.",
+          op: "projectRegistryApiDevDown",
+          status: 503,
+        },
+        false,
+      )
     }
 
     if (route.kind === "default-domain") {

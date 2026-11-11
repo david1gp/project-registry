@@ -1,0 +1,36 @@
+import { describe, expect, test } from "bun:test"
+import { projectRegistryDaemonConfigFromEnv } from "./projectRegistryDaemonConfigFromEnv.js"
+
+describe("projectRegistryDaemonConfigFromEnv dev flag", () => {
+  test("keeps dev verbs off when the flag is unset", () => {
+    const result = projectRegistryDaemonConfigFromEnv({ PROJECT_REGISTRY_REPOSITORY_PATH: "/tmp/repo" })
+
+    expect(result.success).toBe(true)
+    if (!result.success) return
+    expect(result.data.dev).toEqual({ enabled: false })
+  })
+
+  test("enables dev verbs for each accepted truthy spelling", () => {
+    for (const value of ["1", "true", "yes", "on"]) {
+      const result = projectRegistryDaemonConfigFromEnv({
+        PROJECT_REGISTRY_REPOSITORY_PATH: "/tmp/repo",
+        PROJECT_REGISTRY_DEV_ENABLED: value,
+      })
+
+      expect(result.success).toBe(true)
+      if (!result.success) continue
+      expect(result.data.dev).toEqual({ enabled: true })
+    }
+  })
+
+  test("rejects an unparseable flag value", () => {
+    const result = projectRegistryDaemonConfigFromEnv({
+      PROJECT_REGISTRY_REPOSITORY_PATH: "/tmp/repo",
+      PROJECT_REGISTRY_DEV_ENABLED: "maybe",
+    })
+
+    expect(result.success).toBe(false)
+    if (result.success) return
+    expect(result.errorMessage).toBe("daemon environment contains an invalid number or boolean")
+  })
+})

@@ -16,6 +16,9 @@ import type {
 } from "../access-log/ProjectAccessLogSource.js"
 import type { CaddyApplication } from "../caddy/CaddyApplication.js"
 import { caddyConfigGenerate } from "../caddy/caddyConfigGenerate.js"
+import type { DevLeaseTracking } from "../dev/DevLeaseTracking.js"
+import type { DevLeaseRecord } from "../dev/devLeaseRecordSchema.js"
+import type { DevLeaseTrackingState } from "../dev/devLeaseTrackingState.js"
 import { projectRegistryCliRequest } from "../cli/projectRegistryCliRequest.js"
 import { projectDocsPublicationStoreCreate } from "../docs/projectDocsPublicationStoreCreate.js"
 import type { Project } from "../project/Project.js"
@@ -3345,5 +3348,106 @@ describe("project route check API", () => {
     expect(checked.response.status).toBe(200)
     expect(checked.body).toMatchObject({ success: true, data: { project: "opencode" } })
     expect(probed).toEqual(["opencode.example", "oc.example"])
+  })
+})
+
+describe("dev servers API (dark-gated)", () => {
+  const socketContext = { transport: "unix", username: "tim" } as const
+
+  function devLease(owner: string, name: string): DevLeaseRecord {
+    return {
+      projectKey: { owner, name },
+      user: owner,
+      port: 4300,
+      unit: `dev-${owner}-${name}.service`,
+      hostname: `${owner}-${name}.wonder1.de`,
+      state: "active",
+      ttlMs: 14_400_000,
+      lastSeenAt: 1_700_000_000_000,
+      createdAt: 1_700_000_000_000,
+    }
+  }
+
+  function devTrackingCreate(leases: DevLeaseRecord[]): DevLeaseTracking {
+    let state: DevLeaseTrackingState = { version: 1, leases }
+    return {
+      read: async () => createResult(state),
+      write: async (next) => {
+        state = next
+        return createResult(undefined)
+      },
+    }
+  }
+
+  test("rejects dev verbs with 409 while the flag is off", async () => {
+    const handler = projectRegistryApiHandlerCreate({
+      repository: repositoryCreate(),
+      caddyApplication: caddyApplicationCreate(),
+    })
+    const listed = await requestJson(handler, "/api/v1/users/tim/dev", socketContext)
+    expect(listed.response.status).toBe(409)
+    expect(listed.body).toMatchObject({
+      success: false,
+      error: { code: "dev.disabled", message: "Dev servers are disabled." },
+    })
+
+    const started = await requestJson(handler, "/api/v1/users/tim/dev", socketContext, "POST", {
+      project: "akademie",
+    })
+    expect(started.response.status).toBe(409)
+    expect(started.body).toMatchObject({ success: false, error: { code: "dev.disabled" } })
+
+    const stopped = await requestJson(handler, "/api/v1/users/tim/dev/akademie", socketContext, "DELETE", {})
+    expect(stopped.response.status).toBe(409)
+    expect(stopped.body).toMatchObject({ success: false, error: { code: "dev.disabled" } })
+  })
+
+  test("rejects cross-owner dev routes for the socket user", async () => {
+    const handler = projectRegistryApiHandlerCreate({
+      repository: repositoryCreate(),
+      caddyApplication: caddyApplicationCreate(),
+      dev: { enabled: true, tracking: devTrackingCreate([]) },
+    })
+    const listed = await requestJson(handler, "/api/v1/users/leo/dev", socketContext)
+    expect(listed.response.status).toBe(403)
+    expect(listed.body).toMatchObject({ success: false, error: { code: "projects.forbidden" } })
+  })
+
+  test("lists only the owning user's leases when enabled", async () => {
+    const handler = projectRegistryApiHandlerCreate({
+      repository: repositoryCreate(),
+      caddyApplication: caddyApplicationCreate(),
+      dev: { enabled: true, tracking: devTrackingCreate([devLease("tim", "akademie"), devLease("leo", "site")]) },
+    })
+    const listed = await requestJson(handler, "/api/v1/users/tim/dev", socketContext)
+    expect(listed.response.status).toBe(200)
+    expect(listed.body).toMatchObject({
+      success: true,
+      data: { leases: [{ hostname: "tim-akademie.wonder1.de", port: 4300 }] },
+    })
+    expect(JSON.stringify(listed.body)).not.toContain("leo-site")
+  })
+
+  test("parks up and down behind 503 until spawning lands", async () => {
+    const handler = projectRegistryApiHandlerCreate({
+      repository: repositoryCreate(),
+      caddyApplication: caddyApplicationCreate(),
+      dev: { enabled: true, tracking: devTrackingCreate([]) },
+    })
+    const started = await requestJson(handler, "/api/v1/users/tim/dev", socketContext, "POST", {
+      project: "akademie",
+      ttlMs: 3600000,
+    })
+    expect(started.response.status).toBe(503)
+    expect(started.body).toMatchObject({ success: false, error: { code: "caddy.unavailable" } })
+
+    const invalid = await requestJson(handler, "/api/v1/users/tim/dev", socketContext, "POST", {
+      project: "Akademie",
+    })
+    expect(invalid.response.status).toBe(400)
+
+    const stopped = await requestJson(handler, "/api/v1/users/tim/dev/akademie", socketContext, "DELETE", {})
+    expect(stopped.response.status).toBe(503)
+    expect(stopped.body).toMatchObject({ success: false, error: { code: "caddy.unavailable" } })
   })
 })

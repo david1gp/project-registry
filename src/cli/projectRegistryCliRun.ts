@@ -329,7 +329,10 @@ async function commandRequest(
     command.kind !== "user-default-domain-get" &&
     command.kind !== "user-default-domain-set" &&
     command.kind !== "user-default-domain-unset" &&
-    command.kind !== "user-cloudflare-token-set"
+    command.kind !== "user-cloudflare-token-set" &&
+    command.kind !== "dev-up" &&
+    command.kind !== "dev-down" &&
+    command.kind !== "dev-ls"
   ) {
     return projectRegistryCliRequest(socketPath, requestPath(invocation), {}, requestFetch)
   }
@@ -339,6 +342,32 @@ async function commandRequest(
 
   if (command.kind === "project-access-logs") {
     return projectRegistryCliRequest(socketPath, accessLogRequestPath(command, command.owner), {}, requestFetch)
+  }
+
+  if (command.kind === "dev-ls" || command.kind === "dev-up" || command.kind === "dev-down") {
+    const ownerR = ownerResolve(environment)
+    if (!ownerR.success) return ownerR
+    const ownerPath = encodeURIComponent(ownerR.data)
+    if (command.kind === "dev-ls") {
+      return projectRegistryCliRequest(socketPath, `/api/v1/users/${ownerPath}/dev`, {}, requestFetch)
+    }
+    if (command.kind === "dev-up") {
+      return projectRegistryCliRequest(
+        socketPath,
+        `/api/v1/users/${ownerPath}/dev`,
+        {
+          method: "POST",
+          body: { project: command.name, ...(command.ttlMs === undefined ? {} : { ttlMs: command.ttlMs }) },
+        },
+        requestFetch,
+      )
+    }
+    return projectRegistryCliRequest(
+      socketPath,
+      `/api/v1/users/${ownerPath}/dev/${encodeURIComponent(command.name)}`,
+      { method: "DELETE" },
+      requestFetch,
+    )
   }
 
   const ownerR = ownerResolve(environment)

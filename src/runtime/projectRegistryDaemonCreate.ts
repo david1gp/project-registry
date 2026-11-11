@@ -38,6 +38,9 @@ import { projectRegistryDaemonPrivateDnsCredentialsCreate } from "./projectRegis
 import { projectRegistryDaemonPrivateDnsResolverReloadDefault } from "./projectRegistryDaemonPrivateDnsResolverReloadDefault.js"
 import { projectRegistryDaemonPrivateDnsTrackingCreate } from "./projectRegistryDaemonPrivateDnsTrackingCreate.js"
 import { projectRegistryDaemonPrivateDnsTrackingFilesystemDefault } from "./projectRegistryDaemonPrivateDnsTrackingFilesystemDefault.js"
+import { devLeaseTrackingCreate } from "../dev/devLeaseTrackingCreate.js"
+import { devLeaseTrackingFilesystemDefault } from "../dev/devLeaseTrackingFilesystemDefault.js"
+import { devProcessRunnerDefault } from "../dev/devProcessRunnerDefault.js"
 import { projectRegistryDaemonPrivateTlsCreate } from "./projectRegistryDaemonPrivateTlsCreate.js"
 import { projectRegistryDaemonServerDefault } from "./projectRegistryDaemonServerDefault.js"
 import { projectRegistryDaemonServerIpCreate } from "./projectRegistryDaemonServerIpCreate.js"
@@ -231,6 +234,8 @@ export function projectRegistryDaemonCreate(options: ProjectRegistryDaemonOption
   let privateDnsTrackingFilesystemOption: ProjectRegistryDaemonOptions["privateDnsTrackingFilesystem"]
   let privateDnsCredentialsFilesystemOption: ProjectRegistryDaemonOptions["privateDnsCredentialsFilesystem"]
   let privateDnsResolverReloadOption: ProjectRegistryDaemonOptions["privateDnsResolverReload"]
+  let devTrackingFilesystemOption: ProjectRegistryDaemonOptions["devTrackingFilesystem"]
+  let devProcessRunnerOption: ProjectRegistryDaemonOptions["devProcessRunner"]
   let privateTlsTrustedProbeOption: ProjectRegistryDaemonOptions["privateTlsTrustedProbe"]
   let privateTlsGateStateOption: ProjectRegistryDaemonOptions["privateTlsGateState"]
   let wikiReconcileOption: ProjectRegistryDaemonOptions["wikiReconcile"]
@@ -260,6 +265,8 @@ export function projectRegistryDaemonCreate(options: ProjectRegistryDaemonOption
     privateDnsTrackingFilesystemOption = options.privateDnsTrackingFilesystem
     privateDnsCredentialsFilesystemOption = options.privateDnsCredentialsFilesystem
     privateDnsResolverReloadOption = options.privateDnsResolverReload
+    devTrackingFilesystemOption = options.devTrackingFilesystem
+    devProcessRunnerOption = options.devProcessRunner
     privateTlsTrustedProbeOption = options.privateTlsTrustedProbe
     privateTlsGateStateOption = options.privateTlsGateState
     wikiReconcileOption = options.wikiReconcile
@@ -361,6 +368,17 @@ export function projectRegistryDaemonCreate(options: ProjectRegistryDaemonOption
   })
   if (!privateDnsR.success) return privateDnsR
   const privateDns = privateDnsR.data
+  const devTrackingR = devLeaseTrackingCreate({
+    path: `${config.serverIpCachePath}.dev-leases.json`,
+    filesystem: devTrackingFilesystemOption ?? devLeaseTrackingFilesystemDefault(),
+  })
+  if (!devTrackingR.success) return devTrackingR
+  if (devProcessRunnerOption !== undefined && typeof devProcessRunnerOption !== "function") {
+    return createResultError(op, "Dev process runner is invalid")
+  }
+  // D2 consumes devProcessRunner for systemd-run spawning; until then the
+  // erroring default keeps the seam wired without starting anything.
+  const devProcessRunner = devProcessRunnerOption ?? devProcessRunnerDefault()
   // Private TLS readiness rides on the private-DNS switch: no separate
   // config section. The tracker resolves claiming-owner Cloudflare tokens
   // to confirm availability (never logged), proves trusted handshakes
@@ -1327,6 +1345,7 @@ export function projectRegistryDaemonCreate(options: ProjectRegistryDaemonOption
       },
       portRange: config.portRange,
       defaultUserDomains: config.defaultUserDomains,
+      dev: { enabled: config.dev.enabled, tracking: devTrackingR.data, processRunner: devProcessRunner },
       cloudflareCredentials: cloudflareCredentialsR.data,
       cloudflareDnsStatus: () => {
         try {

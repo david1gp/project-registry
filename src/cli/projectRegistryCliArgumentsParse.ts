@@ -74,6 +74,7 @@ export function projectRegistryCliArgumentsParse(args: readonly string[]): Resul
   let path: string | undefined
   let owner: string | undefined
   let before: string | undefined
+  let ttlMs: number | undefined
   let stateFile: string | undefined
   let stateDir: string | undefined
   let kind: "proxy" | "static" | undefined
@@ -152,6 +153,7 @@ export function projectRegistryCliArgumentsParse(args: readonly string[]): Resul
       "--flush-interval",
       "--owner",
       "--before",
+      "--ttl",
       "--state-file",
       "--state-dir",
     ]
@@ -247,6 +249,14 @@ export function projectRegistryCliArgumentsParse(args: readonly string[]): Resul
           return createResultError(op, "Option --before requires a bounded cursor.")
         }
         before = value
+        continue
+      }
+      if (option === "--ttl") {
+        const parsed = positiveIntegerParse(value)
+        if (parsed === undefined || parsed > 86_400_000) {
+          return createResultError(op, "Option --ttl requires a positive integer of milliseconds up to 86400000.")
+        }
+        ttlMs = parsed
         continue
       }
       if (option === "--state-file") {
@@ -591,6 +601,50 @@ export function projectRegistryCliArgumentsParse(args: readonly string[]): Resul
       json,
       socket,
     })
+  }
+  if (
+    subject === "dev" &&
+    action === "up" &&
+    value !== undefined &&
+    extra.length === 0 &&
+    limit === undefined &&
+    !hasMutationOptions &&
+    !hasAccessLogOptions &&
+    !hasHttp
+  ) {
+    if (!projectNamePattern.test(value)) return projectNameError(op)
+    return createResult({
+      command: { kind: "dev-up", name: value, ...(ttlMs === undefined ? {} : { ttlMs }) },
+      json,
+      socket,
+    })
+  }
+  if (
+    subject === "dev" &&
+    action === "down" &&
+    value !== undefined &&
+    extra.length === 0 &&
+    limit === undefined &&
+    !hasMutationOptions &&
+    !hasAccessLogOptions &&
+    !hasHttp
+  ) {
+    if (ttlMs !== undefined) return createResultError(op, "Option --ttl is only valid for dev up.")
+    if (!projectNamePattern.test(value)) return projectNameError(op)
+    return createResult({ command: { kind: "dev-down", name: value }, json, socket })
+  }
+  if (
+    subject === "dev" &&
+    action === "ls" &&
+    value === undefined &&
+    extra.length === 0 &&
+    limit === undefined &&
+    !hasMutationOptions &&
+    !hasAccessLogOptions &&
+    !hasHttp
+  ) {
+    if (ttlMs !== undefined) return createResultError(op, "Option --ttl is only valid for dev up.")
+    return createResult({ command: { kind: "dev-ls" }, json, socket })
   }
   if (
     subject === "project" &&

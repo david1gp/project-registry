@@ -39,6 +39,9 @@ export type ProjectRegistryCliInvocation = {
     | { kind: "project-fix-acl"; name: string }
     | { kind: "project-delete-by-port"; port: number }
     | { kind: "project-history"; name: string; limit?: number }
+    | { kind: "dev-up"; name: string; ttlMs?: number }
+    | { kind: "dev-down"; name: string }
+    | { kind: "dev-ls" }
     | { kind: "project-access-logs"; name: string; owner?: string; limit?: number; before?: string }
     | { kind: "route-check"; name: string; service?: string }
     | { kind: "history"; limit?: number }

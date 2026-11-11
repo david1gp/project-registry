@@ -51,6 +51,9 @@ export type ProjectRegistryDaemonConfig = {
     enabled: boolean
     credentialsDirectory: string
   }
+  dev: {
+    enabled: boolean
+  }
   privateDns: {
     enabled: boolean
     grandfatheredHostnames: string[]

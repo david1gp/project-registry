@@ -140,6 +140,7 @@ export function projectRegistryDaemonConfigValidate(input: unknown): Result<Proj
       zitadel: parsed.output.zitadel === undefined ? undefined : { ...parsed.output.zitadel },
       session: { ...parsed.output.session },
       portRange: { ...parsed.output.portRange },
+      dev: { ...parsed.output.dev },
       webListener: { ...parsed.output.webListener },
       cloudflareDns: { ...parsed.output.cloudflareDns },
       privateDns: { ...parsed.output.privateDns, upstreamResolvers: [...parsed.output.privateDns.upstreamResolvers] },

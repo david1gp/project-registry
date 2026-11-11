@@ -150,6 +150,10 @@ const cloudflareDnsSchema = a.strictObject({
   credentialsDirectory: a.optional(absolutePathSchema, "/etc/project-registry/cloudflare"),
 })
 
+const devSchema = a.strictObject({
+  enabled: a.optional(a.boolean(), false),
+})
+
 const ipv4Schema = a.pipe(
   a.string(),
   a.minLength(1),
@@ -250,4 +254,5 @@ export const projectRegistryDaemonConfigSchema = a.strictObject({
   serverIpDiscoveryTimeoutMs: a.optional(durationSchema, 3_000),
   cloudflareDns: a.optional(cloudflareDnsSchema, { enabled: true }),
   privateDns: a.optional(privateDnsSchema, { enabled: false }),
+  dev: a.optional(devSchema, { enabled: false }),
 })

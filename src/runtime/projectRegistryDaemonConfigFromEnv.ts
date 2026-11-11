@@ -73,6 +73,7 @@ export function projectRegistryDaemonConfigFromEnv(
       "PROJECT_REGISTRY_SERVER_IP_DISCOVERY_TIMEOUT_MS",
       "PROJECT_REGISTRY_CLOUDFLARE_CREDENTIALS_DIR",
       "PROJECT_REGISTRY_CLOUDFLARE_DNS_ENABLED",
+      "PROJECT_REGISTRY_DEV_ENABLED",
       "PROJECT_REGISTRY_PRIVATE_DNS_ENABLED",
       "PROJECT_REGISTRY_PRIVATE_DNS_TAILNET",
       "PROJECT_REGISTRY_PRIVATE_DNS_NODE_ADDRESS",
@@ -129,6 +130,7 @@ export function projectRegistryDaemonConfigFromEnv(
       "PROJECT_REGISTRY_CADDY_INITIALIZE_FROM_GENERATED_CONFIG",
     )
     const cloudflareDnsEnabled = environmentBoolean(values, "PROJECT_REGISTRY_CLOUDFLARE_DNS_ENABLED")
+    const devEnabled = environmentBoolean(values, "PROJECT_REGISTRY_DEV_ENABLED")
     const privateDnsEnabled = environmentBoolean(values, "PROJECT_REGISTRY_PRIVATE_DNS_ENABLED")
     const localDomainsEnabled = environmentBoolean(values, "PROJECT_REGISTRY_LOCAL_DOMAINS_ENABLED")
     let defaultUserDomains: unknown
@@ -184,6 +186,7 @@ export function projectRegistryDaemonConfigFromEnv(
       (values.PROJECT_REGISTRY_CADDY_INITIALIZE_FROM_GENERATED_CONFIG !== undefined &&
         initializeFromGeneratedConfig === undefined) ||
       (values.PROJECT_REGISTRY_CLOUDFLARE_DNS_ENABLED !== undefined && cloudflareDnsEnabled === undefined) ||
+      (values.PROJECT_REGISTRY_DEV_ENABLED !== undefined && devEnabled === undefined) ||
       (values.PROJECT_REGISTRY_PRIVATE_DNS_ENABLED !== undefined && privateDnsEnabled === undefined) ||
       (values.PROJECT_REGISTRY_LOCAL_DOMAINS_ENABLED !== undefined && localDomainsEnabled === undefined)
     ) {
@@ -275,6 +278,11 @@ export function projectRegistryDaemonConfigFromEnv(
         values.PROJECT_REGISTRY_SERVER_IP_CACHE_PATH?.trim() ||
         (mode === "user" && stateDirectory ? `${stateDirectory}/project-registry/server-ip` : undefined),
       serverIpDiscoveryTimeoutMs,
+      dev: {
+        // Deliberately inverted from this file's default-on idiom
+        // (cloudflareDns above): dev verbs stay dark until the cutover.
+        enabled: devEnabled === true,
+      },
       cloudflareDns: {
         enabled: cloudflareDnsEnabled !== false,
         ...(!values.PROJECT_REGISTRY_CLOUDFLARE_CREDENTIALS_DIR?.trim()

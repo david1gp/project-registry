@@ -4,6 +4,8 @@ import type { CaddyApplication } from "../caddy/CaddyApplication.js"
 import type { CaddyFetch } from "../caddy/CaddyFetch.js"
 import type { CaddyProcessRunner } from "../caddy/CaddyProcessRunner.js"
 import type { CaddyTimer } from "../caddy/CaddyTimer.js"
+import type { DevLeaseTrackingFilesystem } from "../dev/DevLeaseTrackingFilesystem.js"
+import type { DevProcessRunner } from "../dev/DevProcessRunner.js"
 import type { CloudflareDnsFetch } from "../cloudflare/CloudflareDnsFetch.js"
 import type { ProjectPrivateTlsGateSnapshot } from "../project/projectPrivateTlsGate.js"
 import type { ProjectRepository } from "../project-store/ProjectRepository.js"
@@ -44,6 +46,8 @@ export type ProjectRegistryDaemonOptions = {
   signals?: ProjectRegistryDaemonSignals
   timer?: CaddyTimer
   caddyProcessRunner?: CaddyProcessRunner
+  devTrackingFilesystem?: DevLeaseTrackingFilesystem
+  devProcessRunner?: DevProcessRunner
   caddyFetch?: CaddyFetch
   serverIpFilesystem?: ProjectRegistryDaemonServerIpFilesystem
   serverIpFetch?: CaddyFetch

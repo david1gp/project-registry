@@ -28,6 +28,9 @@ Commands:
   user default-domain unset
   user cloudflare-token set --token-stdin
   tailscale split-dns rollback (--state-file <path> | --owner <owner> --state-dir <dir>)
+  dev up <project> [--ttl <ms>]
+  dev down <project>
+  dev ls
 
 Project create/edit options:
   --port <port>              Upstream port (create allocates one when omitted)
@@ -57,6 +60,13 @@ Project create/edit options:
 Cloudflare credentials:
   user cloudflare-token set --token-stdin
                               Read one token line from stdin; never pass it as an argument
+
+Dev servers (dark-gated; the daemon needs PROJECT_REGISTRY_DEV_ENABLED=true):
+  dev up <project> [--ttl <ms>]
+                              Start an on-demand dev server; prints DEV_URL for e2e use
+  dev down <project>            Stop the on-demand dev server
+  dev ls                        List on-demand dev servers
+  --ttl <ms>                    Dev server lifetime in milliseconds up to 86400000 (dev up only)
 
 Split-DNS rollback (local admin command, no daemon round-trip):
   tailscale split-dns rollback --state-file <path>

@@ -77,6 +77,11 @@ describe("projectRegistryCliArgumentsParse", () => {
     [["user", "default-domain", "get"], { kind: "user-default-domain-get" }],
     [["user", "default-domain", "set", "Example.COM."], { kind: "user-default-domain-set", domain: "example.com" }],
     [["user", "default-domain", "unset"], { kind: "user-default-domain-unset" }],
+    [["dev", "ls"], { kind: "dev-ls" }],
+    [["dev", "up", "site"], { kind: "dev-up", name: "site" }],
+    [["dev", "up", "site", "--ttl", "3600000"], { kind: "dev-up", name: "site", ttlMs: 3600000 }],
+    [["dev", "up", "site", "--ttl=60000"], { kind: "dev-up", name: "site", ttlMs: 60000 }],
+    [["dev", "down", "site"], { kind: "dev-down", name: "site" }],
     [["user", "cloudflare-token", "set", "--token-stdin"], { kind: "user-cloudflare-token-set", tokenStdin: true }],
     [["--help"], { kind: "help" }],
     [["-V"], { kind: "version" }],
@@ -334,6 +339,24 @@ describe("projectRegistryCliArgumentsParse", () => {
       ["user", "default-domain", "unset", "example.com"],
       "Unknown command or invalid syntax: user default-domain unset example.com.",
     ],
+    [["dev", "up"], "Unknown command or invalid syntax: dev up."],
+    [["dev", "ls", "extra"], "Unknown command or invalid syntax: dev ls extra."],
+    [["dev", "up", "site", "--port", "3000"], "Unknown command or invalid syntax: dev up site."],
+    [
+      ["dev", "up", "Site"],
+      "Project names must start with a lowercase letter or digit and contain only lowercase letters, digits, and hyphens.",
+    ],
+    [["dev", "up", "site", "--ttl", "0"], "Option --ttl requires a positive integer of milliseconds up to 86400000."],
+    [
+      ["dev", "up", "site", "--ttl", "soon"],
+      "Option --ttl requires a positive integer of milliseconds up to 86400000.",
+    ],
+    [
+      ["dev", "up", "site", "--ttl", "86400001"],
+      "Option --ttl requires a positive integer of milliseconds up to 86400000.",
+    ],
+    [["dev", "down", "site", "--ttl", "1000"], "Option --ttl is only valid for dev up."],
+    [["dev", "ls", "--ttl", "1000"], "Option --ttl is only valid for dev up."],
     [["user", "cloudflare-token", "set"], "Cloudflare token command arguments are invalid."],
     [["user", "cloudflare-token", "set", "secret"], "Cloudflare token command arguments are invalid."],
     [["user", "cloudflare-token", "set", "--token", "secret"], "Cloudflare token command arguments are invalid."],
@@ -388,5 +411,14 @@ describe("projectRegistryCliArgumentsParse", () => {
         "Project names must start with a lowercase letter or digit and contain only lowercase letters, digits, and hyphens.",
       hint: "Use a name such as 'my-project'.",
     })
+  })
+
+  test("documents the dev group in help", async () => {
+    const { projectRegistryCliHelp } = await import("./projectRegistryCliHelp.js")
+
+    expect(projectRegistryCliHelp).toContain("dev up <project> [--ttl <ms>]")
+    expect(projectRegistryCliHelp).toContain("dev down <project>")
+    expect(projectRegistryCliHelp).toContain("dev ls")
+    expect(projectRegistryCliHelp).toContain("PROJECT_REGISTRY_DEV_ENABLED")
   })
 })

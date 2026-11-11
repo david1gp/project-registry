@@ -115,6 +115,57 @@ describe("projectRegistryCliRun", () => {
     expect(stderr).toEqual([])
   })
 
+  test("dispatches dev commands through the owner dev route and prints DEV_URL", async () => {
+    const lease = {
+      projectKey: { owner: "david", name: "site" },
+      user: "david",
+      port: 4300,
+      unit: "dev-david-site.service",
+      hostname: "david-site.wonder1.de",
+      state: "active",
+      ttlMs: 3600000,
+      lastSeenAt: 1_700_000_000_000,
+      createdAt: 1_700_000_000_000,
+    }
+    const requests: Array<{ path: string; method: string; body?: unknown }> = []
+    const requestFetch = async (input: string | URL | Request, init?: RequestInit & { unix?: string }) => {
+      const url = String(input)
+      requests.push({
+        path: new URL(url).pathname,
+        method: init?.method ?? "GET",
+        body: init?.body === undefined ? undefined : JSON.parse(String(init.body)),
+      })
+      if (init?.method === "POST") return Response.json({ success: true, data: lease })
+      if (init?.method === "DELETE")
+        return Response.json({
+          success: true,
+          data: { project: "site", owner: "david", hostname: "david-site.wonder1.de", stopped: true },
+        })
+      return Response.json({ success: true, data: { leases: [lease] } })
+    }
+
+    const outputs: string[] = []
+    const options = {
+      environment: { USER: "david" },
+      requestFetch,
+      stdout: (text: string) => outputs.push(text),
+    }
+    expect(await projectRegistryCliRun(["dev", "up", "site", "--ttl", "3600000"], options)).toBe(0)
+    expect(await projectRegistryCliRun(["dev", "ls"], options)).toBe(0)
+    expect(await projectRegistryCliRun(["dev", "down", "site"], options)).toBe(0)
+
+    expect(requests).toEqual([
+      { path: "/api/v1/users/david/dev", method: "POST", body: { project: "site", ttlMs: 3600000 } },
+      { path: "/api/v1/users/david/dev", method: "GET", body: undefined },
+      { path: "/api/v1/users/david/dev/site", method: "DELETE", body: undefined },
+    ])
+    expect(outputs).toEqual([
+      "DEV_URL=https://david-site.wonder1.de\n",
+      "site\tdavid\tactive\t4300\tdavid-site.wonder1.de\n",
+      "stopped david/site\n",
+    ])
+  })
+
   test("dispatches user default-domain commands through the owner route and selected socket", async () => {
     const requests: Array<{ path: string; method: string; body?: unknown; unix: string | undefined }> = []
     const requestFetch = async (input: string | URL | Request, init?: RequestInit & { unix?: string }) => {

@@ -142,6 +142,25 @@ function routeCheckRowLine(row: a.InferOutput<typeof routeCheckRowSchema>): stri
 }
 const backendVersionSchema = a.object({ version: a.string() })
 const splitDnsRollbackSchema = a.object({ stateFile: a.string(), restored: a.array(a.string()) })
+const devLeaseSchema = a.looseObject({
+  projectKey: a.object({ owner: a.string(), name: a.string() }),
+  serviceId: a.optional(a.string()),
+  user: a.string(),
+  port: a.pipe(a.number(), a.integer()),
+  unit: a.string(),
+  hostname: a.string(),
+  state: a.picklist(["starting", "active", "stopping"]),
+  ttlMs: a.pipe(a.number(), a.integer()),
+  lastSeenAt: a.pipe(a.number(), a.integer()),
+  createdAt: a.pipe(a.number(), a.integer()),
+})
+const devListSchema = a.object({ leases: a.array(devLeaseSchema) })
+const devDownSchema = a.looseObject({
+  project: a.string(),
+  owner: a.string(),
+  hostname: a.string(),
+  stopped: a.literal(true),
+})
 
 function dataParse<TSchema extends a.BaseSchema<unknown, unknown, a.BaseIssue<unknown>>>(
   schema: TSchema,
@@ -332,6 +351,21 @@ export function projectRegistryCliOutputFormat(
     }
     parsedData = parsed.output
   }
+  if (command.kind === "dev-ls") {
+    const parsedR = dataParse(devListSchema, data, "dev server list")
+    if (!parsedR.success) return parsedR
+    parsedData = parsedR.data
+  }
+  if (command.kind === "dev-up") {
+    const parsedR = dataParse(devLeaseSchema, data, "dev server")
+    if (!parsedR.success) return parsedR
+    parsedData = parsedR.data
+  }
+  if (command.kind === "dev-down") {
+    const parsedR = dataParse(devDownSchema, data, "dev server stop")
+    if (!parsedR.success) return parsedR
+    parsedData = parsedR.data
+  }
 
   if (invocation.json) return jsonSerialize({ success: true, data: parsedData })
   if (command.kind === "project-list") {
@@ -444,6 +478,21 @@ export function projectRegistryCliOutputFormat(
     const rollback = parsedData as a.InferOutput<typeof splitDnsRollbackSchema>
     if (rollback.restored.length === 0) return createResult("No split-DNS entries to restore.\n")
     return createResult(`restored ${rollback.restored.join(", ")} from ${rollback.stateFile}\n`)
+  }
+  if (command.kind === "dev-ls") {
+    const listed = parsedData as a.InferOutput<typeof devListSchema>
+    if (listed.leases.length === 0) return createResult("No dev servers.\n")
+    return createResult(
+      `${listed.leases.map((lease) => `${lease.projectKey.name}\t${lease.user}\t${lease.state}\t${lease.port}\t${lease.hostname}`).join("\n")}\n`,
+    )
+  }
+  if (command.kind === "dev-up") {
+    const lease = parsedData as a.InferOutput<typeof devLeaseSchema>
+    return createResult(`DEV_URL=https://${lease.hostname}\n`)
+  }
+  if (command.kind === "dev-down") {
+    const stopped = parsedData as a.InferOutput<typeof devDownSchema>
+    return createResult(`stopped ${stopped.owner}/${stopped.project}\n`)
   }
   return createResultError("projectRegistryCliOutputFormat", "The command does not produce daemon output.")
 }
