@@ -85,6 +85,18 @@ describe("projectRegistryCliArgumentsParse", () => {
     [["dev", "up", "site"], { kind: "dev-up", name: "site" }],
     [["dev", "up", "site", "--ttl", "3600000"], { kind: "dev-up", name: "site", ttlMs: 3600000 }],
     [["dev", "up", "site", "--ttl=60000"], { kind: "dev-up", name: "site", ttlMs: 60000 }],
+    [
+      ["dev", "up", "site", "--root", "/projects", "--service", "web"],
+      { kind: "dev-up", name: "site", root: "/projects", service: "web" },
+    ],
+    [
+      ["project", "edit", "site", "--service", "api", "--dev-command", "bun run ./api.ts --port {port}"],
+      { kind: "project-edit", name: "site", service: "api", caddy: {}, devCommand: "bun run ./api.ts --port {port}" },
+    ],
+    [
+      ["project", "edit", "site", "--service=api", "--clear-dev-command"],
+      { kind: "project-edit", name: "site", service: "api", caddy: {}, clearDevCommand: true },
+    ],
     [["dev", "down", "site"], { kind: "dev-down", name: "site" }],
     [["user", "cloudflare-token", "set", "--token-stdin"], { kind: "user-cloudflare-token-set", tokenStdin: true }],
     [["--help"], { kind: "help" }],
@@ -348,6 +360,21 @@ describe("projectRegistryCliArgumentsParse", () => {
       "Unknown command or invalid syntax: user default-domain unset example.com.",
     ],
     [["dev", "up"], "Unknown command or invalid syntax: dev up."],
+    [["dev", "up", "site", "--root", "projects"], "Option --root requires an absolute directory path."],
+    [["dev", "up", "site", "--dev-command", "vite"], "Unknown command or invalid syntax: dev up site."],
+    [["dev", "down", "site", "--root", "/projects"], "Unknown command or invalid syntax: dev down site."],
+    [
+      ["project", "edit", "site", "--dev-command", "vite --port {port}"],
+      "Options --dev-command and --clear-dev-command require --service.",
+    ],
+    [
+      ["project", "edit", "site", "--service", "web", "--dev-command", "vite; rm -rf /"],
+      "Option --dev-command requires an argv string without shell metacharacters, e.g. 'bun run dev -- --port {port}'.",
+    ],
+    [
+      ["project", "edit", "site", "--service", "web", "--dev-command", "vite", "--clear-dev-command"],
+      "Options --dev-command and --clear-dev-command cannot be combined.",
+    ],
     [["dev", "ls", "extra"], "Unknown command or invalid syntax: dev ls extra."],
     [["dev", "up", "site", "--port", "3000"], "Unknown command or invalid syntax: dev up site."],
     [
@@ -424,7 +451,7 @@ describe("projectRegistryCliArgumentsParse", () => {
   test("documents the dev group in help", async () => {
     const { projectRegistryCliHelp } = await import("./projectRegistryCliHelp.js")
 
-    expect(projectRegistryCliHelp).toContain("dev up <project> [--ttl <ms>]")
+    expect(projectRegistryCliHelp).toContain("dev up <project> [--root <path>] [--service <id>] [--ttl <ms>]")
     expect(projectRegistryCliHelp).toContain("dev down <project>")
     expect(projectRegistryCliHelp).toContain("dev ls")
     expect(projectRegistryCliHelp).toContain("PROJECT_REGISTRY_DEV_ENABLED")

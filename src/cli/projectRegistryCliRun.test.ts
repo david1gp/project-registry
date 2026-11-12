@@ -150,12 +150,21 @@ describe("projectRegistryCliRun", () => {
       requestFetch,
       stdout: (text: string) => outputs.push(text),
     }
-    expect(await projectRegistryCliRun(["dev", "up", "site", "--ttl", "3600000"], options)).toBe(0)
+    expect(
+      await projectRegistryCliRun(
+        ["dev", "up", "site", "--ttl", "3600000", "--root", "/projects", "--service", "web"],
+        options,
+      ),
+    ).toBe(0)
     expect(await projectRegistryCliRun(["dev", "ls"], options)).toBe(0)
     expect(await projectRegistryCliRun(["dev", "down", "site"], options)).toBe(0)
 
     expect(requests).toEqual([
-      { path: "/api/v1/users/david/dev", method: "POST", body: { project: "site", ttlMs: 3600000 } },
+      {
+        path: "/api/v1/users/david/dev",
+        method: "POST",
+        body: { project: "site", ttlMs: 3600000, root: "/projects", service: "web" },
+      },
       { path: "/api/v1/users/david/dev", method: "GET", body: undefined },
       { path: "/api/v1/users/david/dev/site", method: "DELETE", body: undefined },
     ])
@@ -924,6 +933,46 @@ describe("projectRegistryCliRun", () => {
           caddy: { port: 4300, domains: ["new-api.example"] },
         },
         { id: "worker", ownership: "registry", units: ["worker.service"], caddy: null },
+      ],
+    })
+  })
+
+  test("sets a service dev command without touching its Caddy config or siblings", async () => {
+    const bodies: unknown[] = []
+    const exitCode = await projectRegistryCliRun(
+      ["project", "edit", "site", "--service", "worker", "--dev-command", "bun run ./worker.ts --port {port}"],
+      {
+        environment: { USER: "david" },
+        requestFetch: async (_input, init) => {
+          if (init?.method === "PATCH") {
+            bodies.push(typeof init.body === "string" ? JSON.parse(init.body) : undefined)
+            return Response.json({ success: true, data: mutation("edit") })
+          }
+          return Response.json({
+            success: true,
+            data: {
+              project: {
+                schemaVersion: 2,
+                owner: "david",
+                name: "site",
+                services: [
+                  { id: "api", units: [], ownership: "external", caddy: { port: 4300, domains: ["api.example"] } },
+                  { id: "worker", units: ["worker.service"], ownership: "registry", caddy: null },
+                ],
+              },
+              revision: "current",
+            },
+          })
+        },
+        stdout: () => {},
+      },
+    )
+
+    expect(exitCode).toBe(0)
+    expect(bodies[0]).toMatchObject({
+      services: [
+        { id: "api", caddy: { port: 4300, domains: ["api.example"] } },
+        { id: "worker", caddy: null, dev: { command: "bun run ./worker.ts --port {port}" } },
       ],
     })
   })

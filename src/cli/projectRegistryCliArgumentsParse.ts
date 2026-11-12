@@ -1,5 +1,6 @@
 import { createResult, createResultError, type Result } from "#result"
 import { projectDomainValidate } from "../project/projectDomainValidate.js"
+import { projectServiceDevCommandValidate } from "../project/projectServiceDevCommandValidate.js"
 import type { ProjectServiceOwnership } from "../project/projectServiceOwnershipSchema.js"
 import type { ProjectRegistryCliCaddyOptions } from "./ProjectRegistryCliCaddyOptions.js"
 import type { ProjectRegistryCliInvocation } from "./ProjectRegistryCliInvocation.js"
@@ -75,6 +76,8 @@ export function projectRegistryCliArgumentsParse(args: readonly string[]): Resul
   let owner: string | undefined
   let before: string | undefined
   let ttlMs: number | undefined
+  let devRoot: string | undefined
+  let devCommand: string | undefined
   let stateFile: string | undefined
   let stateDir: string | undefined
   let kind: "proxy" | "static" | undefined
@@ -119,6 +122,7 @@ export function projectRegistryCliArgumentsParse(args: readonly string[]): Resul
       "--http",
       "--clear-labels",
       "--clear-oidc-paths",
+      "--clear-dev-command",
       "--no-dns",
       "--token-stdin",
     ]
@@ -154,6 +158,8 @@ export function projectRegistryCliArgumentsParse(args: readonly string[]): Resul
       "--owner",
       "--before",
       "--ttl",
+      "--root",
+      "--dev-command",
       "--state-file",
       "--state-dir",
     ]
@@ -257,6 +263,24 @@ export function projectRegistryCliArgumentsParse(args: readonly string[]): Resul
           return createResultError(op, "Option --ttl requires a positive integer of milliseconds up to 86400000.")
         }
         ttlMs = parsed
+        continue
+      }
+      if (option === "--root") {
+        if (value === undefined || !value.startsWith("/") || value.includes("\0")) {
+          return createResultError(op, "Option --root requires an absolute directory path.")
+        }
+        devRoot = value
+        continue
+      }
+      if (option === "--dev-command") {
+        const devCommandR = projectServiceDevCommandValidate(value)
+        if (value === undefined || !devCommandR.success) {
+          return createResultError(
+            op,
+            "Option --dev-command requires an argv string without shell metacharacters, e.g. 'bun run dev -- --port {port}'.",
+          )
+        }
+        devCommand = value.trim()
         continue
       }
       if (option === "--state-file") {
@@ -420,8 +444,12 @@ export function projectRegistryCliArgumentsParse(args: readonly string[]): Resul
   const hasOnlyPortOption = port !== undefined && Object.keys(caddy).length === 1
   const hasLabelOptions = hasLabels || removeLabels.length > 0 || clearLabels
   const hasFilterOptions = section !== undefined || hasListMetadata
+  const clearDevCommand = booleans.has("--clear-dev-command")
+  const hasDevCommandOptions = devCommand !== undefined || clearDevCommand
   const hasNonServiceMutationOptions =
     hasCaddyOptions ||
+    hasDevCommandOptions ||
+    devRoot !== undefined ||
     flagName !== undefined ||
     ownership !== undefined ||
     noDns ||
@@ -608,13 +636,27 @@ export function projectRegistryCliArgumentsParse(args: readonly string[]): Resul
     value !== undefined &&
     extra.length === 0 &&
     limit === undefined &&
-    !hasMutationOptions &&
+    !hasCaddyOptions &&
+    !hasDevCommandOptions &&
+    flagName === undefined &&
+    ownership === undefined &&
+    !noDns &&
+    !hasLabelOptions &&
+    !hasFilterOptions &&
+    !tokenStdin &&
+    !hasStateOptions &&
     !hasAccessLogOptions &&
     !hasHttp
   ) {
     if (!projectNamePattern.test(value)) return projectNameError(op)
     return createResult({
-      command: { kind: "dev-up", name: value, ...(ttlMs === undefined ? {} : { ttlMs }) },
+      command: {
+        kind: "dev-up",
+        name: value,
+        ...(ttlMs === undefined ? {} : { ttlMs }),
+        ...(service === undefined ? {} : { service }),
+        ...(devRoot === undefined ? {} : { root: devRoot }),
+      },
       json,
       socket,
     })
@@ -664,6 +706,12 @@ export function projectRegistryCliArgumentsParse(args: readonly string[]): Resul
     if (clearOidcPaths) {
       return createResultError(op, "Option --clear-oidc-paths is only valid for project edit.")
     }
+    if (hasDevCommandOptions || devRoot !== undefined) {
+      return createResultError(
+        op,
+        "Options --dev-command, --clear-dev-command, and --root are not valid for project create.",
+      )
+    }
     return createResult({
       command: {
         kind: "project-create",
@@ -694,12 +742,21 @@ export function projectRegistryCliArgumentsParse(args: readonly string[]): Resul
     if (ownership !== undefined && service === undefined) {
       return createResultError(op, "Option --ownership requires --service.")
     }
+    if (devRoot !== undefined) return createResultError(op, "Option --root is only valid for dev up.")
+    if (devCommand !== undefined && clearDevCommand) {
+      return createResultError(op, "Options --dev-command and --clear-dev-command cannot be combined.")
+    }
+    if (hasDevCommandOptions && service === undefined) {
+      return createResultError(op, "Options --dev-command and --clear-dev-command require --service.")
+    }
     return createResult({
       command: {
         kind: "project-edit",
         name: value,
         ...(service === undefined ? {} : { service }),
         ...(ownership === undefined ? {} : { ownership }),
+        ...(devCommand === undefined ? {} : { devCommand }),
+        ...(clearDevCommand ? { clearDevCommand: true } : {}),
         caddy,
         ...(hasLabels ? { labels } : {}),
         ...(removeLabels.length > 0 ? { removeLabels } : {}),

@@ -28,7 +28,7 @@ Commands:
   user default-domain unset
   user cloudflare-token set --token-stdin
   tailscale split-dns rollback (--state-file <path> | --owner <owner> --state-dir <dir>)
-  dev up <project> [--ttl <ms>]
+  dev up <project> [--root <path>] [--service <id>] [--ttl <ms>]
   dev down <project>
   dev ls
 
@@ -55,6 +55,8 @@ Project create/edit options:
   --label <KEY=VALUE>        Project label; repeat to provide multiple labels
   --remove-label <KEY>       Remove a project label; repeat (edit only)
   --clear-labels              Clear all project labels (edit only)
+  --dev-command "<argv>"     Service dev command override with {port}/{host} placeholders (edit with --service)
+  --clear-dev-command        Remove the service dev command override (edit with --service)
   --flush-interval <number>  Reverse proxy flush interval (-1 for immediate)
 
 Cloudflare credentials:
@@ -62,11 +64,15 @@ Cloudflare credentials:
                               Read one token line from stdin; never pass it as an argument
 
 Dev servers (dark-gated; the daemon needs PROJECT_REGISTRY_DEV_ENABLED=true):
-  dev up <project> [--ttl <ms>]
-                              Start an on-demand dev server; prints DEV_URL for e2e use
+  dev up <project> [--root <path>] [--service <id>] [--ttl <ms>]
+                              Start an on-demand dev server for <root>/<project>; prints DEV_URL for e2e use.
+                              Command: service dev.command, else the package.json dev script (vite/rsbuild/
+                              next/astro run directly on the lease port), else 'bun run dev' with PORT/HOST.
   dev down <project>            Stop the on-demand dev server
   dev ls                        List on-demand dev servers
   --ttl <ms>                    Dev server lifetime in milliseconds up to 86400000 (dev up only)
+  --root <path>                 Dev root to use when <project> exists in several allowed roots (dev up only)
+  --service <id>                Registry service whose dev.command to run (dev up only)
 
 Split-DNS rollback (local admin command, no daemon round-trip):
   tailscale split-dns rollback --state-file <path>

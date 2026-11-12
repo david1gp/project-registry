@@ -24,6 +24,7 @@ import { projectRegistryCliRequest } from "./projectRegistryCliRequest.js"
 import { projectRegistryCliSocketResolve } from "./projectRegistryCliSocketResolve.js"
 import { projectRegistryCliSplitDnsRollback } from "./projectRegistryCliSplitDnsRollback.js"
 import { projectRegistryCliVersion } from "./projectRegistryCliVersion.js"
+import { projectServicesDevApply } from "./projectServicesDevApply.js"
 import { projectServicesPatchApply } from "./projectServicesPatchApply.js"
 
 type CliRunOptions = {
@@ -358,7 +359,12 @@ async function commandRequest(
         `/api/v1/users/${ownerPath}/dev`,
         {
           method: "POST",
-          body: { project: command.name, ...(command.ttlMs === undefined ? {} : { ttlMs: command.ttlMs }) },
+          body: {
+            project: command.name,
+            ...(command.ttlMs === undefined ? {} : { ttlMs: command.ttlMs }),
+            ...(command.service === undefined ? {} : { service: command.service }),
+            ...(command.root === undefined ? {} : { root: command.root }),
+          },
         },
         requestFetch,
       )
@@ -522,17 +528,22 @@ async function commandRequest(
       const projectResponse = recordValue(currentR.data)
       const canonicalR = projectCanonicalParse(projectResponse?.project, "projectRegistryCliProjectResponseParse")
       if (!canonicalR.success) return canonicalR
-      const servicesR = projectServicesPatchApply(
-        canonicalR.data.services,
-        command.service,
-        command.caddy,
-        command.ownership,
-      )
+      const devOnly =
+        (command.devCommand !== undefined || command.clearDevCommand === true) &&
+        Object.keys(command.caddy).length === 0 &&
+        command.ownership === undefined
+      const servicesR = devOnly
+        ? createResult([...canonicalR.data.services])
+        : projectServicesPatchApply(canonicalR.data.services, command.service, command.caddy, command.ownership)
       if (!servicesR.success) {
         return { ...servicesR, hint: "Run 'project-registry project get <name> --json' to list existing services." }
       }
+      const devR = projectServicesDevApply(servicesR.data, command.service, command.devCommand, command.clearDevCommand)
+      if (!devR.success) {
+        return { ...devR, hint: "Run 'project-registry project get <name> --json' to list existing services." }
+      }
       body.schemaVersion = 2
-      body.services = servicesR.data
+      body.services = devR.data
     } else if (Object.keys(command.caddy).length > 0) {
       body.caddy = command.caddy
     }
