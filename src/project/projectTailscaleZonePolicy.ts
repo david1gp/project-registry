@@ -11,6 +11,8 @@ export const projectTailscaleZonePolicy: Readonly<Record<string, readonly string
   david: ["david-siewert.com"],
   fabian: ["webflows.de"],
   musa: ["covux-design.de"],
+  tim: ["wonder1.de"],
+  mit: ["wonder1.de"],
 }
 
 /**

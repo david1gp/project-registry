@@ -8,6 +8,8 @@ describe("projectTailscaleZonePolicy", () => {
       david: ["david-siewert.com"],
       fabian: ["webflows.de"],
       musa: ["covux-design.de"],
+      tim: ["wonder1.de"],
+      mit: ["wonder1.de"],
     })
   })
 })
@@ -29,6 +31,14 @@ describe("projectTailscaleZoneClaimValidate", () => {
     expect(projectTailscaleZoneClaimValidate("musa", "site.covux-design.de")).toMatchObject({
       success: true,
       data: "covux-design.de",
+    })
+    expect(projectTailscaleZoneClaimValidate("tim", "t3code-tim.wonder1.de")).toMatchObject({
+      success: true,
+      data: "wonder1.de",
+    })
+    expect(projectTailscaleZoneClaimValidate("mit", "opencode-mit.wonder1.de")).toMatchObject({
+      success: true,
+      data: "wonder1.de",
     })
   })
 
