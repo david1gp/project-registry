@@ -5,7 +5,7 @@ Commands:
   project get <name>
   project create [--name <name>] [--service <id>] [--ownership <ownership>] [--domain <hostname>] [options]
   project edit <name> [--service <id>] [--ownership <ownership>] [options]
-  project delete <name>
+  project delete <name> [--service <id>]
   project fix-acl <name>
   delete --port <port>
   project history <name> [--limit <n>]
@@ -37,7 +37,7 @@ Project create/edit options:
   --domain <hostname>        Domain; repeat to provide multiple domains; defaults to the configured user domain
   --path <path>              Static/docs filesystem path (defaults to the current directory)
   --name <name>              Project name (defaults to the path folder name)
-  --service <id>             Service of the project to create or edit (defaults to 'default');
+  --service <id>             Service of the project to create, edit or delete (create defaults to 'default');
                              sibling services keep their domains, port, and Caddy settings
   --ownership <registry|external>
                               Service ownership; omitted edits preserve the selected service's ownership

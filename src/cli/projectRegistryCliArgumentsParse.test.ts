@@ -45,6 +45,10 @@ describe("projectRegistryCliArgumentsParse", () => {
       { kind: "project-edit", name: "site", service: "api", ownership: "registry", caddy: {} },
     ],
     [["project", "delete", "site"], { kind: "project-delete", name: "site" }],
+    [
+      ["project", "delete", "site", "--service", "api"],
+      { kind: "project-service-delete", name: "site", service: "api" },
+    ],
     [["project", "fix-acl", "site"], { kind: "project-fix-acl", name: "site" }],
     [["delete", "--port", "4321"], { kind: "project-delete-by-port", port: 4321 }],
     [["delete", "--port=4321"], { kind: "project-delete-by-port", port: 4321 }],
@@ -265,6 +269,10 @@ describe("projectRegistryCliArgumentsParse", () => {
     [["project", "list", "--limit", "2"], "Unknown command or invalid syntax: project list."],
     [["project", "edit", "site", "--name", "renamed"], "Option --name cannot edit an immutable project name."],
     [["project", "delete", "site", "--port", "4321"], "Unknown command or invalid syntax: project delete site."],
+    [
+      ["project", "delete", "site", "--service", "api", "--port", "4321"],
+      "Unknown command or invalid syntax: project delete site.",
+    ],
     [["delete", "--port", "0"], "Option --port requires an integer from 1 through 65535."],
     [["delete", "--port", "4321", "extra"], "Unknown command or invalid syntax: delete extra."],
     [["docs"], "Unknown command or invalid syntax: docs."],
@@ -420,5 +428,11 @@ describe("projectRegistryCliArgumentsParse", () => {
     expect(projectRegistryCliHelp).toContain("dev down <project>")
     expect(projectRegistryCliHelp).toContain("dev ls")
     expect(projectRegistryCliHelp).toContain("PROJECT_REGISTRY_DEV_ENABLED")
+  })
+
+  test("documents single-service deletion in help", async () => {
+    const { projectRegistryCliHelp } = await import("./projectRegistryCliHelp.js")
+
+    expect(projectRegistryCliHelp).toContain("project delete <name> [--service <id>]")
   })
 })

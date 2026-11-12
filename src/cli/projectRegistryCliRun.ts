@@ -320,6 +320,7 @@ async function commandRequest(
     command.kind !== "project-create" &&
     command.kind !== "project-edit" &&
     command.kind !== "project-delete" &&
+    command.kind !== "project-service-delete" &&
     command.kind !== "project-fix-acl" &&
     command.kind !== "project-delete-by-port" &&
     command.kind !== "docs" &&
@@ -462,6 +463,15 @@ async function commandRequest(
   if (!currentR.success) return currentR
   const revisionR = revisionParse(currentR.data)
   if (!revisionR.success) return revisionR
+
+  if (command.kind === "project-service-delete") {
+    return projectRegistryCliRequest(
+      socketPath,
+      `${projectPath}/services/${encodeURIComponent(command.service)}`,
+      { method: "DELETE", body: { expectedRevision: revisionR.data } },
+      requestFetch,
+    )
+  }
 
   let options: RequestOptions
   if (command.kind === "project-create") {

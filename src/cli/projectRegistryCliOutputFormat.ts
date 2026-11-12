@@ -286,6 +286,14 @@ export function projectRegistryCliOutputFormat(
     }
     parsedData = parsedR.data
   }
+  if (command.kind === "project-service-delete") {
+    const parsedR = dataParse(mutationSchema, data, "service deletion")
+    if (!parsedR.success) return parsedR
+    if (parsedR.data.action !== "edit") {
+      return createResultError("projectRegistryCliOutputFormat", "project-registryd returned mismatched mutation data.")
+    }
+    parsedData = parsedR.data
+  }
   if (command.kind === "user-default-domain-get") {
     const parsedR = dataParse(userDefaultDomainSchema, data, "user default-domain")
     if (!parsedR.success) return parsedR
@@ -412,6 +420,13 @@ export function projectRegistryCliOutputFormat(
     if (!mutation.changed) return createResult(`unchanged ${mutation.key.owner}/${mutation.key.name}\n`)
     return createResult(
       `${verb} ${mutation.key.owner}/${mutation.key.name}\nRegistry saved; DNS changes, when enabled, run asynchronously. Use project-registry status to check DNS.\n`,
+    )
+  }
+  if (command.kind === "project-service-delete") {
+    const mutation = parsedData as a.InferOutput<typeof mutationSchema>
+    const verb = mutation.changed ? "deleted service" : "unchanged service"
+    return createResult(
+      `${verb} ${mutation.key.owner}/${mutation.key.name}/${command.service}\nRegistry saved; DNS changes, when enabled, run asynchronously. Use project-registry status to check DNS.\n`,
     )
   }
   if (command.kind === "user-default-domain-get") {

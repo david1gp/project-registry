@@ -420,10 +420,9 @@ export function projectRegistryCliArgumentsParse(args: readonly string[]): Resul
   const hasOnlyPortOption = port !== undefined && Object.keys(caddy).length === 1
   const hasLabelOptions = hasLabels || removeLabels.length > 0 || clearLabels
   const hasFilterOptions = section !== undefined || hasListMetadata
-  const hasMutationOptions =
+  const hasNonServiceMutationOptions =
     hasCaddyOptions ||
     flagName !== undefined ||
-    service !== undefined ||
     ownership !== undefined ||
     noDns ||
     hasLabelOptions ||
@@ -431,6 +430,7 @@ export function projectRegistryCliArgumentsParse(args: readonly string[]): Resul
     tokenStdin ||
     stateFile !== undefined ||
     stateDir !== undefined
+  const hasMutationOptions = hasNonServiceMutationOptions || service !== undefined
   const hasAccessLogOptions = owner !== undefined || before !== undefined
   const hasStateOptions = stateFile !== undefined || stateDir !== undefined
   const hasHttp = booleans.has("--http")
@@ -730,11 +730,14 @@ export function projectRegistryCliArgumentsParse(args: readonly string[]): Resul
     value !== undefined &&
     extra.length === 0 &&
     limit === undefined &&
-    !hasMutationOptions &&
+    !hasNonServiceMutationOptions &&
     !hasAccessLogOptions &&
     !hasHttp
   ) {
     if (!projectNamePattern.test(value)) return createResultError(op, "Project name is invalid.")
+    if (service !== undefined) {
+      return createResult({ command: { kind: "project-service-delete", name: value, service }, json, socket })
+    }
     return createResult({ command: { kind: "project-delete", name: value }, json, socket })
   }
   if (
