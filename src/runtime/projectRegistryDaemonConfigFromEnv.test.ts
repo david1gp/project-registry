@@ -2,6 +2,25 @@ import { describe, expect, test } from "bun:test"
 import { projectRegistryDaemonConfigFromEnv } from "./projectRegistryDaemonConfigFromEnv.js"
 
 describe("projectRegistryDaemonConfigFromEnv dev flag", () => {
+  test("idle expiry is independently opt-in and rejects invalid values", () => {
+    for (const [value, expected] of [
+      ["false", false],
+      ["true", true],
+    ] as const) {
+      const result = projectRegistryDaemonConfigFromEnv({
+        PROJECT_REGISTRY_REPOSITORY_PATH: "/tmp/repo",
+        PROJECT_REGISTRY_DEV_ENABLED: "true",
+        PROJECT_REGISTRY_DEV_IDLE_EXPIRY_ENABLED: value,
+      })
+      expect(result.success).toBe(true)
+      if (result.success) expect(result.data.dev.idleExpiryEnabled).toBe(expected)
+    }
+    const invalid = projectRegistryDaemonConfigFromEnv({
+      PROJECT_REGISTRY_REPOSITORY_PATH: "/tmp/repo",
+      PROJECT_REGISTRY_DEV_IDLE_EXPIRY_ENABLED: "maybe",
+    })
+    expect(invalid.success).toBe(false)
+  })
   test("keeps dev verbs off when the flag is unset", () => {
     const result = projectRegistryDaemonConfigFromEnv({ PROJECT_REGISTRY_REPOSITORY_PATH: "/tmp/repo" })
 

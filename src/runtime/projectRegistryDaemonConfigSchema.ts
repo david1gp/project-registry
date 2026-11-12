@@ -152,6 +152,7 @@ const cloudflareDnsSchema = a.strictObject({
 
 const devSchema = a.strictObject({
   enabled: a.optional(a.boolean(), false),
+  idleExpiryEnabled: a.optional(a.boolean()),
   projectsRoot: a.optional(absolutePathSchema),
 })
 

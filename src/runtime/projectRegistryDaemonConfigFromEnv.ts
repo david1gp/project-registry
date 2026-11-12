@@ -74,6 +74,7 @@ export function projectRegistryDaemonConfigFromEnv(
       "PROJECT_REGISTRY_CLOUDFLARE_CREDENTIALS_DIR",
       "PROJECT_REGISTRY_CLOUDFLARE_DNS_ENABLED",
       "PROJECT_REGISTRY_DEV_ENABLED",
+      "PROJECT_REGISTRY_DEV_IDLE_EXPIRY_ENABLED",
       "PROJECT_REGISTRY_DEV_PROJECTS_ROOT",
       "PROJECT_REGISTRY_PRIVATE_DNS_ENABLED",
       "PROJECT_REGISTRY_PRIVATE_DNS_TAILNET",
@@ -132,6 +133,7 @@ export function projectRegistryDaemonConfigFromEnv(
     )
     const cloudflareDnsEnabled = environmentBoolean(values, "PROJECT_REGISTRY_CLOUDFLARE_DNS_ENABLED")
     const devEnabled = environmentBoolean(values, "PROJECT_REGISTRY_DEV_ENABLED")
+    const devIdleExpiryEnabled = environmentBoolean(values, "PROJECT_REGISTRY_DEV_IDLE_EXPIRY_ENABLED")
     const privateDnsEnabled = environmentBoolean(values, "PROJECT_REGISTRY_PRIVATE_DNS_ENABLED")
     const localDomainsEnabled = environmentBoolean(values, "PROJECT_REGISTRY_LOCAL_DOMAINS_ENABLED")
     let defaultUserDomains: unknown
@@ -188,6 +190,7 @@ export function projectRegistryDaemonConfigFromEnv(
         initializeFromGeneratedConfig === undefined) ||
       (values.PROJECT_REGISTRY_CLOUDFLARE_DNS_ENABLED !== undefined && cloudflareDnsEnabled === undefined) ||
       (values.PROJECT_REGISTRY_DEV_ENABLED !== undefined && devEnabled === undefined) ||
+      (values.PROJECT_REGISTRY_DEV_IDLE_EXPIRY_ENABLED !== undefined && devIdleExpiryEnabled === undefined) ||
       (values.PROJECT_REGISTRY_PRIVATE_DNS_ENABLED !== undefined && privateDnsEnabled === undefined) ||
       (values.PROJECT_REGISTRY_LOCAL_DOMAINS_ENABLED !== undefined && localDomainsEnabled === undefined)
     ) {
@@ -283,6 +286,7 @@ export function projectRegistryDaemonConfigFromEnv(
         // Deliberately inverted from this file's default-on idiom
         // (cloudflareDns above): dev verbs stay dark until the cutover.
         enabled: devEnabled === true,
+        ...(devIdleExpiryEnabled === undefined ? {} : { idleExpiryEnabled: devIdleExpiryEnabled }),
         ...(values.PROJECT_REGISTRY_DEV_PROJECTS_ROOT?.trim()
           ? { projectsRoot: values.PROJECT_REGISTRY_DEV_PROJECTS_ROOT.trim() }
           : {}),
