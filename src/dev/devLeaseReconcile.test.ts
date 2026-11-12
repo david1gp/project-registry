@@ -53,6 +53,22 @@ function runnerCreate(calls: RunnerCall[], aliveUnits: readonly string[]): DevPr
 }
 
 describe("devLeaseReconcile", () => {
+  test("default reconciliation keeps idle live leases and activates a live starting lease", async () => {
+    const calls: RunnerCall[] = []
+    const tracking = trackingCreate([
+      leaseCreate({ name: "old", lastSeenAt: 0, ttlMs: 1000 }),
+      leaseCreate({ name: "starting", state: "starting", lastSeenAt: 0, ttlMs: 1000 }),
+    ])
+    const result = await devLeaseReconcile({
+      tracking,
+      runner: runnerCreate(calls, ["dev-tim-old.service", "dev-tim-starting.service"]),
+      clock: () => 5000,
+    })
+    expect(result).toEqual({ success: true, data: { changed: true, removed: 0, activated: 1, touched: 0 } })
+    expect(tracking.state.leases.map((lease) => lease.state)).toEqual(["active", "active"])
+    expect(calls.some((call) => call.args[0] === "stop")).toBe(false)
+  })
+
   test("expires an idle lease but keeps a recently touched one", async () => {
     const calls: RunnerCall[] = []
     const tracking = trackingCreate([
@@ -61,6 +77,7 @@ describe("devLeaseReconcile", () => {
     ])
     let regenerations = 0
     const result = await devLeaseReconcile({
+      idleExpiryEnabled: true,
       tracking,
       runner: runnerCreate(calls, ["dev-tim-alt.service", "dev-tim-neu.service"]),
       clock: () => 5_000,
@@ -80,6 +97,7 @@ describe("devLeaseReconcile", () => {
   test("a lease exactly at its ttl is kept; one millisecond past is dropped", async () => {
     const at = trackingCreate([leaseCreate({ name: "rand", lastSeenAt: 4_000, ttlMs: 1_000 })])
     const atResult = await devLeaseReconcile({
+      idleExpiryEnabled: true,
       tracking: at,
       runner: runnerCreate([], ["dev-tim-rand.service"]),
       clock: () => 5_000,
@@ -90,6 +108,7 @@ describe("devLeaseReconcile", () => {
 
     const past = trackingCreate([leaseCreate({ name: "rand", lastSeenAt: 3_999, ttlMs: 1_000 })])
     const pastResult = await devLeaseReconcile({
+      idleExpiryEnabled: true,
       tracking: past,
       runner: runnerCreate([], ["dev-tim-rand.service"]),
       clock: () => 5_000,
@@ -225,6 +244,7 @@ describe("devLeaseReconcile", () => {
     const calls: RunnerCall[] = []
     const tracking = trackingCreate([leaseCreate({ name: "akademie", lastSeenAt: 0, ttlMs: 1_000 })])
     const result = await devLeaseReconcile({
+      idleExpiryEnabled: true,
       tracking,
       runner: runnerCreate(calls, ["dev-tim-akademie.service"]),
       clock: () => 5_000,

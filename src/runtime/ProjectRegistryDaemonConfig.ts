@@ -53,6 +53,7 @@ export type ProjectRegistryDaemonConfig = {
   }
   dev: {
     enabled: boolean
+    idleExpiryEnabled?: boolean
     projectsRoot?: string
   }
   privateDns: {

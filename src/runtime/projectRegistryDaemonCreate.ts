@@ -1699,6 +1699,7 @@ export function projectRegistryDaemonCreate(options: ProjectRegistryDaemonOption
           tracking: devTracking,
           runner: devProcessRunner,
           clock: devClock,
+          idleExpiryEnabled: config.dev.idleExpiryEnabled,
           ...(devActivity === undefined ? {} : { activity: devActivity }),
         })
         if (!devStartupR.success) {
@@ -1732,6 +1733,7 @@ export function projectRegistryDaemonCreate(options: ProjectRegistryDaemonOption
               tracking: devTracking,
               runner: devProcessRunner,
               clock: devClock,
+              idleExpiryEnabled: config.dev.idleExpiryEnabled,
               regenerate: () => caddyApplication.regenerate(),
               ...(devActivity === undefined ? {} : { activity: devActivity }),
             }).then(

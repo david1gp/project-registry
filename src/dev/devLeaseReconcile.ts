@@ -19,7 +19,8 @@ export type DevLeaseReconcileResult = {
  * optional injected source over the shared dev-lease access log) touches
  * active leases first; then, for every tracked lease in order: a `stopping`
  * leftover or a dead unit is stopped (best-effort) and dropped; an alive
- * lease idle longer than its ttlMs is stopped and dropped; an alive
+ * lease idle longer than its ttlMs is stopped and dropped only when idle
+ * expiry is explicitly enabled; an alive
  * non-active lease is marked active. Active, alive, fresh leases are kept
  * untouched.
  *
@@ -31,12 +32,13 @@ export type DevLeaseReconcileResult = {
  * as before: only an idempotent `up` refreshes lastSeenAt.
  *
  * A failing activity source yields zero observations for that tick, so a
- * broken reader degrades to TTL expiry instead of pinning leases alive.
+ * broken reader degrades to TTL expiry when expiry is enabled.
  */
 export function devLeaseReconcile(options: {
   tracking: DevLeaseTracking
   runner: DevProcessRunner
   clock?: () => number
+  idleExpiryEnabled?: boolean
   regenerate?: () => PromiseResult<CaddyApplicationResult>
   activity?: DevLeaseActivitySource
 }): PromiseResult<DevLeaseReconcileResult> {
@@ -52,6 +54,7 @@ async function reconcileInternal(
     tracking: DevLeaseTracking
     runner: DevProcessRunner
     clock?: () => number
+    idleExpiryEnabled?: boolean
     regenerate?: () => PromiseResult<CaddyApplicationResult>
     activity?: DevLeaseActivitySource
   },
@@ -97,7 +100,7 @@ async function reconcileInternal(
       removed += 1
       continue
     }
-    if (now - lease.lastSeenAt > lease.ttlMs) {
+    if (options.idleExpiryEnabled === true && now - lease.lastSeenAt > lease.ttlMs) {
       await devUnitStop({ runner: options.runner, unit: lease.unit })
       removed += 1
       continue

@@ -2296,7 +2296,7 @@ describe("projectRegistryDaemonCreate dev lifecycle", () => {
   }
 
   test("drops dead-unit leases at startup and reaps idle leases on the unref'd interval", async () => {
-    const daemonConfig = config({ dev: { enabled: true, projectsRoot: "/projects" } })
+    const daemonConfig = config({ dev: { enabled: true, idleExpiryEnabled: true, projectsRoot: "/projects" } })
     const files = new Map<string, string>()
     const writerR = devLeaseTrackingCreate({
       path: devLeaseTrackingPath(daemonConfig.serverIpCachePath),
@@ -2381,7 +2381,7 @@ describe("projectRegistryDaemonCreate dev lifecycle", () => {
   })
 
   test("observed HTTP activity keeps an idle lease alive across reaper ticks", async () => {
-    const daemonConfig = config({ dev: { enabled: true, projectsRoot: "/projects" } })
+    const daemonConfig = config({ dev: { enabled: true, idleExpiryEnabled: true, projectsRoot: "/projects" } })
     const files = new Map<string, string>()
     const writerR = devLeaseTrackingCreate({
       path: devLeaseTrackingPath(daemonConfig.serverIpCachePath),
