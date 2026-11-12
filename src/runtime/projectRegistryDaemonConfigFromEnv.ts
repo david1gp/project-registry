@@ -22,6 +22,16 @@ function environmentBoolean(environment: Environment, name: string): boolean | u
   return undefined
 }
 
+function environmentTrimmed<K extends string>(
+  environment: Environment,
+  name: string,
+  key: K,
+): Partial<Record<K, string>> {
+  const value = environment[name]?.trim()
+  if (value === undefined || value === "") return {}
+  return { [key]: value } as Partial<Record<K, string>>
+}
+
 export function projectRegistryDaemonConfigFromEnv(
   environment: unknown = Bun.env,
 ): Result<ProjectRegistryDaemonConfig> {
@@ -80,6 +90,16 @@ export function projectRegistryDaemonConfigFromEnv(
       "PROJECT_REGISTRY_DEV_PROJECTS_ROOT",
       "PROJECT_REGISTRY_DEV_ROOTS",
       "PROJECT_REGISTRY_DEV_HEALTH_TIMEOUT_MS",
+      "PROJECT_REGISTRY_SERVICES_ENABLED",
+      "PROJECT_REGISTRY_SERVICES_USER",
+      "PROJECT_REGISTRY_SERVICES_GROUP",
+      "PROJECT_REGISTRY_SERVICES_HOME",
+      "PROJECT_REGISTRY_SERVICES_ROOT",
+      "PROJECT_REGISTRY_SERVICES_ALLOWED_USERS",
+      "PROJECT_REGISTRY_SERVICES_SLICE",
+      "PROJECT_REGISTRY_SERVICES_UNIT_DIR",
+      "PROJECT_REGISTRY_SERVICES_PATH",
+      "PROJECT_REGISTRY_SERVICES_AUDIT_LOG",
       "PROJECT_REGISTRY_PRIVATE_DNS_ENABLED",
       "PROJECT_REGISTRY_PRIVATE_DNS_TAILNET",
       "PROJECT_REGISTRY_PRIVATE_DNS_NODE_ADDRESS",
@@ -141,6 +161,7 @@ export function projectRegistryDaemonConfigFromEnv(
     const cloudflareDnsEnabled = environmentBoolean(values, "PROJECT_REGISTRY_CLOUDFLARE_DNS_ENABLED")
     const devEnabled = environmentBoolean(values, "PROJECT_REGISTRY_DEV_ENABLED")
     const devIdleExpiryEnabled = environmentBoolean(values, "PROJECT_REGISTRY_DEV_IDLE_EXPIRY_ENABLED")
+    const servicesEnabled = environmentBoolean(values, "PROJECT_REGISTRY_SERVICES_ENABLED")
     const privateDnsEnabled = environmentBoolean(values, "PROJECT_REGISTRY_PRIVATE_DNS_ENABLED")
     const localDomainsEnabled = environmentBoolean(values, "PROJECT_REGISTRY_LOCAL_DOMAINS_ENABLED")
     let defaultUserDomains: unknown
@@ -199,6 +220,7 @@ export function projectRegistryDaemonConfigFromEnv(
       (values.PROJECT_REGISTRY_CLOUDFLARE_DNS_ENABLED !== undefined && cloudflareDnsEnabled === undefined) ||
       (values.PROJECT_REGISTRY_DEV_ENABLED !== undefined && devEnabled === undefined) ||
       (values.PROJECT_REGISTRY_DEV_IDLE_EXPIRY_ENABLED !== undefined && devIdleExpiryEnabled === undefined) ||
+      (values.PROJECT_REGISTRY_SERVICES_ENABLED !== undefined && servicesEnabled === undefined) ||
       (values.PROJECT_REGISTRY_PRIVATE_DNS_ENABLED !== undefined && privateDnsEnabled === undefined) ||
       (values.PROJECT_REGISTRY_LOCAL_DOMAINS_ENABLED !== undefined && localDomainsEnabled === undefined)
     ) {
@@ -328,6 +350,25 @@ export function projectRegistryDaemonConfigFromEnv(
           : {}),
         ...(devRoots === undefined ? {} : { roots: devRoots }),
         ...(devHealthTimeoutMs === undefined ? {} : { healthTimeoutMs: devHealthTimeoutMs }),
+      },
+      services: {
+        // Dark by default like dev: no unit file is written until enabled.
+        enabled: servicesEnabled === true,
+        ...environmentTrimmed(values, "PROJECT_REGISTRY_SERVICES_USER", "user"),
+        ...environmentTrimmed(values, "PROJECT_REGISTRY_SERVICES_GROUP", "group"),
+        ...environmentTrimmed(values, "PROJECT_REGISTRY_SERVICES_HOME", "homeDirectory"),
+        ...environmentTrimmed(values, "PROJECT_REGISTRY_SERVICES_ROOT", "projectsRoot"),
+        ...environmentTrimmed(values, "PROJECT_REGISTRY_SERVICES_SLICE", "slice"),
+        ...environmentTrimmed(values, "PROJECT_REGISTRY_SERVICES_UNIT_DIR", "unitDirectory"),
+        ...environmentTrimmed(values, "PROJECT_REGISTRY_SERVICES_PATH", "pathValue"),
+        ...environmentTrimmed(values, "PROJECT_REGISTRY_SERVICES_AUDIT_LOG", "auditLogPath"),
+        ...(values.PROJECT_REGISTRY_SERVICES_ALLOWED_USERS?.trim()
+          ? {
+              allowedUsers: values.PROJECT_REGISTRY_SERVICES_ALLOWED_USERS.split(",")
+                .map((user) => user.trim())
+                .filter(Boolean),
+            }
+          : {}),
       },
       cloudflareDns: {
         enabled: cloudflareDnsEnabled !== false,

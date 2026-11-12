@@ -83,6 +83,10 @@ export function projectRegistryDaemonConfigValidate(input: unknown): Result<Proj
       return createResultError(op, "port range start must not exceed its end")
     }
 
+    if (parsed.output.services.enabled && parsed.output.mode !== "root") {
+      return createResultError(op, "managed services require the root daemon")
+    }
+
     if (parsed.output.privateDns.enabled) {
       if (parsed.output.privateDns.tailnet === undefined) {
         return createResultError(op, "private DNS tailnet is required when private DNS is enabled")
@@ -141,6 +145,11 @@ export function projectRegistryDaemonConfigValidate(input: unknown): Result<Proj
       session: { ...parsed.output.session },
       portRange: { ...parsed.output.portRange },
       dev: { ...parsed.output.dev },
+      services: {
+        ...parsed.output.services,
+        homeDirectory: parsed.output.services.homeDirectory ?? `/home/${parsed.output.services.user}`,
+        allowedUsers: [...new Set(parsed.output.services.allowedUsers)],
+      },
       webListener: { ...parsed.output.webListener },
       cloudflareDns: { ...parsed.output.cloudflareDns },
       privateDns: { ...parsed.output.privateDns, upstreamResolvers: [...parsed.output.privateDns.upstreamResolvers] },

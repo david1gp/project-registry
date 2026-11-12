@@ -10,7 +10,11 @@ import { devLeaseTrackingCreate } from "../dev/devLeaseTrackingCreate.js"
 import { devLeaseTrackingFilesystemDefault } from "../dev/devLeaseTrackingFilesystemDefault.js"
 import { devLeaseTrackingPath } from "../dev/devLeaseTrackingPath.js"
 import { devProcessRunnerDefault } from "../dev/devProcessRunnerDefault.js"
+import { devProjectFilesystemDefault } from "../dev/devProjectFilesystemDefault.js"
 import { projectDocsPublicationStoreCreate } from "../docs/projectDocsPublicationStoreCreate.js"
+import { managedServiceFilesystemDefault } from "../managed-service/managedServiceFilesystemDefault.js"
+import { managedServiceLogStreamerDefault } from "../managed-service/managedServiceLogStreamerDefault.js"
+import { managedServicesCreate } from "../managed-service/managedServicesCreate.js"
 import type { ProjectRepository } from "../project-store/ProjectRepository.js"
 import { sessionActorResolve } from "../session/sessionActorResolve.js"
 import { sessionRequestResolve } from "../session/sessionRequestResolve.js"
@@ -252,6 +256,8 @@ export function projectRegistryDaemonCreate(options: ProjectRegistryDaemonOption
   let devTrackingFilesystemOption: ProjectRegistryDaemonOptions["devTrackingFilesystem"]
   let devProcessRunnerOption: ProjectRegistryDaemonOptions["devProcessRunner"]
   let devCommandFilesystemOption: ProjectRegistryDaemonOptions["devCommandFilesystem"]
+  let managedServiceFilesystemOption: ProjectRegistryDaemonOptions["managedServiceFilesystem"]
+  let managedServiceLogStreamerOption: ProjectRegistryDaemonOptions["managedServiceLogStreamer"]
   let devFetchOption: ProjectRegistryDaemonOptions["devFetch"]
   let devClockOption: ProjectRegistryDaemonOptions["devClock"]
   let devWaitOption: ProjectRegistryDaemonOptions["devWait"]
@@ -289,6 +295,8 @@ export function projectRegistryDaemonCreate(options: ProjectRegistryDaemonOption
     devTrackingFilesystemOption = options.devTrackingFilesystem
     devProcessRunnerOption = options.devProcessRunner
     devCommandFilesystemOption = options.devCommandFilesystem
+    managedServiceFilesystemOption = options.managedServiceFilesystem
+    managedServiceLogStreamerOption = options.managedServiceLogStreamer
     devFetchOption = options.devFetch
     devClockOption = options.devClock
     devWaitOption = options.devWait
@@ -1354,6 +1362,26 @@ export function projectRegistryDaemonCreate(options: ProjectRegistryDaemonOption
     readiness: () => repository.readiness(),
     recover: () => gitQueueRun("projectRegistryRepositoryRecover", () => repository.recover()),
   }
+  // Managed services read rows through the guarded (serialized) repository
+  // and reconcile after persistence; disabled config makes every call a no-op.
+  const managedServices = managedServicesCreate({
+    config: config.services,
+    projectsRead: async () => {
+      const snapshotR = await guardedRepository.read()
+      if (!snapshotR.success) return snapshotR
+      return createResult(snapshotR.data.projects)
+    },
+    runner: devProcessRunner,
+    filesystem: managedServiceFilesystemOption ?? managedServiceFilesystemDefault(),
+    projectFilesystem: devCommandFilesystemOption ?? devProjectFilesystemDefault(),
+    logStreamer: managedServiceLogStreamerOption ?? managedServiceLogStreamerDefault(),
+    ...(serverIpLoggerOption === undefined ? {} : { logger: serverIpLoggerOption }),
+  })
+  function managedServicesSchedule(): void {
+    if (!config.services.enabled) return
+    void managedServices.reconcile().catch(() => undefined)
+  }
+
   const accessLogSourceR =
     accessLogSourceOption !== undefined
       ? createResult(accessLogSourceOption)
@@ -1428,6 +1456,7 @@ export function projectRegistryDaemonCreate(options: ProjectRegistryDaemonOption
         clock: devClock,
         ...(devWaitOption === undefined ? {} : { wait: devWaitOption }),
       },
+      managedServices,
       cloudflareCredentials: cloudflareCredentialsR.data,
       cloudflareDnsStatus: () => {
         try {
@@ -1455,9 +1484,10 @@ export function projectRegistryDaemonCreate(options: ProjectRegistryDaemonOption
           return undefined
         }
       },
-      ...(config.cloudflareDns.enabled || config.privateDns.enabled || wikiSyncEnabled
+      ...(config.cloudflareDns.enabled || config.privateDns.enabled || wikiSyncEnabled || config.services.enabled
         ? {
             projectCreateAfterPersistence: (project, createOptions) => {
+              managedServicesSchedule()
               if (config.cloudflareDns.enabled) {
                 try {
                   cloudflareDns.projectCreateAfterPersistence(project, createOptions)
@@ -1488,6 +1518,7 @@ export function projectRegistryDaemonCreate(options: ProjectRegistryDaemonOption
           }
         : {}),
       projectEditAfterPersistence: (previous, project) => {
+        managedServicesSchedule()
         try {
           cloudflareDns.projectEditAfterPersistence(previous, project)
         } catch {
@@ -1512,6 +1543,7 @@ export function projectRegistryDaemonCreate(options: ProjectRegistryDaemonOption
         }
       },
       projectDeleteAfterPersistence: (project) => {
+        managedServicesSchedule()
         cloudflareDns.projectDeleteAfterPersistence(project)
         try {
           privateDns.projectDeleteAfterPersistence(project)
@@ -1524,9 +1556,11 @@ export function projectRegistryDaemonCreate(options: ProjectRegistryDaemonOption
           // Post-persistence integrations must not fail the mutation.
         }
       },
-      ...(wikiSyncEnabled
+      ...(wikiSyncEnabled || config.services.enabled
         ? {
             projectOrganizeAfterPersistence: () => {
+              managedServicesSchedule()
+              if (!wikiSyncEnabled) return
               try {
                 wikiSync.projectOrganizeAfterPersistence()
               } catch {
@@ -1722,6 +1756,13 @@ export function projectRegistryDaemonCreate(options: ProjectRegistryDaemonOption
       // awaiting the initial pass keeps it ordered with later mutations.
       await wikiSync.startup()
       if (state !== "starting") return startupFailure("daemon shutdown started")
+
+      // Managed services converge once at start (enabling+starting every
+      // autostart unit); failures are logged per unit and never fail startup.
+      if (config.services.enabled) {
+        await managedServices.reconcile(true).catch(() => undefined)
+        if (state !== "starting") return startupFailure("daemon shutdown started")
+      }
 
       try {
         userRefreshHandle = timer.setInterval(() => {

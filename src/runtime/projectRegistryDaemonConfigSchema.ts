@@ -164,6 +164,26 @@ const devSchema = a.strictObject({
   healthTimeoutMs: a.optional(a.pipe(a.number(), a.integer(), a.minValue(1_000), a.maxValue(600_000))),
 })
 
+const managedServiceIdentitySchema = a.pipe(a.string(), a.regex(/^[A-Za-z_][A-Za-z0-9_.-]*$/))
+
+// Registry-managed permanent services (`svc`). Disabled by default: no unit
+// file is ever written or removed until PROJECT_REGISTRY_SERVICES_ENABLED.
+const servicesSchema = a.strictObject({
+  enabled: a.optional(a.boolean(), false),
+  user: a.optional(managedServiceIdentitySchema, "projects"),
+  group: a.optional(managedServiceIdentitySchema, "projects"),
+  homeDirectory: a.optional(absolutePathSchema),
+  projectsRoot: a.optional(absolutePathSchema, "/projects"),
+  allowedUsers: a.optional(a.array(usernameSchema), ["leo", "david", "tim", "mit"]),
+  slice: a.optional(a.pipe(a.string(), a.regex(/^[A-Za-z0-9_.-]+\.slice$/)), "projects.slice"),
+  unitDirectory: a.optional(absolutePathSchema, "/etc/systemd/system"),
+  pathValue: a.optional(
+    a.pipe(a.string(), a.regex(/^\/[A-Za-z0-9_./-]*(?::\/[A-Za-z0-9_./-]*)*$/)),
+    "/usr/local/bin:/usr/bin:/bin",
+  ),
+  auditLogPath: a.optional(absolutePathSchema, "/var/lib/project-registry/managed-services-audit.jsonl"),
+})
+
 const ipv4Schema = a.pipe(
   a.string(),
   a.minLength(1),
@@ -282,4 +302,5 @@ export const projectRegistryDaemonConfigSchema = a.strictObject({
   cloudflareDns: a.optional(cloudflareDnsSchema, { enabled: true }),
   privateDns: a.optional(privateDnsSchema, { enabled: false }),
   dev: a.optional(devSchema, { enabled: false }),
+  services: a.optional(servicesSchema, { enabled: false }),
 })

@@ -7,9 +7,12 @@ export function projectRegistryDaemonServerConfigurationCreate(
   // idle timeout applies to both HTTP and Unix requests awaiting a response.
   const values: Record<string, unknown> = {
     fetch: (request: Request, server: { timeout: (request: Request, seconds: number) => void }) => {
+      const pathname = new URL(request.url).pathname
+      // Managed-service log follows stream indefinitely and restarts can
+      // outlast the idle timeout; both are bounded by the client instead.
       if (
-        request.method === "POST" &&
-        /^\/api\/v1\/users\/[^/]+\/projects\/[^/]+\/fix-acl$/.test(new URL(request.url).pathname)
+        (request.method === "POST" && /^\/api\/v1\/users\/[^/]+\/projects\/[^/]+\/fix-acl$/.test(pathname)) ||
+        /^\/api\/v1\/services\/[^/]+\/(?:logs|start|stop|restart|enable|disable)$/.test(pathname)
       ) {
         server.timeout(request, 0)
       }

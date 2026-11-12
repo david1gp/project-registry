@@ -2,6 +2,7 @@ import type { CaddyConfigOptions } from "../caddy/caddyConfigOptionsSchema.js"
 import type { CaddyInstanceConfig } from "../caddy/caddyInstanceConfigSchema.js"
 import type { DevRoot } from "../dev/DevRoot.js"
 import type { LocalDomainsOptions } from "../local-domains/localDomainsOptionsSchema.js"
+import type { ManagedServiceConfig } from "../managed-service/ManagedServiceConfig.js"
 import type { ProjectPortRange } from "../project/projectPortNext.js"
 
 export type ProjectRegistryDaemonConfig = {
@@ -59,6 +60,7 @@ export type ProjectRegistryDaemonConfig = {
     roots?: DevRoot[]
     healthTimeoutMs?: number
   }
+  services: ManagedServiceConfig
   privateDns: {
     enabled: boolean
     grandfatheredHostnames: string[]

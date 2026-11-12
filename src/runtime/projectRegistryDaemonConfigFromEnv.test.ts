@@ -107,4 +107,54 @@ describe("projectRegistryDaemonConfigFromEnv dev flag", () => {
       expect(result.success).toBe(false)
     }
   })
+
+  test("managed services stay disabled by default with the projects-user defaults", () => {
+    const result = projectRegistryDaemonConfigFromEnv({ PROJECT_REGISTRY_REPOSITORY_PATH: "/tmp/repo" })
+    expect(result.success).toBe(true)
+    if (!result.success) return
+    expect(result.data.services).toMatchObject({
+      enabled: false,
+      user: "projects",
+      group: "projects",
+      homeDirectory: "/home/projects",
+      projectsRoot: "/projects",
+      allowedUsers: ["leo", "david", "tim", "mit"],
+      slice: "projects.slice",
+      unitDirectory: "/etc/systemd/system",
+    })
+  })
+
+  test("managed services read their env overrides and refuse user-mode daemons", () => {
+    const result = projectRegistryDaemonConfigFromEnv({
+      PROJECT_REGISTRY_REPOSITORY_PATH: "/tmp/repo",
+      PROJECT_REGISTRY_SERVICES_ENABLED: "true",
+      PROJECT_REGISTRY_SERVICES_USER: "svc",
+      PROJECT_REGISTRY_SERVICES_ROOT: "/srv/projects",
+      PROJECT_REGISTRY_SERVICES_ALLOWED_USERS: "leo, tim",
+    })
+    expect(result.success).toBe(true)
+    if (!result.success) return
+    expect(result.data.services).toMatchObject({
+      enabled: true,
+      user: "svc",
+      homeDirectory: "/home/svc",
+      projectsRoot: "/srv/projects",
+      allowedUsers: ["leo", "tim"],
+    })
+
+    for (const environment of [
+      { PROJECT_REGISTRY_SERVICES_ENABLED: "maybe" },
+      { PROJECT_REGISTRY_SERVICES_ENABLED: "true", PROJECT_REGISTRY_SERVICES_SLICE: "projects" },
+      {
+        PROJECT_REGISTRY_SERVICES_ENABLED: "true",
+        PROJECT_REGISTRY_MODE: "user",
+        USER: "leo",
+        XDG_RUNTIME_DIR: "/run/user/1000",
+      },
+    ]) {
+      expect(
+        projectRegistryDaemonConfigFromEnv({ PROJECT_REGISTRY_REPOSITORY_PATH: "/tmp/repo", ...environment }).success,
+      ).toBe(false)
+    }
+  })
 })

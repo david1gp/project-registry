@@ -21,6 +21,7 @@ import type { DevLeaseTracking } from "../dev/DevLeaseTracking.js"
 import type { DevLeaseRecord } from "../dev/devLeaseRecordSchema.js"
 import type { DevLeaseTrackingState } from "../dev/devLeaseTrackingState.js"
 import { projectDocsPublicationStoreCreate } from "../docs/projectDocsPublicationStoreCreate.js"
+import type { ManagedServices } from "../managed-service/ManagedServices.js"
 import type { Project } from "../project/Project.js"
 import type { ProjectKey } from "../project/projectKey.js"
 import { projectMigrate } from "../project/projectMigrate.js"
@@ -3760,5 +3761,93 @@ describe("project service delete API", () => {
     )
     expect(foreign.response.status).toBe(403)
     expect(application.projectChanges).toBe(0)
+  })
+})
+
+describe("managed service routes", () => {
+  const status = {
+    owner: "leo",
+    project: "archive",
+    service: "web",
+    unit: "proj-archive-web.service",
+    port: 4310,
+    domains: ["archive.example"],
+    autostart: true,
+    activeState: "active",
+    subState: "running",
+    unitFileState: "enabled",
+    mainPid: 42,
+  }
+
+  function servicesFake(calls: string[]): Pick<ManagedServices, "enabled" | "status" | "act" | "logs"> {
+    return {
+      enabled: true,
+      status: async (actor, target) => {
+        calls.push(`status ${actor.username} ${target.project} ${target.service ?? "-"}`)
+        return createResult([status])
+      },
+      act: async (actor, action, target) => {
+        calls.push(`${action} ${actor.username} ${target.project} ${target.service ?? "-"}`)
+        return createResult(status)
+      },
+      logs: async (actor, target, lines, follow) => {
+        calls.push(`logs ${actor.username} ${target.project} ${lines} ${follow}`)
+        return createResult({ stream: new Response("line\n").body!, cancel: () => {} })
+      },
+    }
+  }
+
+  test("socket callers reach status, actions, and plain-text logs with the service selector", async () => {
+    const calls: string[] = []
+    const handler = projectRegistryApiHandlerCreate({
+      repository: repositoryCreate(),
+      caddyApplication: caddyApplicationCreate(),
+      managedServices: servicesFake(calls),
+    })
+    const tim = { transport: "unix", username: "tim" } as const
+
+    const listed = await requestJson(handler, "/api/v1/services/archive/status?service=web", tim)
+    expect(listed.body).toEqual({ success: true, data: { services: [status] } })
+    const restarted = await requestJson(handler, "/api/v1/services/archive/restart", tim, "POST", { service: "web" })
+    expect(restarted.body).toEqual({ success: true, data: { service: status } })
+    const logs = await handler(new Request("http://localhost/api/v1/services/archive/logs?lines=20&follow=1"), tim)
+    expect(logs.headers.get("content-type")).toStartWith("text/plain")
+    expect(await logs.text()).toBe("line\n")
+    expect(calls).toEqual(["status tim archive web", "restart tim archive web", "logs tim archive 20 true"])
+  })
+
+  test("rejects browser transport, bad selectors, unbounded log requests, and wrong methods", async () => {
+    const calls: string[] = []
+    const handler = projectRegistryApiHandlerCreate({
+      repository: repositoryCreate(),
+      caddyApplication: caddyApplicationCreate(),
+      managedServices: servicesFake(calls),
+    })
+    const tim = { transport: "unix", username: "tim" } as const
+    const http = await requestJson(handler, "/api/v1/services/archive/status", {
+      transport: "http",
+      access: {
+        actorResolve: async () => createResult({ subject: "s", username: "tim", role: "own" }),
+        ownerRoleResolve: async () => createResult("own"),
+      },
+    } as ProjectRegistryDaemonRequestContext)
+    expect(http.response.status).toBe(404)
+    expect(
+      (await requestJson(handler, "/api/v1/services/archive/stop", tim, "POST", { service: "../x" })).response.status,
+    ).toBe(400)
+    expect((await requestJson(handler, "/api/v1/services/archive/logs?lines=100000", tim)).response.status).toBe(400)
+    expect((await requestJson(handler, "/api/v1/services/archive/stop", tim)).response.status).toBe(405)
+    expect(calls).toEqual([])
+  })
+
+  test("answers services.disabled when the daemon has managed services off", async () => {
+    const handler = projectRegistryApiHandlerCreate({
+      repository: repositoryCreate(),
+      caddyApplication: caddyApplicationCreate(),
+      managedServices: { ...servicesFake([]), enabled: false },
+    })
+    const result = await requestJson(handler, "/api/v1/services/archive/status", { transport: "unix", username: "leo" })
+    expect(result.response.status).toBe(409)
+    expect(result.body).toMatchObject({ success: false, error: { code: "services.disabled" } })
   })
 })

@@ -4,12 +4,14 @@ import type { CaddyApplication } from "../caddy/CaddyApplication.js"
 import type { CaddyFetch } from "../caddy/CaddyFetch.js"
 import type { CaddyProcessRunner } from "../caddy/CaddyProcessRunner.js"
 import type { CaddyTimer } from "../caddy/CaddyTimer.js"
+import type { CloudflareDnsFetch } from "../cloudflare/CloudflareDnsFetch.js"
 import type { DevLeaseActivitySource } from "../dev/DevLeaseActivitySource.js"
 import type { DevLeaseTracking } from "../dev/DevLeaseTracking.js"
 import type { DevLeaseTrackingFilesystem } from "../dev/DevLeaseTrackingFilesystem.js"
 import type { DevProcessRunner } from "../dev/DevProcessRunner.js"
 import type { DevProjectFilesystem } from "../dev/DevProjectFilesystem.js"
-import type { CloudflareDnsFetch } from "../cloudflare/CloudflareDnsFetch.js"
+import type { ManagedServiceFilesystem } from "../managed-service/ManagedServiceFilesystem.js"
+import type { ManagedServiceLogStreamer } from "../managed-service/ManagedServiceLogStreamer.js"
 import type { ProjectPrivateTlsGateSnapshot } from "../project/projectPrivateTlsGate.js"
 import type { ProjectRepository } from "../project-store/ProjectRepository.js"
 import type { SessionStore } from "../session/SessionStore.js"
@@ -54,6 +56,8 @@ export type ProjectRegistryDaemonOptions = {
   devTrackingFilesystem?: DevLeaseTrackingFilesystem
   devProcessRunner?: DevProcessRunner
   devCommandFilesystem?: DevProjectFilesystem
+  managedServiceFilesystem?: ManagedServiceFilesystem
+  managedServiceLogStreamer?: ManagedServiceLogStreamer
   devFetch?: (input: string, init?: RequestInit) => Promise<Response>
   devClock?: () => number
   devWait?: (ms: number) => Promise<void>

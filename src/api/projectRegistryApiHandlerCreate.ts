@@ -26,6 +26,12 @@ import { devLeaseDownUseCase } from "../dev/devLeaseDownUseCase.js"
 import { devLeaseUpUseCase } from "../dev/devLeaseUpUseCase.js"
 import type { ProjectDocsPublicationStore } from "../docs/ProjectDocsPublicationStore.js"
 import { projectDocsPagePathIsValid, projectDocsPagePathNormalize } from "../docs/projectDocsPagePathIsValid.js"
+import { managedServiceActionSchema } from "../managed-service/ManagedServiceAction.js"
+import type { ManagedServices } from "../managed-service/ManagedServices.js"
+import {
+  managedServiceLogsDefaultLines,
+  managedServiceLogsMaximumLines,
+} from "../managed-service/managedServiceLogsArgs.js"
 import type { Project } from "../project/Project.js"
 import type { ProjectMutationOptions } from "../project/ProjectMutationOptions.js"
 import type { ProjectOrganizationRequest } from "../project/ProjectOrganizationRequest.js"
@@ -77,6 +83,7 @@ type ApiHandlerOptions = {
     clock?: () => number
     wait?: (ms: number) => Promise<void>
   }
+  managedServices?: Pick<ManagedServices, "enabled" | "status" | "act" | "logs">
   projectAccessLogSource?: ProjectAccessLogSource
   projectStaticAclRepair?: typeof projectStaticAclRepair
   routeCheckProbe?: typeof routeCheckProbe
@@ -115,6 +122,9 @@ type ApiRoute =
   | { kind: "dev-ls"; legacy: false; owner: string }
   | { kind: "dev-up"; legacy: false; owner: string }
   | { kind: "dev-down"; legacy: false; owner: string; name: string }
+  | { kind: "managed-service"; legacy: false; name: string; verb: "status" | "logs" | ManagedServiceActionName }
+
+type ManagedServiceActionName = "start" | "stop" | "restart" | "enable" | "disable"
 
 type ResultFailure = ResultErr & { hint?: string }
 
@@ -141,6 +151,10 @@ const apiFailureStatus: Record<string, number> = {
   "dev.disabled": 409,
   "dev.forbidden": 403,
   "dev.not-found": 404,
+  "services.disabled": 409,
+  "services.forbidden": 403,
+  "services.not-found": 404,
+  "services.unavailable": 503,
   "documentation.disabled": 409,
   "documentation.invalid-configuration": 500,
   "documentation.invalid-options": 400,
@@ -255,6 +269,14 @@ function routeParse(path: string, method: string): ApiRoute | undefined {
     const owner = segmentDecode(versionedCloudflareToken[1]!, ownerPattern)
     if (owner === undefined) return undefined
     return { kind: "cloudflare-token", legacy: false, owner }
+  }
+
+  const managedService = path.match(/^\/api\/v1\/services\/([^/]+)\/(status|logs|start|stop|restart|enable|disable)$/)
+  if (managedService !== null) {
+    const name = segmentDecode(managedService[1]!, projectNamePattern)
+    if (name === undefined) return undefined
+    const verb = managedService[2] as "status" | "logs" | ManagedServiceActionName
+    return { kind: "managed-service", legacy: false, name, verb }
   }
 
   const versionedDevDown = path.match(/^\/api\/v1\/users\/([^/]+)\/dev\/([^/]+)$/)
@@ -418,7 +440,8 @@ function routeRequiresProjectAccess(route: ApiRoute): boolean {
     route.kind === "cloudflare-token" ||
     route.kind === "dev-ls" ||
     route.kind === "dev-up" ||
-    route.kind === "dev-down"
+    route.kind === "dev-down" ||
+    route.kind === "managed-service"
   )
 }
 
@@ -537,6 +560,7 @@ function routeMethods(route: ApiRoute): readonly string[] {
   if (route.kind === "dev-ls") return ["GET"]
   if (route.kind === "dev-up") return ["POST"]
   if (route.kind === "dev-down") return ["DELETE"]
+  if (route.kind === "managed-service") return route.verb === "status" || route.verb === "logs" ? ["GET"] : ["POST"]
   if (route.kind === "regenerate") return ["POST"]
   return ["GET"]
 }
@@ -620,6 +644,29 @@ function devUpInputParse(input: unknown): Result<DevUpInput> {
     parsed.rootPath = root
   }
   return createResult(parsed)
+}
+
+function managedServiceIdParse(value: unknown): Result<string | undefined> {
+  const op = "projectRegistryApiManagedServiceInput"
+  if (value === undefined || value === null || value === "") return createResult(undefined)
+  if (typeof value !== "string" || !serviceIdPattern.test(value)) {
+    return createResultErrorCode(op, "A valid service ID is required.", "request.invalid")
+  }
+  return createResult(value)
+}
+
+function managedServiceLinesParse(value: string | null): Result<number> {
+  const op = "projectRegistryApiManagedServiceInput"
+  if (value === null) return createResult(managedServiceLogsDefaultLines)
+  const lines = /^[1-9]\d*$/.test(value) ? Number(value) : Number.NaN
+  if (!Number.isSafeInteger(lines) || lines > managedServiceLogsMaximumLines) {
+    return createResultErrorCode(
+      op,
+      `Log lines must be an integer from 1 through ${managedServiceLogsMaximumLines}.`,
+      "request.invalid",
+    )
+  }
+  return createResult(lines)
 }
 
 function cloudflareTokenIsValid(token: string): boolean {
@@ -1140,6 +1187,64 @@ export function projectRegistryApiHandlerCreate(options: ApiHandlerOptions): Pro
         )
       }
       return successResponse({ updated: true })
+    }
+
+    if (route.kind === "managed-service") {
+      // Socket-only: the svc verbs are operator tools bound to kernel-derived
+      // Unix identities, never browser sessions.
+      if (context.transport !== "unix") {
+        return errorResponse(
+          { code: "api.not-found", message: "The route was not found.", op: "projectRegistryApiHandle", status: 404 },
+          false,
+        )
+      }
+      const services = options.managedServices
+      if (services === undefined || !services.enabled) {
+        return errorResponse(
+          {
+            code: "services.disabled",
+            message: "Managed services are disabled.",
+            op: "projectRegistryApiManagedServiceGate",
+            status: 409,
+            hint: "Set PROJECT_REGISTRY_SERVICES_ENABLED=true on the daemon and restart it, then retry.",
+          },
+          false,
+        )
+      }
+      const actorR = await resolvedAccess.actorResolve()
+      if (!actorR.success) return resultErrorResponse(actorR, false, "projects")
+      let serviceInput: unknown = url.searchParams.get("service") ?? undefined
+      if (request.method === "POST") {
+        const body = await requestBodyJson(request, false)
+        if (body instanceof Response) return body
+        serviceInput = recordValue(body)?.service
+      }
+      const serviceR = managedServiceIdParse(serviceInput)
+      if (!serviceR.success) return resultErrorResponse(serviceR, false, "projects")
+      const target = { project: route.name, ...(serviceR.data === undefined ? {} : { service: serviceR.data }) }
+      if (route.verb === "status") {
+        const statusR = await services.status(actorR.data, target)
+        if (!statusR.success) return resultErrorResponse(statusR, false, "projects")
+        return successResponse({ services: statusR.data })
+      }
+      if (route.verb === "logs") {
+        const linesR = managedServiceLinesParse(url.searchParams.get("lines"))
+        if (!linesR.success) return resultErrorResponse(linesR, false, "projects")
+        const follow = url.searchParams.get("follow") === "1"
+        const logsR = await services.logs(actorR.data, target, linesR.data, follow)
+        if (!logsR.success) return resultErrorResponse(logsR, false, "projects")
+        const { stream, cancel } = logsR.data
+        request.signal.addEventListener("abort", cancel, { once: true })
+        return new Response(stream, {
+          status: 200,
+          headers: { "cache-control": "no-store", "content-type": "text/plain; charset=utf-8" },
+        })
+      }
+      const actionR = managedServiceActionSchema.options.includes(route.verb)
+        ? await services.act(actorR.data, route.verb, target)
+        : createResultErrorCode("projectRegistryApiManagedService", "Unknown action.", "request.invalid")
+      if (!actionR.success) return resultErrorResponse(actionR, false, "projects")
+      return successResponse({ service: actionR.data })
     }
 
     if (route.kind === "dev-ls" || route.kind === "dev-up" || route.kind === "dev-down") {
