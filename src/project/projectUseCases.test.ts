@@ -19,6 +19,7 @@ import type { ProjectKey } from "./projectKey.js"
 import { projectListUseCase } from "./projectListUseCase.js"
 import { projectMigrate } from "./projectMigrate.js"
 import { projectOrganize } from "./projectOrganize.js"
+import { projectServiceDelete } from "./projectServiceDelete.js"
 
 const currentRevision = "a".repeat(40)
 const staleRevision = "b".repeat(40)
@@ -1337,5 +1338,99 @@ describe("project use cases", () => {
     if (added.success) return
     expect(added.errorMessage).toContain("allowed Tailscale zones: wonder1.de")
     expect(repository.calls.edit).toHaveLength(1)
+  })
+
+  describe("projectServiceDelete", () => {
+    const key = { owner: "alice", name: "catalog" }
+
+    function catalog(serviceIds: string[]): Project {
+      const canonicalR = projectMigrate({
+        schemaVersion: 2,
+        owner: "alice",
+        name: "catalog",
+        services: serviceIds.map((id, index) => ({
+          id,
+          units: [],
+          ownership: "registry",
+          caddy: { port: 3000 + index, domains: [`${id}.example`] },
+        })),
+      })
+      if (!canonicalR.success) throw new Error(canonicalR.errorMessage)
+      return canonicalR.data
+    }
+
+    test("removes only the target service and preserves siblings", async () => {
+      const repository = repositoryCreate([catalog(["api", "default", "worker"])])
+      const access = accessCreate({ subject: "alice-subject", username: "alice", role: "own" }, { alice: "own" })
+      const persisted: [Project, Project][] = []
+
+      const result = await projectServiceDelete(
+        useCaseOptions(repository, access),
+        key,
+        "default",
+        { expectedRevision: currentRevision },
+        (previous, next) => persisted.push([previous, next]),
+      )
+
+      expect(result).toMatchObject({ success: true, data: { action: "edit", changed: true } })
+      expect(repository.calls.delete).toHaveLength(0)
+      expect(repository.calls.edit[0]).toMatchObject({
+        key,
+        options: { actor: "alice", expectedRevision: currentRevision },
+        project: {
+          services: [
+            { id: "api", caddy: { port: 3000, domains: ["api.example"] } },
+            { id: "worker", caddy: { port: 3002, domains: ["worker.example"] } },
+          ],
+        },
+      })
+      expect((repository.calls.edit[0]?.project as Project).services).toHaveLength(2)
+      expect(persisted.map(([previous, next]) => [previous.services.length, next.services.length])).toEqual([[3, 2]])
+    })
+
+    test("refuses to delete the last service and points to project delete", async () => {
+      const repository = repositoryCreate([catalog(["default"])])
+      const access = accessCreate({ subject: "alice-subject", username: "alice", role: "own" }, { alice: "own" })
+
+      const result = await projectServiceDelete(useCaseOptions(repository, access), key, "default", {
+        expectedRevision: currentRevision,
+      })
+
+      expect(result).toMatchObject({ success: false, code: "projects.conflict" })
+      if (result.success) return
+      expect(result.errorMessage).toContain("project delete")
+      expect(repository.calls.edit).toHaveLength(0)
+      expect(repository.calls.delete).toHaveLength(0)
+    })
+
+    test("refuses actors who may not mutate the owner's projects", async () => {
+      const repository = repositoryCreate([catalog(["api", "default"])])
+      const access = accessCreate({ subject: "bob-subject", username: "bob", role: "own" }, { alice: "own" })
+
+      const result = await projectServiceDelete(useCaseOptions(repository, access), key, "api", {
+        expectedRevision: currentRevision,
+      })
+
+      expect(result).toMatchObject({ success: false, code: "projects.forbidden" })
+      expect(repository.calls.edit).toHaveLength(0)
+    })
+
+    test("reports unknown services and projects as not found without mutating", async () => {
+      const repository = repositoryCreate([catalog(["api", "default"])])
+      const access = accessCreate({ subject: "alice-subject", username: "alice", role: "own" }, { alice: "own" })
+      const options = useCaseOptions(repository, access)
+
+      const unknownService = await projectServiceDelete(options, key, "missing", { expectedRevision: currentRevision })
+      expect(unknownService).toMatchObject({
+        success: false,
+        errorMessage: "service not found",
+        code: "projects.not-found",
+      })
+      const unknownProject = await projectServiceDelete(options, { owner: "alice", name: "missing" }, "api", {
+        expectedRevision: currentRevision,
+      })
+      expect(unknownProject).toMatchObject({ success: false, code: "projects.not-found" })
+      expect(repository.calls.edit).toHaveLength(0)
+    })
   })
 })

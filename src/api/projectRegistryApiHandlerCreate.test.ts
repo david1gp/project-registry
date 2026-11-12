@@ -3663,3 +3663,73 @@ describe("dev servers API enabled lifecycle (D2)", () => {
     expect(wired.calls).toEqual([])
   })
 })
+
+describe("project service delete API", () => {
+  const path = "/api/v1/users/david/projects/david-app/services/api"
+
+  function repositoryWithServices(serviceIds: string[]): RepositoryFake {
+    const repository = repositoryCreate()
+    const canonicalR = projectMigrate({
+      schemaVersion: 2,
+      owner: "david",
+      name: "david-app",
+      services: serviceIds.map((id, index) => ({
+        id,
+        units: [],
+        ownership: "registry",
+        caddy: { port: 4100 + index, domains: [`${id}.david.example`] },
+      })),
+    })
+    if (!canonicalR.success) throw new Error(canonicalR.errorMessage)
+    repository.projects = repository.projects.map((project) =>
+      project.owner === "david" && project.name === "david-app" ? canonicalR.data : project,
+    )
+    return repository
+  }
+
+  test("persists sibling services and regenerates Caddy", async () => {
+    const repository = repositoryWithServices(["api", "default"])
+    const application = caddyApplicationCreate()
+    const handler = projectRegistryApiHandlerCreate({ repository, caddyApplication: application })
+
+    const result = await requestJson(handler, path, { transport: "unix", username: "david" }, "DELETE", {
+      expectedRevision: revision,
+    })
+
+    expect(result.response.status).toBe(200)
+    expect(result.body).toMatchObject({ success: true, data: { action: "edit", changed: true } })
+    const project = repository.projects.find((entry) => entry.name === "david-app")
+    expect(project?.services).toHaveLength(1)
+    expect(project).toMatchObject({ services: [{ id: "default" }] })
+    expect(repository.projects.some((entry) => entry.name === "opencode")).toBe(true)
+    expect(application.projectChanges).toBe(1)
+  })
+
+  test("rejects the last service and other owners without regenerating Caddy", async () => {
+    const application = caddyApplicationCreate()
+    const lastRepository = repositoryWithServices(["api"])
+    const last = await requestJson(
+      projectRegistryApiHandlerCreate({ repository: lastRepository, caddyApplication: application }),
+      path,
+      { transport: "unix", username: "david" },
+      "DELETE",
+      { expectedRevision: revision },
+    )
+    expect(last.response.status).toBe(409)
+    expect(last.body).toMatchObject({ success: false, error: { code: "projects.conflict" } })
+    expect(lastRepository.projects.find((entry) => entry.name === "david-app")?.services).toHaveLength(1)
+
+    const foreign = await requestJson(
+      projectRegistryApiHandlerCreate({
+        repository: repositoryWithServices(["api", "default"]),
+        caddyApplication: application,
+      }),
+      path,
+      { transport: "unix", username: "leo" },
+      "DELETE",
+      { expectedRevision: revision },
+    )
+    expect(foreign.response.status).toBe(403)
+    expect(application.projectChanges).toBe(0)
+  })
+})

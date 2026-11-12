@@ -33,6 +33,7 @@ import { projectListUseCase } from "../project/projectListUseCase.js"
 import { projectLocalCaddyEntries } from "../project/projectLocalCaddyEntries.js"
 import { projectOrganize } from "../project/projectOrganize.js"
 import { projectOwnerAuthorize } from "../project/projectOwnerAuthorize.js"
+import { projectServiceDelete } from "../project/projectServiceDelete.js"
 import type { ProjectPortRange } from "../project/projectPortNext.js"
 import { type ProjectStaticAclRepairOptions, projectStaticAclRepair } from "../project/projectStaticAclRepair.js"
 import type { DevCommandOverride } from "../dev/DevCommandOverride.js"
@@ -95,6 +96,7 @@ type ApiRoute =
   | { kind: "docs"; legacy: boolean; owner?: string; name: string }
   | { kind: "docs-publication"; legacy: false; owner: string }
   | { kind: "project"; legacy: boolean; owner?: string; name: string }
+  | { kind: "project-service"; legacy: false; owner: string; name: string; service: string }
   | { kind: "project-by-port"; legacy: true; port: number }
   | { kind: "access-logs"; legacy: false; owner: string; name: string }
   | { kind: "route-check"; legacy: false; owner?: string; name: string }
@@ -283,6 +285,15 @@ function routeParse(path: string, method: string): ApiRoute | undefined {
     return { kind: "docs", legacy: false, owner, name }
   }
 
+  const versionedService = path.match(/^\/api\/v1\/users\/([^/]+)\/projects\/([^/]+)\/services\/([^/]+)$/)
+  if (versionedService !== null) {
+    const owner = segmentDecode(versionedService[1]!, ownerPattern)
+    const name = segmentDecode(versionedService[2]!, projectNamePattern)
+    const service = segmentDecode(versionedService[3]!, serviceIdPattern)
+    if (owner === undefined || name === undefined || service === undefined) return undefined
+    return { kind: "project-service", legacy: false, owner, name, service }
+  }
+
   const versionedProject = path.match(/^\/api\/v1\/users\/([^/]+)\/projects\/([^/]+)$/)
   if (versionedProject !== null) {
     const owner = segmentDecode(versionedProject[1]!, ownerPattern)
@@ -391,6 +402,7 @@ function routeRequiresProjectAccess(route: ApiRoute): boolean {
     route.kind === "docs" ||
     route.kind === "docs-publication" ||
     route.kind === "project" ||
+    route.kind === "project-service" ||
     route.kind === "project-by-port" ||
     route.kind === "access-logs" ||
     route.kind === "route-check" ||
@@ -508,6 +520,7 @@ function accessLogErrorResponse(result: ResultFailure): Response {
 }
 
 function routeMethods(route: ApiRoute): readonly string[] {
+  if (route.kind === "project-service") return ["DELETE"]
   if (route.kind === "fix-acl") return ["POST"]
   if (route.kind === "projects") return route.legacy ? ["GET"] : ["GET", "POST"]
   if (route.kind === "organization") return ["POST"]
@@ -1649,6 +1662,24 @@ export function projectRegistryApiHandlerCreate(options: ApiHandlerOptions): Pro
         return resultErrorResponse(applicationR, false, "caddy")
       }
       return jsonResponse({ success: true, data: mutationR.data }, 201)
+    }
+
+    if (route.kind === "project-service") {
+      const body = await requestBodyJson(request, false)
+      if (body instanceof Response) return body
+      const mutationR = await projectServiceDelete(
+        useCaseOptions,
+        { owner, name: route.name },
+        route.service,
+        expectedRevision(body),
+        options.projectEditAfterPersistence,
+      )
+      if (!mutationR.success) return resultErrorResponse(mutationR, false, "projects")
+      const applicationR = await caddyProjectChange(options.caddyApplication, mutationR.data)
+      if (applicationR !== undefined && "success" in applicationR && !applicationR.success) {
+        return resultErrorResponse(applicationR, false, "caddy")
+      }
+      return successResponse(mutationR.data)
     }
 
     if (request.method !== "GET" && route.kind === "project") {
