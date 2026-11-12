@@ -198,4 +198,44 @@ describe("devCommandResolve", () => {
 
     expect(result).toEqual({ success: true, data: { command: "bun", args: ["run", "dev"] } })
   })
+  test("runs a derived bare tool from the project's own node_modules on the lease port", async () => {
+    const manifests = manifestWith({ dev: "bun run vite:dev", "vite:dev": "vite --host --port 3007" })
+    const options = { directory: "/projects/akademie", projectsRoot: "/projects", port: 4401, host: "127.0.0.1" }
+    const installed = await devCommandResolve({ ...options, filesystem: filesystemCreate(manifests) })
+    expect(installed).toEqual({
+      success: true,
+      data: {
+        command: "/projects/akademie/node_modules/.bin/vite",
+        args: ["--port", "4401", "--strictPort", "--host", "127.0.0.1"],
+      },
+    })
+
+    // Missing bin, or a bin symlinked out of the projects root: package-manager fallback.
+    const missing: DevProjectFilesystem = {
+      ...filesystemCreate(manifests),
+      realpath: async (path) => {
+        if (path.includes("node_modules")) throw new Error("ENOENT")
+        return path
+      },
+    }
+    const escaped = filesystemCreate(manifests, { "/projects/akademie/node_modules/.bin/vite": "/tmp/evil/vite" })
+    for (const filesystem of [missing, escaped]) {
+      const result = await devCommandResolve({ ...options, filesystem })
+      expect(result).toEqual({ success: true, data: { command: "bun", args: ["run", "dev"] } })
+    }
+  })
+
+  test("a launcher-prefixed tool runs through bun without a filesystem lookup", async () => {
+    const result = await devCommandResolve({
+      directory: "/projects/akademie",
+      projectsRoot: "/projects",
+      filesystem: filesystemCreate(manifestWith({ dev: "bun --bun vite dev" })),
+      port: 4401,
+      host: "127.0.0.1",
+    })
+    expect(result).toEqual({
+      success: true,
+      data: { command: "bun", args: ["--bun", "vite", "dev", "--port", "4401", "--strictPort", "--host", "127.0.0.1"] },
+    })
+  })
 })

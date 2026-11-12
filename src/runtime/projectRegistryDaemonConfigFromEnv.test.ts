@@ -69,4 +69,42 @@ describe("projectRegistryDaemonConfigFromEnv dev flag", () => {
     })
     expect(relative.success).toBe(false)
   })
+
+  test("reads per-root dev allowlists, the health timeout, and private DNS wildcard zones", () => {
+    const result = projectRegistryDaemonConfigFromEnv({
+      PROJECT_REGISTRY_REPOSITORY_PATH: "/tmp/repo",
+      PROJECT_REGISTRY_DEV_ENABLED: "1",
+      PROJECT_REGISTRY_DEV_ROOTS: "/projects:leo,david,tim,mit",
+      PROJECT_REGISTRY_DEV_HEALTH_TIMEOUT_MS: "120000",
+      PROJECT_REGISTRY_PRIVATE_DNS_WILDCARD_ZONES: "wonder1.de",
+      PROJECT_REGISTRY_PRIVATE_DNS_PUBLIC_PASSTHROUGHS: "assets.coachingcompany.wonder1.de, demos-assets.wonder1.de",
+    })
+    expect(result.success).toBe(true)
+    if (!result.success) return
+    expect(result.data.dev).toEqual({
+      enabled: true,
+      roots: [{ path: "/projects", users: ["leo", "david", "tim", "mit"] }],
+      healthTimeoutMs: 120_000,
+    })
+    expect(result.data.privateDns.wildcardZones).toEqual(["wonder1.de"])
+    expect(result.data.privateDns.publicPassthroughs).toEqual([
+      "assets.coachingcompany.wonder1.de",
+      "demos-assets.wonder1.de",
+    ])
+  })
+
+  test("rejects malformed dev roots and wildcard zones outside the zone policy", () => {
+    for (const environment of [
+      { PROJECT_REGISTRY_DEV_ROOTS: "/projects" },
+      { PROJECT_REGISTRY_DEV_ROOTS: "projects:leo" },
+      { PROJECT_REGISTRY_DEV_HEALTH_TIMEOUT_MS: "soon" },
+      { PROJECT_REGISTRY_PRIVATE_DNS_WILDCARD_ZONES: "example.com" },
+    ]) {
+      const result = projectRegistryDaemonConfigFromEnv({
+        PROJECT_REGISTRY_REPOSITORY_PATH: "/tmp/repo",
+        ...environment,
+      })
+      expect(result.success).toBe(false)
+    }
+  })
 })

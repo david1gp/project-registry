@@ -53,6 +53,7 @@ describe("devUnitStart", () => {
       "--setenv=PORT=4400",
       "--setenv=HOST=127.0.0.1",
       "--setenv=DEV_URL=https://tim-akademie.wonder1.de",
+      "--setenv=__VITE_ADDITIONAL_SERVER_ALLOWED_HOSTS=tim-akademie.wonder1.de",
       "--collect",
       "--",
       "bun",
@@ -66,7 +67,7 @@ describe("devUnitStart", () => {
     await devUnitStart({ runner: runnerCreate(calls), spec: { ...spec, pathValue: "/x" } })
 
     const env = calls[0]!.args.filter((entry) => entry.startsWith("--setenv="))
-    expect(env).toHaveLength(5)
+    expect(env).toHaveLength(6)
     expect(env.join(" ")).not.toContain("CLOUDFLARE")
     expect(env.join(" ")).not.toContain("TOKEN")
   })

@@ -3,22 +3,24 @@ import type { CaddyApplicationResult } from "../caddy/CaddyApplicationResult.js"
 import type { Project } from "../project/Project.js"
 import type { ProjectPortRange } from "../project/projectPortNext.js"
 import type { ProjectService } from "../project/projectServiceSchema.js"
-import type { DevLeaseTracking } from "./DevLeaseTracking.js"
 import type { DevCommandOverride } from "./DevCommandOverride.js"
-import { devCommandResolve } from "./devCommandResolve.js"
+import type { DevLeaseTracking } from "./DevLeaseTracking.js"
 import type { DevProcessRunner } from "./DevProcessRunner.js"
 import type { DevProjectFilesystem } from "./DevProjectFilesystem.js"
+import type { DevRoot } from "./DevRoot.js"
+import { devCommandResolve } from "./devCommandResolve.js"
 import { devHostnameClaimValidate } from "./devHostnameClaimValidate.js"
 import type { DevLeaseRecord } from "./devLeaseRecordSchema.js"
 import { devPortAllocate } from "./devPortAllocate.js"
-import { devProjectDirectoryResolve } from "./devProjectDirectoryResolve.js"
+import { devRootDirectoryResolve } from "./devRootDirectoryResolve.js"
 import { devUnitAlive } from "./devUnitAlive.js"
 import { devUnitName } from "./devUnitName.js"
 import { devUnitStart } from "./devUnitStart.js"
 import { devUnitStop } from "./devUnitStop.js"
 
 export const devLeaseDefaultTtlMs = 14_400_000
-const devLeaseDefaultHealthTimeoutMs = 30_000
+// Cold vite/rsbuild starts (dependency pre-bundling) routinely exceed 30s.
+export const devLeaseDefaultHealthTimeoutMs = 90_000
 const devLeaseDefaultHealthIntervalMs = 250
 
 export type DevLeaseUpUseCaseOptions = {
@@ -31,6 +33,9 @@ export type DevLeaseUpUseCaseOptions = {
   tracking: DevLeaseTracking
   runner: DevProcessRunner
   userResolve: (username: string) => PromiseResult<{ uid: number }>
+  /** Allowed dev roots; `projectsRoot` is the legacy all-users single root. */
+  roots?: readonly DevRoot[]
+  rootPath?: string
   projectsRoot?: string
   commandFilesystem?: DevProjectFilesystem
   command?: DevCommandOverride
@@ -46,28 +51,34 @@ export type DevLeaseUpUseCaseOptions = {
 
 const devLeaseLoopbackHost = "127.0.0.1"
 
+type RowDevCommand = { kind: "none" } | { kind: "command"; command: string } | { kind: "service-missing" }
+
+/**
+ * The caller's own registry row may pin a per-service `dev.command`. With
+ * `serviceId` that service is used (unknown service → error); without it the
+ * single service carrying `dev` is used, so multi-service rows (web + api +
+ * convex) work as long as exactly one service declares a dev command.
+ */
 function rowDevCommandFind(
   projects: readonly Project[],
   user: string,
   name: string,
   serviceId?: string,
-): string | undefined {
+): RowDevCommand {
   const row = projects.find((project) => project.owner === user && project.name === name)
-  if (row === undefined) return undefined
-  const services = row.services
-  if (!Array.isArray(services)) return undefined
-  const candidates = services.filter(
-    (service): service is ProjectService => typeof service === "object" && service !== null,
-  )
-  if (candidates.length !== services.length) return undefined
-  const picked =
-    serviceId === undefined
-      ? candidates.length === 1
-        ? candidates[0]
-        : undefined
-      : candidates.find((service) => service.id === serviceId)
-  const command = picked?.dev?.command
-  return typeof command === "string" ? command : undefined
+  const services = row?.services
+  const candidates = Array.isArray(services)
+    ? services.filter((service): service is ProjectService => typeof service === "object" && service !== null)
+    : []
+  if (serviceId !== undefined) {
+    const picked = candidates.find((service) => service.id === serviceId)
+    if (picked === undefined) return { kind: "service-missing" }
+    const command = picked.dev?.command
+    return typeof command === "string" ? { kind: "command", command } : { kind: "none" }
+  }
+  const withDev = candidates.filter((service) => typeof service.dev?.command === "string")
+  const only = withDev.length === 1 ? withDev[0]?.dev?.command : undefined
+  return typeof only === "string" ? { kind: "command", command: only } : { kind: "none" }
 }
 
 function leaseKeyMatch(lease: DevLeaseRecord, user: string, name: string, serviceId?: string): boolean {
@@ -145,6 +156,20 @@ async function upInternal(options: DevLeaseUpUseCaseOptions, op: string): Promis
   if (!hostnameR.success) return hostnameR
   const now = clock()
 
+  const sibling = leases.find(
+    (lease) =>
+      lease.projectKey.owner === options.user &&
+      lease.projectKey.name === options.name &&
+      !leaseKeyMatch(lease, options.user, options.name, options.serviceId),
+  )
+  if (sibling !== undefined) {
+    // The hostname is per project: a second service would share it.
+    return createResultErrorCode(
+      op,
+      `dev project ${options.user}/${options.name} already runs ${sibling.serviceId === undefined ? "without a service" : `service ${sibling.serviceId}`}; run dev down first`,
+      "projects.conflict",
+    )
+  }
   const existing = leases.find((lease) => leaseKeyMatch(lease, options.user, options.name, options.serviceId))
   let base = leases
   if (existing !== undefined) {
@@ -165,21 +190,32 @@ async function upInternal(options: DevLeaseUpUseCaseOptions, op: string): Promis
     if (!dropR.success) return dropR
   }
 
-  const directoryR = await devProjectDirectoryResolve({
-    projectsRoot: options.projectsRoot,
+  const rowCommand = rowDevCommandFind(options.projects, options.user, options.name, options.serviceId)
+  if (rowCommand.kind === "service-missing") {
+    return createResultErrorCode(
+      op,
+      `service ${options.serviceId} is not registered for ${options.user}/${options.name}`,
+      "dev.not-found",
+    )
+  }
+  const roots: readonly DevRoot[] =
+    options.roots ?? (options.projectsRoot === undefined ? [] : [{ path: options.projectsRoot }])
+  const directoryR = await devRootDirectoryResolve({
+    roots,
+    user: options.user,
     project: options.name,
+    ...(options.rootPath === undefined ? {} : { rootPath: options.rootPath }),
     ...(options.commandFilesystem === undefined ? {} : { filesystem: options.commandFilesystem }),
   })
   if (!directoryR.success) return directoryR
   const portR = devPortAllocate(options.projects, base, options.portRange)
   if (!portR.success) return portR
-  const rowCommand = rowDevCommandFind(options.projects, options.user, options.name, options.serviceId)
   const commandR = await devCommandResolve({
-    directory: directoryR.data,
-    projectsRoot: options.projectsRoot,
+    directory: directoryR.data.directory,
+    projectsRoot: directoryR.data.root,
     ...(options.commandFilesystem === undefined ? {} : { filesystem: options.commandFilesystem }),
     ...(options.command === undefined ? {} : { override: options.command }),
-    ...(rowCommand === undefined ? {} : { rowCommand }),
+    ...(rowCommand.kind === "command" ? { rowCommand: rowCommand.command } : {}),
     port: portR.data,
     host: devLeaseLoopbackHost,
     project: `${options.user}/${options.name}`,
@@ -225,7 +261,7 @@ async function upInternal(options: DevLeaseUpUseCaseOptions, op: string): Promis
       unit: lease.unit,
       user: options.user,
       uid: userR.data.uid,
-      workingDirectory: directoryR.data,
+      workingDirectory: directoryR.data.directory,
       port: lease.port,
       hostname: lease.hostname,
       pathValue,

@@ -5,6 +5,11 @@ import type { ProjectAccess } from "../access/ProjectAccess.js"
 import { projectAccessCreate } from "../access/projectAccessCreate.js"
 import { projectAccessLogSourceFileCreate } from "../access-log/projectAccessLogSourceFileCreate.js"
 import { projectRegistryApiHandlerCreate } from "../api/projectRegistryApiHandlerCreate.js"
+import { devLeaseReconcile } from "../dev/devLeaseReconcile.js"
+import { devLeaseTrackingCreate } from "../dev/devLeaseTrackingCreate.js"
+import { devLeaseTrackingFilesystemDefault } from "../dev/devLeaseTrackingFilesystemDefault.js"
+import { devLeaseTrackingPath } from "../dev/devLeaseTrackingPath.js"
+import { devProcessRunnerDefault } from "../dev/devProcessRunnerDefault.js"
 import { projectDocsPublicationStoreCreate } from "../docs/projectDocsPublicationStoreCreate.js"
 import type { ProjectRepository } from "../project-store/ProjectRepository.js"
 import { sessionActorResolve } from "../session/sessionActorResolve.js"
@@ -38,11 +43,6 @@ import { projectRegistryDaemonPrivateDnsCredentialsCreate } from "./projectRegis
 import { projectRegistryDaemonPrivateDnsResolverReloadDefault } from "./projectRegistryDaemonPrivateDnsResolverReloadDefault.js"
 import { projectRegistryDaemonPrivateDnsTrackingCreate } from "./projectRegistryDaemonPrivateDnsTrackingCreate.js"
 import { projectRegistryDaemonPrivateDnsTrackingFilesystemDefault } from "./projectRegistryDaemonPrivateDnsTrackingFilesystemDefault.js"
-import { devLeaseReconcile } from "../dev/devLeaseReconcile.js"
-import { devLeaseTrackingCreate } from "../dev/devLeaseTrackingCreate.js"
-import { devLeaseTrackingFilesystemDefault } from "../dev/devLeaseTrackingFilesystemDefault.js"
-import { devLeaseTrackingPath } from "../dev/devLeaseTrackingPath.js"
-import { devProcessRunnerDefault } from "../dev/devProcessRunnerDefault.js"
 import { projectRegistryDaemonPrivateTlsCreate } from "./projectRegistryDaemonPrivateTlsCreate.js"
 import { projectRegistryDaemonServerDefault } from "./projectRegistryDaemonServerDefault.js"
 import { projectRegistryDaemonServerIpCreate } from "./projectRegistryDaemonServerIpCreate.js"
@@ -371,6 +371,8 @@ export function projectRegistryDaemonCreate(options: ProjectRegistryDaemonOption
   const privateDnsR = projectRegistryDaemonPrivateDnsCreate({
     enabled: config.privateDns.enabled,
     grandfatheredHostnames: config.privateDns.grandfatheredHostnames,
+    wildcardZones: config.privateDns.wildcardZones,
+    publicPassthroughs: config.privateDns.publicPassthroughs,
     tailnet: config.privateDns.tailnet ?? "",
     nodeAddress: config.privateDns.nodeAddress ?? "",
     apiBaseUrl: config.privateDns.apiBaseUrl,
@@ -1418,6 +1420,8 @@ export function projectRegistryDaemonCreate(options: ProjectRegistryDaemonOption
         tracking: devTracking,
         processRunner: devProcessRunner,
         ...(config.dev.projectsRoot === undefined ? {} : { projectsRoot: config.dev.projectsRoot }),
+        ...(config.dev.roots === undefined ? {} : { roots: config.dev.roots }),
+        ...(config.dev.healthTimeoutMs === undefined ? {} : { healthTimeoutMs: config.dev.healthTimeoutMs }),
         userResolve: async (username: string) => posix.userResolve(username),
         ...(devCommandFilesystemOption === undefined ? {} : { commandFilesystem: devCommandFilesystemOption }),
         fetch: devFetch,

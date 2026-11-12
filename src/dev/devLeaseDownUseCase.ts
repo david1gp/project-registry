@@ -45,11 +45,13 @@ async function downInternal(
   }
   const stateR = await options.tracking.read()
   if (!stateR.success) return stateR
+  // One lease per project hostname: without a service ID, the project's
+  // lease is stopped whichever service started it.
   const existing = stateR.data.leases.find(
     (lease) =>
       lease.projectKey.owner === options.user &&
       lease.projectKey.name === options.name &&
-      (lease.serviceId ?? undefined) === (options.serviceId ?? undefined),
+      (options.serviceId === undefined || lease.serviceId === options.serviceId),
   )
   if (existing === undefined) {
     return createResultErrorCode(op, `dev server ${options.user}/${options.name} is not running`, "projects.not-found")

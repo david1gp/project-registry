@@ -78,7 +78,31 @@ describe("devProjectDirectoryResolve", () => {
     expect(result.success).toBe(false)
     if (result.success) return
     expect(result.errorMessage).toBe("dev project directory escapes its projects root")
-    expect(result.code).toBe(undefined)
+    expect(result.code).toBe("dev.forbidden")
+  })
+
+  test("rejects a symlink to a nested directory inside the root", async () => {
+    const result = await devProjectDirectoryResolve({
+      projectsRoot: "/projects",
+      project: "akademie",
+      filesystem: filesystemCreate({ realpaths: { "/projects/akademie": "/projects/other/sub" } }),
+    })
+
+    expect(result.success).toBe(false)
+    if (result.success) return
+    expect(result.code).toBe("dev.forbidden")
+  })
+
+  test("follows a symlinked root and keeps the child under the real root", async () => {
+    const result = await devProjectDirectoryResolve({
+      projectsRoot: "/projects",
+      project: "akademie",
+      filesystem: filesystemCreate({
+        realpaths: { "/projects": "/srv/projects", "/srv/projects/akademie": "/srv/projects/akademie" },
+      }),
+    })
+
+    expect(result).toEqual({ success: true, data: "/srv/projects/akademie" })
   })
 
   test("rejects a name that could traverse the root", async () => {
@@ -89,5 +113,7 @@ describe("devProjectDirectoryResolve", () => {
     })
 
     expect(result.success).toBe(false)
+    if (result.success) return
+    expect(result.code).toBe("request.invalid")
   })
 })

@@ -1,5 +1,7 @@
 import { createResultError, type Result } from "#result"
 import { caddyConfigOptionsFromEnv } from "../caddy/caddyConfigOptionsFromEnv.js"
+import type { DevRoot } from "../dev/DevRoot.js"
+import { devRootsParse } from "../dev/devRootsParse.js"
 import type { ProjectRegistryDaemonConfig } from "./ProjectRegistryDaemonConfig.js"
 import { projectRegistryDaemonConfigValidate } from "./projectRegistryDaemonConfigValidate.js"
 
@@ -76,6 +78,8 @@ export function projectRegistryDaemonConfigFromEnv(
       "PROJECT_REGISTRY_DEV_ENABLED",
       "PROJECT_REGISTRY_DEV_IDLE_EXPIRY_ENABLED",
       "PROJECT_REGISTRY_DEV_PROJECTS_ROOT",
+      "PROJECT_REGISTRY_DEV_ROOTS",
+      "PROJECT_REGISTRY_DEV_HEALTH_TIMEOUT_MS",
       "PROJECT_REGISTRY_PRIVATE_DNS_ENABLED",
       "PROJECT_REGISTRY_PRIVATE_DNS_TAILNET",
       "PROJECT_REGISTRY_PRIVATE_DNS_NODE_ADDRESS",
@@ -85,6 +89,8 @@ export function projectRegistryDaemonConfigFromEnv(
       "PROJECT_REGISTRY_PRIVATE_DNS_UPSTREAMS",
       "PROJECT_REGISTRY_PRIVATE_DNS_CREDENTIALS_DIR",
       "PROJECT_REGISTRY_PRIVATE_DNS_GRANDFATHERED_HOSTS",
+      "PROJECT_REGISTRY_PRIVATE_DNS_WILDCARD_ZONES",
+      "PROJECT_REGISTRY_PRIVATE_DNS_PUBLIC_PASSTHROUGHS",
     ]
     for (const name of names) {
       const value = values[name]
@@ -126,6 +132,7 @@ export function projectRegistryDaemonConfigFromEnv(
     const serverIpDiscoveryTimeoutMs = environmentInteger(values, "PROJECT_REGISTRY_SERVER_IP_DISCOVERY_TIMEOUT_MS")
     const sessionMaxAgeSeconds = environmentInteger(values, "PROJECT_REGISTRY_SESSION_MAX_AGE_SECONDS")
     const sessionMaxEntries = environmentInteger(values, "PROJECT_REGISTRY_SESSION_MAX_ENTRIES")
+    const devHealthTimeoutMs = environmentInteger(values, "PROJECT_REGISTRY_DEV_HEALTH_TIMEOUT_MS")
     const gitPush = environmentBoolean(values, "PROJECT_REGISTRY_GIT_PUSH")
     const initializeFromGeneratedConfig = environmentBoolean(
       values,
@@ -182,6 +189,7 @@ export function projectRegistryDaemonConfigFromEnv(
       sessionMaxAgeSeconds,
       sessionMaxEntries,
       serverIpDiscoveryTimeoutMs,
+      devHealthTimeoutMs,
     ]
     if (
       numericValues.some((value) => Number.isNaN(value)) ||
@@ -205,6 +213,34 @@ export function projectRegistryDaemonConfigFromEnv(
         .map((upstream) => upstream.trim())
         .filter(Boolean)
     }
+
+    // PROJECT_REGISTRY_DEV_ROOTS (e.g. `/projects:leo,david,tim,mit`) wins;
+    // the legacy single PROJECT_REGISTRY_DEV_PROJECTS_ROOT allows every user.
+    const devRootsValue = values.PROJECT_REGISTRY_DEV_ROOTS?.trim()
+    let devRoots: DevRoot[] | undefined
+    if (devRootsValue !== undefined && devRootsValue !== "") {
+      const rootsR = devRootsParse(devRootsValue)
+      if (!rootsR.success) return createResultError(op, `PROJECT_REGISTRY_DEV_ROOTS is invalid: ${rootsR.errorMessage}`)
+      devRoots = rootsR.data
+    }
+
+    const privateDnsWildcardZonesValue = values.PROJECT_REGISTRY_PRIVATE_DNS_WILDCARD_ZONES?.trim()
+    const privateDnsWildcardZones =
+      privateDnsWildcardZonesValue === undefined || privateDnsWildcardZonesValue === ""
+        ? undefined
+        : privateDnsWildcardZonesValue
+            .split(",")
+            .map((zone) => zone.trim().toLowerCase())
+            .filter(Boolean)
+
+    const privateDnsPassthroughsValue = values.PROJECT_REGISTRY_PRIVATE_DNS_PUBLIC_PASSTHROUGHS?.trim()
+    const privateDnsPassthroughs =
+      privateDnsPassthroughsValue === undefined || privateDnsPassthroughsValue === ""
+        ? undefined
+        : privateDnsPassthroughsValue
+            .split(",")
+            .map((hostname) => hostname.trim().toLowerCase())
+            .filter(Boolean)
 
     const privateDnsGrandfatheredValue = values.PROJECT_REGISTRY_PRIVATE_DNS_GRANDFATHERED_HOSTS?.trim()
     let privateDnsGrandfathered: string[] | undefined
@@ -290,6 +326,8 @@ export function projectRegistryDaemonConfigFromEnv(
         ...(values.PROJECT_REGISTRY_DEV_PROJECTS_ROOT?.trim()
           ? { projectsRoot: values.PROJECT_REGISTRY_DEV_PROJECTS_ROOT.trim() }
           : {}),
+        ...(devRoots === undefined ? {} : { roots: devRoots }),
+        ...(devHealthTimeoutMs === undefined ? {} : { healthTimeoutMs: devHealthTimeoutMs }),
       },
       cloudflareDns: {
         enabled: cloudflareDnsEnabled !== false,
@@ -322,6 +360,8 @@ export function projectRegistryDaemonConfigFromEnv(
           : {}),
         ...(privateDnsUpstreams === undefined ? {} : { upstreamResolvers: privateDnsUpstreams }),
         ...(privateDnsGrandfathered === undefined ? {} : { grandfatheredHostnames: privateDnsGrandfathered }),
+        ...(privateDnsWildcardZones === undefined ? {} : { wildcardZones: privateDnsWildcardZones }),
+        ...(privateDnsPassthroughs === undefined ? {} : { publicPassthroughs: privateDnsPassthroughs }),
         ...(!values.PROJECT_REGISTRY_PRIVATE_DNS_CREDENTIALS_DIR?.trim()
           ? mode === "user" && configDirectory
             ? { credentialsDirectory: `${configDirectory}/project-registry/tailscale` }

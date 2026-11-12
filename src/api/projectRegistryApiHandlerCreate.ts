@@ -17,6 +17,13 @@ import type { CaddyApplicationResult } from "../caddy/CaddyApplicationResult.js"
 import { caddyConfigInspectUseCase } from "../caddy/caddyConfigInspectUseCase.js"
 import type { CaddyConfigOptions } from "../caddy/caddyConfigOptionsSchema.js"
 import { projectDocsUrlsUseCase } from "../caddy/projectDocsUrlsUseCase.js"
+import type { DevCommandOverride } from "../dev/DevCommandOverride.js"
+import type { DevLeaseTracking } from "../dev/DevLeaseTracking.js"
+import type { DevProcessRunner } from "../dev/DevProcessRunner.js"
+import type { DevProjectFilesystem } from "../dev/DevProjectFilesystem.js"
+import type { DevRoot } from "../dev/DevRoot.js"
+import { devLeaseDownUseCase } from "../dev/devLeaseDownUseCase.js"
+import { devLeaseUpUseCase } from "../dev/devLeaseUpUseCase.js"
 import type { ProjectDocsPublicationStore } from "../docs/ProjectDocsPublicationStore.js"
 import { projectDocsPagePathIsValid, projectDocsPagePathNormalize } from "../docs/projectDocsPagePathIsValid.js"
 import type { Project } from "../project/Project.js"
@@ -33,15 +40,9 @@ import { projectListUseCase } from "../project/projectListUseCase.js"
 import { projectLocalCaddyEntries } from "../project/projectLocalCaddyEntries.js"
 import { projectOrganize } from "../project/projectOrganize.js"
 import { projectOwnerAuthorize } from "../project/projectOwnerAuthorize.js"
-import { projectServiceDelete } from "../project/projectServiceDelete.js"
 import type { ProjectPortRange } from "../project/projectPortNext.js"
+import { projectServiceDelete } from "../project/projectServiceDelete.js"
 import { type ProjectStaticAclRepairOptions, projectStaticAclRepair } from "../project/projectStaticAclRepair.js"
-import type { DevCommandOverride } from "../dev/DevCommandOverride.js"
-import type { DevLeaseTracking } from "../dev/DevLeaseTracking.js"
-import type { DevProcessRunner } from "../dev/DevProcessRunner.js"
-import type { DevProjectFilesystem } from "../dev/DevProjectFilesystem.js"
-import { devLeaseDownUseCase } from "../dev/devLeaseDownUseCase.js"
-import { devLeaseUpUseCase } from "../dev/devLeaseUpUseCase.js"
 import type { ProjectRepository } from "../project-store/ProjectRepository.js"
 import type { ProjectRepositoryMutation } from "../project-store/ProjectRepositoryMutation.js"
 import { projectRegistryVersion } from "../projectRegistryVersion.js"
@@ -66,6 +67,8 @@ type ApiHandlerOptions = {
     tracking?: DevLeaseTracking
     processRunner?: DevProcessRunner
     projectsRoot?: string
+    roots?: readonly DevRoot[]
+    healthTimeoutMs?: number
     userResolve?: (username: string) => PromiseResult<{ uid: number }>
     commandFilesystem?: DevProjectFilesystem
     command?: DevCommandOverride
@@ -136,6 +139,7 @@ const apiFailureStatus: Record<string, number> = {
   "caddy.not-found": 404,
   "caddy.unavailable": 503,
   "dev.disabled": 409,
+  "dev.forbidden": 403,
   "dev.not-found": 404,
   "documentation.disabled": 409,
   "documentation.invalid-configuration": 500,
@@ -580,23 +584,42 @@ function devOwnerAuthorize(actor: Actor, owner: string): Result<void> {
 
 const maximumDevTtlMs = 86_400_000
 
-function devUpInputParse(input: unknown): Result<{ name: string; ttlMs?: number }> {
+type DevUpInput = { name: string; ttlMs?: number; serviceId?: string; rootPath?: string }
+
+function devUpInputParse(input: unknown): Result<DevUpInput> {
   const op = "projectRegistryApiDevUpInputParse"
   const record = recordValue(input)
   const name = record?.project
   if (typeof name !== "string" || !projectNamePattern.test(name)) {
     return createResultErrorCode(op, "A valid dev project name is required.", "request.invalid")
   }
+  const parsed: DevUpInput = { name }
   const ttlMs = record?.ttlMs
-  if (ttlMs === undefined) return createResult({ name })
-  if (!Number.isSafeInteger(ttlMs) || (ttlMs as number) <= 0 || (ttlMs as number) > maximumDevTtlMs) {
-    return createResultErrorCode(
-      op,
-      "Dev TTL must be a positive integer of milliseconds up to 86400000.",
-      "request.invalid",
-    )
+  if (ttlMs !== undefined) {
+    if (!Number.isSafeInteger(ttlMs) || (ttlMs as number) <= 0 || (ttlMs as number) > maximumDevTtlMs) {
+      return createResultErrorCode(
+        op,
+        "Dev TTL must be a positive integer of milliseconds up to 86400000.",
+        "request.invalid",
+      )
+    }
+    parsed.ttlMs = ttlMs as number
   }
-  return createResult({ name, ttlMs: ttlMs as number })
+  const service = record?.service
+  if (service !== undefined) {
+    if (typeof service !== "string" || !projectNamePattern.test(service)) {
+      return createResultErrorCode(op, "A valid dev service ID is required.", "request.invalid")
+    }
+    parsed.serviceId = service
+  }
+  const root = record?.root
+  if (root !== undefined) {
+    if (typeof root !== "string" || !root.startsWith("/") || root.length > 4_096 || root.includes("\0")) {
+      return createResultErrorCode(op, "Dev root must be an absolute path.", "request.invalid")
+    }
+    parsed.rootPath = root
+  }
+  return createResult(parsed)
 }
 
 function cloudflareTokenIsValid(token: string): boolean {
@@ -1198,12 +1221,16 @@ export function projectRegistryApiHandlerCreate(options: ApiHandlerOptions): Pro
           user: owner,
           name: inputR.data.name,
           ...(inputR.data.ttlMs === undefined ? {} : { ttlMs: inputR.data.ttlMs }),
+          ...(inputR.data.serviceId === undefined ? {} : { serviceId: inputR.data.serviceId }),
+          ...(inputR.data.rootPath === undefined ? {} : { rootPath: inputR.data.rootPath }),
           projects: snapshotR.data.projects,
           ...(useCaseOptions.portRange === undefined ? {} : { portRange: useCaseOptions.portRange }),
           tracking: options.dev.tracking,
           runner: options.dev.processRunner,
           userResolve: options.dev.userResolve,
           ...(options.dev.projectsRoot === undefined ? {} : { projectsRoot: options.dev.projectsRoot }),
+          ...(options.dev.roots === undefined ? {} : { roots: options.dev.roots }),
+          ...(options.dev.healthTimeoutMs === undefined ? {} : { healthTimeoutMs: options.dev.healthTimeoutMs }),
           ...(options.dev.commandFilesystem === undefined ? {} : { commandFilesystem: options.dev.commandFilesystem }),
           ...(options.dev.command === undefined ? {} : { command: options.dev.command }),
           ...(options.dev.pathValue === undefined ? {} : { pathValue: options.dev.pathValue }),

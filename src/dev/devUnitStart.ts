@@ -44,7 +44,11 @@ function specIsValid(spec: DevUnitStartSpec): boolean {
  * minimal allowlisted environment: the daemon environment is never inherited
  * wholesale (it holds credential paths). The served command must bind the
  * allocated loopback port via PORT; HOST pins loopback and DEV_URL carries
- * the public hostname for e2e use. Argv arrays only, never shell strings.
+ * the public hostname for e2e use. `__VITE_ADDITIONAL_SERVER_ALLOWED_HOSTS`
+ * (read by Vite's server config resolver, verified in vite 8.3) admits the
+ * lease hostname through Vite's Host-header check without project
+ * `allowedHosts` edits; other tools ignore it. Argv arrays only, never shell
+ * strings.
  */
 export function devUnitStart(options: {
   runner: DevProcessRunner
@@ -76,6 +80,7 @@ async function startInternal(
     `--setenv=PORT=${spec.port}`,
     "--setenv=HOST=127.0.0.1",
     `--setenv=DEV_URL=https://${spec.hostname}`,
+    `--setenv=__VITE_ADDITIONAL_SERVER_ALLOWED_HOSTS=${spec.hostname}`,
     "--collect",
     "--",
     spec.command,

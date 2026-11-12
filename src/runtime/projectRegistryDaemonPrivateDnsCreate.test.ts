@@ -203,6 +203,36 @@ describe("projectRegistryDaemonPrivateDnsCreate disabled", () => {
 })
 
 describe("projectRegistryDaemonPrivateDnsCreate claims", () => {
+  test("wildcard zones render into the resolver config next to exact hosts", async () => {
+    const stored = filesystemCreate()
+    const timer = timerCreate()
+    const live = new Map<string, string[]>()
+    const { fetch } = splitDnsFetchCreate(live, [])
+    const dnsR = projectRegistryDaemonPrivateDnsCreate(
+      optionsCreate({
+        filesystem: stored.filesystem,
+        timer: timer.timer,
+        fetch,
+        wildcardZones: ["wonder1.de"],
+        publicPassthroughs: ["assets.coachingcompany.wonder1.de"],
+        credentialResolve: async () => createResult("tskey-test"),
+        resolverReload: async () => createResult(undefined),
+      }),
+    )
+    if (!dnsR.success) throw new Error("setup failed")
+    expect(dnsR.data.start().success).toBe(true)
+    dnsR.data.projectCreateAfterPersistence(project(["checkout.wonder1.de"], { visibility: "private" }), {
+      noDns: false,
+    })
+    await settle(8)
+    const config = stored.files.get("/etc/project-registry/private-dnsmasq.conf") ?? ""
+    expect(config).toContain("host-record=checkout.wonder1.de,100.122.200.114")
+    expect(config).toContain("address=/*.wonder1.de/100.122.200.114")
+    // A non-registry public name keeps forwarding upstream despite the wildcard.
+    expect(config).toContain("server=/assets.coachingcompany.wonder1.de/")
+    await dnsR.data.shutdown()
+  })
+
   test("excludes cross-zone claims with a claim error and converges valid hosts", async () => {
     const stored = filesystemCreate()
     const timer = timerCreate()
@@ -403,6 +433,8 @@ describe("projectRegistryDaemonConfigFromEnv private DNS", () => {
       resolverUnit: "private-dnsmasq",
       upstreamResolvers: ["9.9.9.9", "149.112.112.112"],
       credentialsDirectory: "/etc/project-registry/tailscale-custom",
+      wildcardZones: [],
+      publicPassthroughs: [],
     })
   })
 

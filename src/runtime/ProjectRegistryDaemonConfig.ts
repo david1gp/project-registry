@@ -1,5 +1,6 @@
 import type { CaddyConfigOptions } from "../caddy/caddyConfigOptionsSchema.js"
 import type { CaddyInstanceConfig } from "../caddy/caddyInstanceConfigSchema.js"
+import type { DevRoot } from "../dev/DevRoot.js"
 import type { LocalDomainsOptions } from "../local-domains/localDomainsOptionsSchema.js"
 import type { ProjectPortRange } from "../project/projectPortNext.js"
 
@@ -55,6 +56,8 @@ export type ProjectRegistryDaemonConfig = {
     enabled: boolean
     idleExpiryEnabled?: boolean
     projectsRoot?: string
+    roots?: DevRoot[]
+    healthTimeoutMs?: number
   }
   privateDns: {
     enabled: boolean
@@ -66,5 +69,7 @@ export type ProjectRegistryDaemonConfig = {
     resolverUnit: string
     upstreamResolvers: string[]
     credentialsDirectory: string
+    wildcardZones: string[]
+    publicPassthroughs: string[]
   }
 }

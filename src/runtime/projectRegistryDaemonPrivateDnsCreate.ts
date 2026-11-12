@@ -184,6 +184,10 @@ function tailscaleZoneSuffixes(): string[] {
 export function projectRegistryDaemonPrivateDnsCreate(options: {
   enabled: boolean
   grandfatheredHostnames?: readonly string[]
+  /** Zones answered for every subdomain by the private resolver (dev leases). */
+  wildcardZones?: readonly string[]
+  /** Exact public names outside the registry that always forward upstream. */
+  publicPassthroughs?: readonly string[]
   tailnet: string
   nodeAddress: string
   apiBaseUrl?: string
@@ -294,6 +298,8 @@ export function projectRegistryDaemonPrivateDnsCreate(options: {
   const nodeAddress = options.nodeAddress
   const apiBaseUrl = options.apiBaseUrl ?? tailscaleApiBaseUrlDefault
   const upstreamResolvers = [...options.upstreamResolvers]
+  const wildcardZones = Array.isArray(options.wildcardZones) ? [...options.wildcardZones] : []
+  const extraPassthroughs = Array.isArray(options.publicPassthroughs) ? [...options.publicPassthroughs] : []
   const grandfatheredHostnames = new Set(
     tailscaleGrandfatheredHostnamesNormalize(options.grandfatheredHostnames ?? []) ?? [],
   )
@@ -699,9 +705,9 @@ export function projectRegistryDaemonPrivateDnsCreate(options: {
   }
 
   function publicPassthroughsForSnapshot(projects: ProjectSnapshot): string[] {
-    if (projects === undefined) return []
+    if (projects === undefined) return [...extraPassthroughs].sort()
     const suffixes = tailscaleZoneSuffixes()
-    const passthroughs = new Set<string>()
+    const passthroughs = new Set<string>(extraPassthroughs)
     for (const project of projects) {
       for (const hostname of publicHostnames(project)) {
         if (suffixes.some((suffix) => hostname.endsWith(suffix))) passthroughs.add(hostname)
@@ -750,6 +756,7 @@ export function projectRegistryDaemonPrivateDnsCreate(options: {
       hostnames,
       upstreamResolvers,
       publicPassthroughs: publicPassthroughsForSnapshot(projects),
+      ...(wildcardZones.length === 0 ? {} : { wildcardZones }),
     })
     if (!renderedR.success) {
       logEvent("resolver", "failure", { operation: "resolver-render", reason: renderedR.errorMessage })

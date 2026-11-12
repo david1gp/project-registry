@@ -16,10 +16,10 @@ import type {
 } from "../access-log/ProjectAccessLogSource.js"
 import type { CaddyApplication } from "../caddy/CaddyApplication.js"
 import { caddyConfigGenerate } from "../caddy/caddyConfigGenerate.js"
+import { projectRegistryCliRequest } from "../cli/projectRegistryCliRequest.js"
 import type { DevLeaseTracking } from "../dev/DevLeaseTracking.js"
 import type { DevLeaseRecord } from "../dev/devLeaseRecordSchema.js"
 import type { DevLeaseTrackingState } from "../dev/devLeaseTrackingState.js"
-import { projectRegistryCliRequest } from "../cli/projectRegistryCliRequest.js"
 import { projectDocsPublicationStoreCreate } from "../docs/projectDocsPublicationStoreCreate.js"
 import type { Project } from "../project/Project.js"
 import type { ProjectKey } from "../project/projectKey.js"
@@ -3660,6 +3660,35 @@ describe("dev servers API enabled lifecycle (D2)", () => {
 
     expect(started.response.status).toBe(400)
     expect(started.body).toMatchObject({ success: false, error: { code: "request.invalid" } })
+    expect(wired.calls).toEqual([])
+  })
+
+  test("up maps a symlink escape out of the dev root to 403, never 500", async () => {
+    const wired = wiredHandlerCreate({
+      commandFilesystem: {
+        readFile: async () => JSON.stringify({ scripts: { dev: "vite" } }),
+        realpath: async (path: string) => (path === "/projects/akademie" ? "/etc" : path),
+        stat: async () => ({ isDirectory: () => true }),
+      },
+    })
+    const started = await requestJson(wired.handler, "/api/v1/users/tim/dev", socketContext, "POST", {
+      project: "akademie",
+    })
+
+    expect(started.response.status).toBe(403)
+    expect(started.body).toMatchObject({ success: false, error: { code: "dev.forbidden" } })
+    expect(wired.calls).toEqual([])
+  })
+
+  test("up rejects a relative --root and an invalid service before touching the filesystem", async () => {
+    const wired = wiredHandlerCreate()
+    for (const body of [
+      { project: "akademie", root: "projects" },
+      { project: "akademie", service: "Web" },
+    ]) {
+      const started = await requestJson(wired.handler, "/api/v1/users/tim/dev", socketContext, "POST", body)
+      expect(started.response.status).toBe(400)
+    }
     expect(wired.calls).toEqual([])
   })
 })

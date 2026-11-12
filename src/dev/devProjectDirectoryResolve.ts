@@ -10,6 +10,12 @@ function underRoot(root: string, candidate: string): boolean {
   return relationship === "" || (!relationship.startsWith("..") && !isAbsolute(relationship))
 }
 
+/**
+ * Resolve `<root>/<project>` to its real directory. The project name is one
+ * path segment by construction; the real path must stay a direct child of the
+ * real root (symlinks out of the root, or into a nested directory, fail as
+ * `dev.forbidden`). A missing entry or non-directory is `dev.not-found`.
+ */
 export async function devProjectDirectoryResolve(options: {
   projectsRoot?: string
   project: string
@@ -23,19 +29,28 @@ export async function devProjectDirectoryResolve(options: {
     return createResultError(op, "dev project directory is unavailable")
   }
   if (typeof options.project !== "string" || !unitProjectPattern.test(options.project)) {
-    return createResultError(op, "dev project name is invalid")
+    return createResultErrorCode(op, "dev project name is invalid", "request.invalid")
   }
   const filesystem = options.filesystem ?? devProjectFilesystemDefault()
-  const root = resolve(options.projectsRoot)
+  let root: string
+  try {
+    root = await filesystem.realpath(resolve(options.projectsRoot))
+  } catch {
+    return createResultErrorCode(op, "dev projects root is missing", "dev.not-found")
+  }
   const candidate = resolve(root, options.project)
-  if (!underRoot(root, candidate)) return createResultError(op, "dev project directory escapes its projects root")
+  if (!underRoot(root, candidate)) {
+    return createResultErrorCode(op, "dev project directory escapes its projects root", "dev.forbidden")
+  }
   let actual: string
   try {
     actual = await filesystem.realpath(candidate)
   } catch {
     return createResultErrorCode(op, "dev project directory is missing", "dev.not-found")
   }
-  if (!underRoot(root, actual)) return createResultError(op, "dev project directory escapes its projects root")
+  if (!underRoot(root, actual) || actual === root || resolve(actual, "..") !== root) {
+    return createResultErrorCode(op, "dev project directory escapes its projects root", "dev.forbidden")
+  }
   try {
     const status = await filesystem.stat(actual)
     if (!status.isDirectory())

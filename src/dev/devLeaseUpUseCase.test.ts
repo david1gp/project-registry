@@ -6,7 +6,7 @@ import type { DevProcessRunner } from "./DevProcessRunner.js"
 import type { DevProjectFilesystem } from "./DevProjectFilesystem.js"
 import type { DevLeaseRecord } from "./devLeaseRecordSchema.js"
 import type { DevLeaseTrackingState } from "./devLeaseTrackingState.js"
-import { devLeaseUpUseCase, type DevLeaseUpUseCaseOptions } from "./devLeaseUpUseCase.js"
+import { type DevLeaseUpUseCaseOptions, devLeaseUpUseCase } from "./devLeaseUpUseCase.js"
 
 type RunnerCall = { command: string; args: readonly string[]; input: string }
 
@@ -162,7 +162,16 @@ describe("devLeaseUpUseCase", () => {
     expect(spawn!.args).toContain("--setenv=PORT=4400")
     expect(spawn!.args).toContain("--setenv=HOST=127.0.0.1")
     expect(spawn!.args).toContain("--setenv=DEV_URL=https://tim-akademie.wonder1.de")
-    expect(spawn!.args.slice(-3)).toEqual(["bun", "run", "dev"])
+    expect(spawn!.args).toContain("--setenv=__VITE_ADDITIONAL_SERVER_ALLOWED_HOSTS=tim-akademie.wonder1.de")
+    // `"dev": "vite"` runs the project-local vite binary on the lease port.
+    expect(spawn!.args.slice(spawn!.args.indexOf("--") + 1)).toEqual([
+      "/projects/akademie/node_modules/.bin/vite",
+      "--port",
+      "4400",
+      "--strictPort",
+      "--host",
+      "127.0.0.1",
+    ])
   })
 
   test("an idempotent up for the same lease touches lastSeenAt without spawning or regenerating", async () => {
@@ -344,7 +353,20 @@ describe("devLeaseUpUseCase", () => {
     expect(spawn!.args.slice(-4)).toEqual(["run", "./api.ts", "--port", "4400"])
   })
 
-  test("several services without a service id fall back to the package.json dev script", async () => {
+  test("several services without a service id use the single service that declares dev", async () => {
+    const harness = harnessCreate()
+    const projects: Project[] = [
+      projectRow([{ id: "web" }, { id: "api", dev: { command: "bun run ./api.ts --port {port}" } }, { id: "convex" }]),
+    ]
+    const result = await devLeaseUpUseCase(harness.options({ projects }))
+
+    expect(result.success).toBe(true)
+    if (!result.success) return
+    const spawn = harness.calls.find((call) => call.command === "systemd-run")
+    expect(spawn!.args.slice(-4)).toEqual(["run", "./api.ts", "--port", "4400"])
+  })
+
+  test("several services that all declare dev fall back to the package.json dev script", async () => {
     const harness = harnessCreate()
     const projects: Project[] = [
       projectRow([
@@ -357,7 +379,69 @@ describe("devLeaseUpUseCase", () => {
     expect(result.success).toBe(true)
     if (!result.success) return
     const spawn = harness.calls.find((call) => call.command === "systemd-run")
-    expect(spawn!.args.slice(-3)).toEqual(["bun", "run", "dev"])
+    expect(spawn!.args.at(-6)).toBe("/projects/akademie/node_modules/.bin/vite")
+  })
+
+  test("an unknown service id is not found and spawns nothing", async () => {
+    const harness = harnessCreate()
+    const projects: Project[] = [projectRow([{ id: "web" }])]
+    const result = await devLeaseUpUseCase(harness.options({ projects, serviceId: "api" }))
+
+    expect(result.success).toBe(false)
+    if (result.success) return
+    expect(result.code).toBe("dev.not-found")
+    expect(harness.calls).toEqual([])
+  })
+
+  test("a lease for another service of the same project is a conflict", async () => {
+    const harness = harnessCreate({ leases: [leaseCreate({ serviceId: "web" })] })
+    const result = await devLeaseUpUseCase(harness.options({ serviceId: "api" }))
+
+    expect(result.success).toBe(false)
+    if (result.success) return
+    expect(result.code).toBe("projects.conflict")
+  })
+
+  test("no registry row is needed: the directory under an allowed root is enough", async () => {
+    const harness = harnessCreate()
+    const result = await devLeaseUpUseCase(
+      harness.options({
+        projectsRoot: undefined,
+        roots: [{ path: "/projects", users: ["leo", "david", "tim", "mit"] }],
+      }),
+    )
+
+    expect(result.success).toBe(true)
+    const spawn = harness.calls.find((call) => call.command === "systemd-run")
+    expect(spawn!.args).toContain("--working-directory=/projects/akademie")
+  })
+
+  test("a caller missing from every root allowlist is forbidden before anything spawns", async () => {
+    const harness = harnessCreate()
+    const result = await devLeaseUpUseCase(
+      harness.options({ projectsRoot: undefined, roots: [{ path: "/projects", users: ["leo", "david"] }] }),
+    )
+
+    expect(result.success).toBe(false)
+    if (result.success) return
+    expect(result.code).toBe("dev.forbidden")
+    expect(harness.calls).toEqual([])
+    expect(harness.tracking.state.leases).toEqual([])
+  })
+
+  test("the default health wait allows 90s for a cold dev server", async () => {
+    let attempts = 0
+    const harness = harnessCreate({
+      fetchBehavior: async () => {
+        attempts += 1
+        if (harness.clock.now() - 1_700_000_000_000 < 80_000) throw new Error("ECONNREFUSED")
+        return new Response("ok")
+      },
+    })
+    const result = await devLeaseUpUseCase(harness.options({ healthIntervalMs: 5_000 }))
+
+    expect(result.success).toBe(true)
+    expect(attempts).toBeGreaterThan(1)
   })
 
   test("neither row nor manifest reports the project in the missing-contract error", async () => {

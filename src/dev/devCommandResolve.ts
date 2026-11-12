@@ -5,15 +5,12 @@ import { projectServiceDevCommandValidate } from "../project/projectServiceDevCo
 import type { DevCommandOverride } from "./DevCommandOverride.js"
 import type { DevProjectFilesystem } from "./DevProjectFilesystem.js"
 import { devProjectFilesystemDefault } from "./devProjectFilesystemDefault.js"
+import { devScriptCommandDerive } from "./devScriptCommandDerive.js"
 
-// Loose objects: package.json carries many unrelated keys; only the dev
-// script shape is validated. Never v.any(): unknown keys stay unparsed.
+// Loose objects: package.json carries many unrelated keys; only the scripts
+// shape is validated. Non-string script values are dropped, never executed.
 const packageJsonSchema = a.object({
-  scripts: a.optional(
-    a.object({
-      dev: a.optional(a.string()),
-    }),
-  ),
+  scripts: a.optional(a.record(a.string(), a.unknown())),
 })
 
 function underRoot(root: string, candidate: string): boolean {
@@ -85,15 +82,38 @@ export async function devCommandResolve(options: {
   if (!scriptR.success) {
     return createResultErrorCode(op, "dev package.json is invalid", "request.invalid")
   }
-  const script = scriptR.output.scripts?.dev
+  const scripts: Record<string, string> = {}
+  for (const [name, body] of Object.entries(scriptR.output.scripts ?? {})) {
+    if (typeof body === "string") scripts[name] = body
+  }
+  const script = scripts.dev
   if (typeof script !== "string" || script.trim() === "") {
     return missingContract(op, options.project, "dev package.json has no dev script")
   }
-  // The script body is validated present and non-blank, then executed through
-  // the package manager (`bun run dev`): the body is never split or passed to
-  // a shell, so quoting and chained commands in the script cannot escape the
-  // argv boundary. Per-project port/host contracts that need flags instead of
-  // PORT/HOST env belong in the row's `dev:{command}` above.
+  // Generic derivation: a single vite/rsbuild/next/astro invocation runs the
+  // tool directly with the lease's port/host flags (tools ignore PORT env).
+  // Script bodies are tokenized only when every token is shell-inert; nothing
+  // is ever passed to a shell.
+  if (Number.isInteger(options.port) && typeof options.host === "string" && options.host !== "") {
+    const derived = devScriptCommandDerive({ scripts, port: options.port as number, host: options.host })
+    if (derived !== undefined) {
+      if (derived.projectRelativeCommand !== true) {
+        return createResult({ command: derived.command, args: derived.args })
+      }
+      const directory = resolve(options.directory)
+      const binary = resolve(directory, derived.command)
+      try {
+        const binaryReal = await filesystem.realpath(binary)
+        if (underRoot(directory, binary) && underRoot(root, binaryReal)) {
+          return createResult({ command: binary, args: derived.args })
+        }
+      } catch {
+        // Tool not installed locally: fall through to the package manager.
+      }
+    }
+  }
+  // Fallback: run through the package manager (`bun run dev`) with PORT/HOST
+  // env; the body is never split or passed to a shell here.
   return createResult({ command: "bun", args: ["run", "dev"] })
 }
 

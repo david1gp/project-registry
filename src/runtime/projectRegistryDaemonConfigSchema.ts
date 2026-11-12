@@ -4,6 +4,7 @@ import { projectAccessLogRootSchema } from "../access-log/projectAccessLogRootSc
 import { caddyConfigOptionsSchema } from "../caddy/caddyConfigOptionsSchema.js"
 import { caddyInstanceConfigSchema } from "../caddy/caddyInstanceConfigSchema.js"
 import { localDomainsOptionsSchema } from "../local-domains/localDomainsOptionsSchema.js"
+import { projectTailscaleZonePolicy } from "../project/projectTailscaleZonePolicy.js"
 import { tailscaleGrandfatheredHostnamesNormalize } from "../tailscale/tailscaleGrandfatheredHostnamesNormalize.js"
 
 const loopbackHostnameSchema = a.union([a.literal("127.0.0.1"), a.literal("::1")])
@@ -150,10 +151,17 @@ const cloudflareDnsSchema = a.strictObject({
   credentialsDirectory: a.optional(absolutePathSchema, "/etc/project-registry/cloudflare"),
 })
 
+const devRootSchema = a.strictObject({
+  path: absolutePathSchema,
+  users: a.optional(a.array(a.pipe(a.string(), a.regex(/^[A-Za-z_][A-Za-z0-9_.-]*\$?$/)))),
+})
+
 const devSchema = a.strictObject({
   enabled: a.optional(a.boolean(), false),
   idleExpiryEnabled: a.optional(a.boolean()),
   projectsRoot: a.optional(absolutePathSchema),
+  roots: a.optional(a.array(devRootSchema)),
+  healthTimeoutMs: a.optional(a.pipe(a.number(), a.integer(), a.minValue(1_000), a.maxValue(600_000))),
 })
 
 const ipv4Schema = a.pipe(
@@ -210,6 +218,23 @@ const privateDnsSchema = a.strictObject({
   resolverUnit: a.optional(systemdUnitSchema, "wonder1-tailscale-private-dns"),
   upstreamResolvers: a.optional(a.pipe(a.array(ipv4Schema), a.minLength(1)), ["1.1.1.1", "8.8.8.8"]),
   credentialsDirectory: a.optional(absolutePathSchema, "/etc/project-registry/tailscale"),
+  // Zones whose every subdomain answers with the node address on the private
+  // resolver (dev lease hostnames). Must be zones from the Tailscale zone policy.
+  wildcardZones: a.optional(
+    a.array(
+      a.pipe(
+        a.string(),
+        a.check(
+          (zone) => Object.values(projectTailscaleZonePolicy).some((zones) => zones.includes(zone)),
+          "private DNS wildcard zones must be zones from the Tailscale zone policy",
+        ),
+      ),
+    ),
+    [],
+  ),
+  // Exact public names outside the registry (e.g. R2 CNAMEs) that must keep
+  // forwarding upstream when a wildcard zone covers them.
+  publicPassthroughs: a.optional(grandfatheredHostnamesSchema, []),
 })
 
 export const projectRegistryDaemonConfigSchema = a.strictObject({
