@@ -98,6 +98,46 @@ describe("projectRegistryCliArgumentsParse", () => {
       { kind: "project-edit", name: "site", service: "api", caddy: {}, clearDevCommand: true },
     ],
     [["dev", "down", "site"], { kind: "dev-down", name: "site" }],
+    [["svc", "status", "archive"], { kind: "svc", verb: "status", name: "archive" }],
+    [
+      ["svc", "restart", "archive", "--service", "web"],
+      { kind: "svc", verb: "restart", name: "archive", service: "web" },
+    ],
+    [
+      ["svc", "logs", "archive", "-n", "50", "-f"],
+      { kind: "svc", verb: "logs", name: "archive", lines: 50, follow: true },
+    ],
+    [
+      [
+        "project",
+        "edit",
+        "archive",
+        "--service",
+        "web",
+        "--service-command",
+        "bun run start --port {port}",
+        "--service-env-file",
+        ".env.production",
+        "--autostart",
+      ],
+      {
+        kind: "project-edit",
+        name: "archive",
+        service: "web",
+        caddy: {},
+        managed: { command: "bun run start --port {port}", envFile: ".env.production", autostart: true },
+      },
+    ],
+    [
+      ["project", "edit", "archive", "--service", "web", "--clear-service-command", "--no-autostart"],
+      {
+        kind: "project-edit",
+        name: "archive",
+        service: "web",
+        caddy: {},
+        managed: { clearCommand: true, autostart: false },
+      },
+    ],
     [["user", "cloudflare-token", "set", "--token-stdin"], { kind: "user-cloudflare-token-set", tokenStdin: true }],
     [["--help"], { kind: "help" }],
     [["-V"], { kind: "version" }],
@@ -376,6 +416,30 @@ describe("projectRegistryCliArgumentsParse", () => {
       "Options --dev-command and --clear-dev-command cannot be combined.",
     ],
     [["dev", "ls", "extra"], "Unknown command or invalid syntax: dev ls extra."],
+    [
+      ["svc", "reload", "archive"],
+      "Usage: project-registry svc status|logs|start|stop|restart|enable|disable <project> [--service <id>].",
+    ],
+    [["svc", "start", "archive", "-f"], "Options -n and -f are only valid for svc logs."],
+    [["svc", "logs", "archive", "-n", "20000"], "Option -n must be at most 10000."],
+    [["svc", "stop", "archive", "--port", "3000"], "svc only accepts --service, and -n/-f for logs."],
+    [["project", "list", "-f"], "Unknown option: -f."],
+    [
+      ["project", "edit", "archive", "--autostart"],
+      "Options --service-command, --service-env-file, and --autostart require --service.",
+    ],
+    [
+      ["project", "edit", "archive", "--service", "web", "--service-env-file", "../secrets/.env"],
+      "Option --service-env-file requires a relative path inside the project directory, e.g. '.env.production'.",
+    ],
+    [
+      ["project", "edit", "archive", "--service", "web", "--service-command", "start.sh | tee"],
+      "Option --service-command requires an argv string without shell metacharacters, e.g. 'bun run start --port {port}'.",
+    ],
+    [
+      ["project", "edit", "archive", "--service", "web", "--autostart", "--no-autostart"],
+      "Options --autostart and --no-autostart cannot be combined.",
+    ],
     [["dev", "up", "site", "--port", "3000"], "Unknown command or invalid syntax: dev up site."],
     [
       ["dev", "up", "Site"],

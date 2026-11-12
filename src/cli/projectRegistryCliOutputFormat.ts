@@ -162,6 +162,24 @@ const devDownSchema = a.looseObject({
   stopped: a.literal(true),
 })
 
+const managedServiceStatusSchema = a.looseObject({
+  owner: a.string(),
+  project: a.string(),
+  service: a.string(),
+  unit: a.string(),
+  port: a.number(),
+  autostart: a.boolean(),
+  activeState: a.string(),
+  subState: a.string(),
+  unitFileState: a.string(),
+})
+const managedServiceListSchema = a.object({ services: a.array(managedServiceStatusSchema) })
+const managedServiceActionSchema = a.object({ service: managedServiceStatusSchema })
+
+function managedServiceLine(status: a.InferOutput<typeof managedServiceStatusSchema>): string {
+  return `${status.owner}/${status.project}\t${status.service}\t${status.activeState}/${status.subState}\t${status.unitFileState}\tport ${status.port}\t${status.unit}`
+}
+
 function dataParse<TSchema extends a.BaseSchema<unknown, unknown, a.BaseIssue<unknown>>>(
   schema: TSchema,
   data: unknown,
@@ -374,6 +392,14 @@ export function projectRegistryCliOutputFormat(
     if (!parsedR.success) return parsedR
     parsedData = parsedR.data
   }
+  if (command.kind === "svc") {
+    const parsedR =
+      command.verb === "status"
+        ? dataParse(managedServiceListSchema, data, "managed service status")
+        : dataParse(managedServiceActionSchema, data, "managed service action")
+    if (!parsedR.success) return parsedR
+    parsedData = parsedR.data
+  }
 
   if (invocation.json) return jsonSerialize({ success: true, data: parsedData })
   if (command.kind === "project-list") {
@@ -508,6 +534,14 @@ export function projectRegistryCliOutputFormat(
   if (command.kind === "dev-down") {
     const stopped = parsedData as a.InferOutput<typeof devDownSchema>
     return createResult(`stopped ${stopped.owner}/${stopped.project}\n`)
+  }
+  if (command.kind === "svc") {
+    if (command.verb === "status") {
+      const listed = parsedData as a.InferOutput<typeof managedServiceListSchema>
+      return createResult(`${listed.services.map(managedServiceLine).join("\n")}\n`)
+    }
+    const acted = parsedData as a.InferOutput<typeof managedServiceActionSchema>
+    return createResult(`${command.verb}: ${managedServiceLine(acted.service)}\n`)
   }
   return createResultError("projectRegistryCliOutputFormat", "The command does not produce daemon output.")
 }

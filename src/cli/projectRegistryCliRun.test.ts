@@ -977,6 +977,118 @@ describe("projectRegistryCliRun", () => {
     })
   })
 
+  test("defines a managed service on one service and refuses a first definition without autostart", async () => {
+    const bodies: unknown[] = []
+    const requestFetch = async (_input: string | URL | Request, init?: RequestInit & { unix?: string }) => {
+      if (init?.method === "PATCH") {
+        bodies.push(typeof init.body === "string" ? JSON.parse(init.body) : undefined)
+        return Response.json({ success: true, data: mutation("edit") })
+      }
+      return Response.json({
+        success: true,
+        data: {
+          project: {
+            schemaVersion: 2,
+            owner: "leo",
+            name: "archive",
+            services: [
+              { id: "web", units: [], ownership: "registry", caddy: { port: 4310, domains: ["archive.example"] } },
+              { id: "api", units: [], ownership: "registry", caddy: { port: 4311, domains: ["api.example"] } },
+            ],
+          },
+          revision: "current",
+        },
+      })
+    }
+    const errors: string[] = []
+    const options = {
+      environment: { USER: "leo" },
+      requestFetch,
+      stdout: () => {},
+      stderr: (text: string) => errors.push(text),
+    }
+
+    expect(
+      await projectRegistryCliRun(
+        ["project", "edit", "archive", "--service", "web", "--service-env-file", ".env"],
+        options,
+      ),
+    ).toBe(1)
+    expect(errors.join("")).toContain("pass --autostart or --no-autostart")
+
+    expect(
+      await projectRegistryCliRun(
+        ["project", "edit", "archive", "--service", "web", "--service-env-file", ".env", "--autostart"],
+        options,
+      ),
+    ).toBe(0)
+    expect(bodies).toHaveLength(1)
+    expect(bodies[0]).toMatchObject({
+      services: [
+        { id: "web", caddy: { port: 4310 }, service: { envFile: ".env", autostart: true } },
+        { id: "api", caddy: { port: 4311 } },
+      ],
+    })
+    expect((bodies[0] as { services: Record<string, unknown>[] }).services[1]).not.toHaveProperty("service")
+  })
+
+  test("svc verbs call the services API; logs stream plain text and errors keep the JSON envelope", async () => {
+    const status = {
+      owner: "leo",
+      project: "archive",
+      service: "web",
+      unit: "proj-archive-web.service",
+      port: 4310,
+      autostart: true,
+      activeState: "active",
+      subState: "running",
+      unitFileState: "enabled",
+    }
+    const requests: string[] = []
+    const requestFetch = async (input: string | URL | Request, init?: RequestInit & { unix?: string }) => {
+      const url = new URL(String(input))
+      requests.push(`${init?.method ?? "GET"} ${url.pathname}${url.search} ${init?.body ?? ""}`.trim())
+      if (url.pathname.endsWith("/logs")) {
+        if (url.searchParams.get("service") === "missing") {
+          return Response.json(
+            {
+              success: false,
+              error: { code: "services.not-found", message: "No managed service.", op: "x", status: 404 },
+            },
+            { status: 404 },
+          )
+        }
+        return new Response("2026-11-12 started\n", { headers: { "content-type": "text/plain; charset=utf-8" } })
+      }
+      if (url.pathname.endsWith("/status")) return Response.json({ success: true, data: { services: [status] } })
+      return Response.json({ success: true, data: { service: status } })
+    }
+    const output: string[] = []
+    const errors: string[] = []
+    const options = {
+      environment: { USER: "tim" },
+      requestFetch,
+      stdout: (text: string) => output.push(text),
+      stderr: (text: string) => errors.push(text),
+    }
+
+    expect(await projectRegistryCliRun(["svc", "status", "archive"], options)).toBe(0)
+    expect(await projectRegistryCliRun(["svc", "restart", "archive", "--service", "web"], options)).toBe(0)
+    expect(await projectRegistryCliRun(["svc", "logs", "archive", "-n", "5", "-f"], options)).toBe(0)
+    expect(await projectRegistryCliRun(["svc", "logs", "archive", "--service", "missing"], options)).toBe(1)
+
+    expect(requests).toEqual([
+      "GET /api/v1/services/archive/status",
+      'POST /api/v1/services/archive/restart {"service":"web"}',
+      "GET /api/v1/services/archive/logs?lines=5&follow=1",
+      "GET /api/v1/services/archive/logs?service=missing",
+    ])
+    expect(output.join("")).toContain("leo/archive\tweb\tactive/running\tenabled\tport 4310\tproj-archive-web.service")
+    expect(output.join("")).toContain("restart: leo/archive")
+    expect(output.join("")).toContain("2026-11-12 started\n")
+    expect(errors.join("")).toContain("error: No managed service.")
+  })
+
   test("adds a selected service without a port and preserves existing siblings", async () => {
     const bodies: unknown[] = []
     const exitCode = await projectRegistryCliRun(
@@ -1700,6 +1812,8 @@ describe("projectRegistryCliRun", () => {
     expect(output.join("")).toContain("--clear-labels")
     expect(output.join("")).toContain("--oidc-path <pattern>")
     expect(output.join("")).toContain("--clear-oidc-paths")
+    expect(output.join("")).toContain("svc logs <project> [--service <id>] [-n <lines>] [-f]")
+    expect(output.join("")).toContain("--service-command")
     expect(output.join("")).toContain(`project-registry ${pkg.version}`)
   })
 

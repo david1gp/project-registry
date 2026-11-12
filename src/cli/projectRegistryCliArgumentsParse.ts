@@ -1,6 +1,7 @@
 import { createResult, createResultError, type Result } from "#result"
 import { projectDomainValidate } from "../project/projectDomainValidate.js"
 import { projectServiceDevCommandValidate } from "../project/projectServiceDevCommandValidate.js"
+import { projectServiceEnvFileValidate } from "../project/projectServiceEnvFileValidate.js"
 import type { ProjectServiceOwnership } from "../project/projectServiceOwnershipSchema.js"
 import type { ProjectRegistryCliCaddyOptions } from "./ProjectRegistryCliCaddyOptions.js"
 import type { ProjectRegistryCliInvocation } from "./ProjectRegistryCliInvocation.js"
@@ -78,6 +79,8 @@ export function projectRegistryCliArgumentsParse(args: readonly string[]): Resul
   let ttlMs: number | undefined
   let devRoot: string | undefined
   let devCommand: string | undefined
+  let serviceCommand: string | undefined
+  let serviceEnvFile: string | undefined
   let stateFile: string | undefined
   let stateDir: string | undefined
   let kind: "proxy" | "static" | undefined
@@ -123,9 +126,18 @@ export function projectRegistryCliArgumentsParse(args: readonly string[]): Resul
       "--clear-labels",
       "--clear-oidc-paths",
       "--clear-dev-command",
+      "--clear-service-command",
+      "--clear-service-env-file",
+      "--autostart",
+      "--no-autostart",
+      "--follow",
+      "-f",
       "--no-dns",
       "--token-stdin",
     ]
+    // svc-only short/follow flags stay unknown everywhere else.
+    const svcOnly = argument === "--follow" || argument === "-f" || argument === "-n" || argument.startsWith("-n=")
+    if (svcOnly && positionals[0] !== "svc") return createResultError(op, `Unknown option: ${argument}.`)
     if (booleanNames.includes(argument)) {
       if (booleans.has(argument)) return createResultError(op, `Option ${argument} may only be provided once.`)
       booleans.add(argument)
@@ -160,6 +172,9 @@ export function projectRegistryCliArgumentsParse(args: readonly string[]): Resul
       "--ttl",
       "--root",
       "--dev-command",
+      "--service-command",
+      "--service-env-file",
+      "-n",
       "--state-file",
       "--state-dir",
     ]
@@ -281,6 +296,32 @@ export function projectRegistryCliArgumentsParse(args: readonly string[]): Resul
           )
         }
         devCommand = value.trim()
+        continue
+      }
+      if (option === "--service-command") {
+        const commandR = projectServiceDevCommandValidate(value)
+        if (value === undefined || !commandR.success) {
+          return createResultError(
+            op,
+            "Option --service-command requires an argv string without shell metacharacters, e.g. 'bun run start --port {port}'.",
+          )
+        }
+        serviceCommand = value.trim()
+        continue
+      }
+      if (option === "--service-env-file") {
+        if (value === undefined || !projectServiceEnvFileValidate(value).success) {
+          return createResultError(
+            op,
+            "Option --service-env-file requires a relative path inside the project directory, e.g. '.env.production'.",
+          )
+        }
+        serviceEnvFile = value
+        continue
+      }
+      if (option === "-n") {
+        limit = positiveIntegerParse(value)
+        if (limit === undefined) return createResultError(op, "Option -n requires a positive integer.")
         continue
       }
       if (option === "--state-file") {
@@ -446,9 +487,21 @@ export function projectRegistryCliArgumentsParse(args: readonly string[]): Resul
   const hasFilterOptions = section !== undefined || hasListMetadata
   const clearDevCommand = booleans.has("--clear-dev-command")
   const hasDevCommandOptions = devCommand !== undefined || clearDevCommand
+  const clearServiceCommand = booleans.has("--clear-service-command")
+  const clearServiceEnvFile = booleans.has("--clear-service-env-file")
+  const autostart = booleans.has("--autostart") ? true : booleans.has("--no-autostart") ? false : undefined
+  const hasManagedOptions =
+    serviceCommand !== undefined ||
+    clearServiceCommand ||
+    serviceEnvFile !== undefined ||
+    clearServiceEnvFile ||
+    autostart !== undefined
+  const follow = booleans.has("--follow") || booleans.has("-f")
   const hasNonServiceMutationOptions =
     hasCaddyOptions ||
     hasDevCommandOptions ||
+    hasManagedOptions ||
+    follow ||
     devRoot !== undefined ||
     flagName !== undefined ||
     ownership !== undefined ||
@@ -630,6 +683,48 @@ export function projectRegistryCliArgumentsParse(args: readonly string[]): Resul
       socket,
     })
   }
+  if (subject === "svc") {
+    const verbs = ["status", "logs", "start", "stop", "restart", "enable", "disable"] as const
+    const verb = verbs.find((candidate) => candidate === action)
+    if (verb === undefined || value === undefined || extra.length > 0) {
+      return createResultError(op, `Usage: project-registry svc ${verbs.join("|")} <project> [--service <id>].`)
+    }
+    const otherOptions =
+      hasCaddyOptions ||
+      hasDevCommandOptions ||
+      hasManagedOptions ||
+      devRoot !== undefined ||
+      flagName !== undefined ||
+      ownership !== undefined ||
+      noDns ||
+      hasLabelOptions ||
+      hasFilterOptions ||
+      tokenStdin ||
+      hasStateOptions ||
+      hasAccessLogOptions ||
+      hasHttp ||
+      ttlMs !== undefined
+    if (otherOptions) return createResultError(op, "svc only accepts --service, and -n/-f for logs.")
+    if (verb !== "logs" && (limit !== undefined || follow)) {
+      return createResultError(op, "Options -n and -f are only valid for svc logs.")
+    }
+    if (verb === "logs" && limit !== undefined && limit > 10_000) {
+      return createResultError(op, "Option -n must be at most 10000.")
+    }
+    if (!projectNamePattern.test(value)) return projectNameError(op)
+    return createResult({
+      command: {
+        kind: "svc",
+        verb,
+        name: value,
+        ...(service === undefined ? {} : { service }),
+        ...(verb === "logs" && limit !== undefined ? { lines: limit } : {}),
+        ...(verb === "logs" && follow ? { follow: true } : {}),
+      },
+      json,
+      socket,
+    })
+  }
   if (
     subject === "dev" &&
     action === "up" &&
@@ -638,6 +733,8 @@ export function projectRegistryCliArgumentsParse(args: readonly string[]): Resul
     limit === undefined &&
     !hasCaddyOptions &&
     !hasDevCommandOptions &&
+    !hasManagedOptions &&
+    !follow &&
     flagName === undefined &&
     ownership === undefined &&
     !noDns &&
@@ -706,10 +803,10 @@ export function projectRegistryCliArgumentsParse(args: readonly string[]): Resul
     if (clearOidcPaths) {
       return createResultError(op, "Option --clear-oidc-paths is only valid for project edit.")
     }
-    if (hasDevCommandOptions || devRoot !== undefined) {
+    if (hasDevCommandOptions || devRoot !== undefined || hasManagedOptions || follow) {
       return createResultError(
         op,
-        "Options --dev-command, --clear-dev-command, and --root are not valid for project create.",
+        "Options --dev-command, --service-command, --service-env-file, --autostart, and --root are not valid for project create; use project edit.",
       )
     }
     return createResult({
@@ -749,6 +846,19 @@ export function projectRegistryCliArgumentsParse(args: readonly string[]): Resul
     if (hasDevCommandOptions && service === undefined) {
       return createResultError(op, "Options --dev-command and --clear-dev-command require --service.")
     }
+    if (follow) return createResultError(op, "Option -f is only valid for svc logs.")
+    if (serviceCommand !== undefined && clearServiceCommand) {
+      return createResultError(op, "Options --service-command and --clear-service-command cannot be combined.")
+    }
+    if (serviceEnvFile !== undefined && clearServiceEnvFile) {
+      return createResultError(op, "Options --service-env-file and --clear-service-env-file cannot be combined.")
+    }
+    if (booleans.has("--autostart") && booleans.has("--no-autostart")) {
+      return createResultError(op, "Options --autostart and --no-autostart cannot be combined.")
+    }
+    if (hasManagedOptions && service === undefined) {
+      return createResultError(op, "Options --service-command, --service-env-file, and --autostart require --service.")
+    }
     return createResult({
       command: {
         kind: "project-edit",
@@ -757,6 +867,17 @@ export function projectRegistryCliArgumentsParse(args: readonly string[]): Resul
         ...(ownership === undefined ? {} : { ownership }),
         ...(devCommand === undefined ? {} : { devCommand }),
         ...(clearDevCommand ? { clearDevCommand: true } : {}),
+        ...(hasManagedOptions
+          ? {
+              managed: {
+                ...(serviceCommand === undefined ? {} : { command: serviceCommand }),
+                ...(clearServiceCommand ? { clearCommand: true } : {}),
+                ...(serviceEnvFile === undefined ? {} : { envFile: serviceEnvFile }),
+                ...(clearServiceEnvFile ? { clearEnvFile: true } : {}),
+                ...(autostart === undefined ? {} : { autostart }),
+              },
+            }
+          : {}),
         caddy,
         ...(hasLabels ? { labels } : {}),
         ...(removeLabels.length > 0 ? { removeLabels } : {}),

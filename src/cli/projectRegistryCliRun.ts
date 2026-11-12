@@ -21,10 +21,12 @@ import { projectRegistryCliArgumentsParse } from "./projectRegistryCliArgumentsP
 import { projectRegistryCliHelp } from "./projectRegistryCliHelp.js"
 import { projectRegistryCliOutputFormat } from "./projectRegistryCliOutputFormat.js"
 import { projectRegistryCliRequest } from "./projectRegistryCliRequest.js"
+import { projectRegistryCliServiceLogs } from "./projectRegistryCliServiceLogs.js"
 import { projectRegistryCliSocketResolve } from "./projectRegistryCliSocketResolve.js"
 import { projectRegistryCliSplitDnsRollback } from "./projectRegistryCliSplitDnsRollback.js"
 import { projectRegistryCliVersion } from "./projectRegistryCliVersion.js"
 import { projectServicesDevApply } from "./projectServicesDevApply.js"
+import { projectServicesManagedApply } from "./projectServicesManagedApply.js"
 import { projectServicesPatchApply } from "./projectServicesPatchApply.js"
 
 type CliRunOptions = {
@@ -334,7 +336,8 @@ async function commandRequest(
     command.kind !== "user-cloudflare-token-set" &&
     command.kind !== "dev-up" &&
     command.kind !== "dev-down" &&
-    command.kind !== "dev-ls"
+    command.kind !== "dev-ls" &&
+    command.kind !== "svc"
   ) {
     return projectRegistryCliRequest(socketPath, requestPath(invocation), {}, requestFetch)
   }
@@ -344,6 +347,20 @@ async function commandRequest(
 
   if (command.kind === "project-access-logs") {
     return projectRegistryCliRequest(socketPath, accessLogRequestPath(command, command.owner), {}, requestFetch)
+  }
+
+  if (command.kind === "svc") {
+    const path = `/api/v1/services/${encodeURIComponent(command.name)}/${command.verb}`
+    if (command.verb === "status") {
+      const query = command.service === undefined ? "" : `?${new URLSearchParams({ service: command.service })}`
+      return projectRegistryCliRequest(socketPath, `${path}${query}`, {}, requestFetch)
+    }
+    return projectRegistryCliRequest(
+      socketPath,
+      path,
+      { method: "POST", body: command.service === undefined ? {} : { service: command.service } },
+      requestFetch,
+    )
   }
 
   if (command.kind === "dev-ls" || command.kind === "dev-up" || command.kind === "dev-down") {
@@ -529,7 +546,7 @@ async function commandRequest(
       const canonicalR = projectCanonicalParse(projectResponse?.project, "projectRegistryCliProjectResponseParse")
       if (!canonicalR.success) return canonicalR
       const devOnly =
-        (command.devCommand !== undefined || command.clearDevCommand === true) &&
+        (command.devCommand !== undefined || command.clearDevCommand === true || command.managed !== undefined) &&
         Object.keys(command.caddy).length === 0 &&
         command.ownership === undefined
       const servicesR = devOnly
@@ -542,8 +559,12 @@ async function commandRequest(
       if (!devR.success) {
         return { ...devR, hint: "Run 'project-registry project get <name> --json' to list existing services." }
       }
+      const managedR = projectServicesManagedApply(devR.data, command.service, command.managed)
+      if (!managedR.success) {
+        return { ...managedR, hint: "Run 'project-registry project get <name> --json' to list existing services." }
+      }
       body.schemaVersion = 2
-      body.services = devR.data
+      body.services = managedR.data
     } else if (Object.keys(command.caddy).length > 0) {
       body.caddy = command.caddy
     }
@@ -640,6 +661,23 @@ export async function projectRegistryCliRun(args: readonly string[], options: Cl
   if (!socketR.success) {
     errorWrite({ ...socketR, code: "cli.socket" }, invocation.json, writeError)
     return 1
+  }
+  if (invocation.command.kind === "svc" && invocation.command.verb === "logs") {
+    const command = invocation.command
+    const logsR = await projectRegistryCliServiceLogs({
+      socketPath: socketR.data,
+      name: command.name,
+      ...(command.service === undefined ? {} : { service: command.service }),
+      ...(command.lines === undefined ? {} : { lines: command.lines }),
+      ...(command.follow === true ? { follow: true } : {}),
+      requestFetch: options.requestFetch ?? fetch,
+      stdout: writeOut,
+    })
+    if (!logsR.success) {
+      errorWrite(logsR, invocation.json, writeError)
+      return 1
+    }
+    return 0
   }
   const stdin =
     invocation.command.kind === "user-cloudflare-token-set" ? (options.stdin ?? Bun.stdin.stream()) : undefined

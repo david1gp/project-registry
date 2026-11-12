@@ -1,5 +1,6 @@
 import type { ProjectServiceOwnership } from "../project/projectServiceOwnershipSchema.js"
 import type { ProjectRegistryCliCaddyOptions } from "./ProjectRegistryCliCaddyOptions.js"
+import type { ProjectServicesManagedPatch } from "./projectServicesManagedApply.js"
 
 export type ProjectRegistryCliInvocation = {
   command:
@@ -36,6 +37,7 @@ export type ProjectRegistryCliInvocation = {
         clearLabels?: boolean
         devCommand?: string
         clearDevCommand?: boolean
+        managed?: ProjectServicesManagedPatch
       }
     | { kind: "project-delete"; name: string }
     | { kind: "project-service-delete"; name: string; service: string }
@@ -45,6 +47,14 @@ export type ProjectRegistryCliInvocation = {
     | { kind: "dev-up"; name: string; ttlMs?: number; service?: string; root?: string }
     | { kind: "dev-down"; name: string }
     | { kind: "dev-ls" }
+    | {
+        kind: "svc"
+        verb: "status" | "logs" | "start" | "stop" | "restart" | "enable" | "disable"
+        name: string
+        service?: string
+        lines?: number
+        follow?: boolean
+      }
     | { kind: "project-access-logs"; name: string; owner?: string; limit?: number; before?: string }
     | { kind: "route-check"; name: string; service?: string }
     | { kind: "history"; limit?: number }

@@ -31,6 +31,8 @@ Commands:
   dev up <project> [--root <path>] [--service <id>] [--ttl <ms>]
   dev down <project>
   dev ls
+  svc status|start|stop|restart|enable|disable <project> [--service <id>]
+  svc logs <project> [--service <id>] [-n <lines>] [-f]
 
 Project create/edit options:
   --port <port>              Upstream port (create allocates one when omitted)
@@ -57,6 +59,13 @@ Project create/edit options:
   --clear-labels              Clear all project labels (edit only)
   --dev-command "<argv>"     Service dev command override with {port}/{host} placeholders (edit with --service)
   --clear-dev-command        Remove the service dev command override (edit with --service)
+  --service-command "<argv>" Managed service command with {port}/{host} (edit with --service); default derives
+                              from the package.json dev script on the service port
+  --clear-service-command    Remove the managed service command (edit with --service)
+  --service-env-file <rel>   Managed service env file relative to the project directory (edit with --service)
+  --clear-service-env-file   Remove the managed service env file (edit with --service)
+  --autostart | --no-autostart
+                              Enable/disable the managed service at boot; required for the first definition
   --flush-interval <number>  Reverse proxy flush interval (-1 for immediate)
 
 Cloudflare credentials:
@@ -73,6 +82,16 @@ Dev servers (dark-gated; the daemon needs PROJECT_REGISTRY_DEV_ENABLED=true):
   --ttl <ms>                    Dev server lifetime in milliseconds up to 86400000 (dev up only)
   --root <path>                 Dev root to use when <project> exists in several allowed roots (dev up only)
   --service <id>                Registry service whose dev.command to run (dev up only)
+
+Managed services (dark-gated; the daemon needs PROJECT_REGISTRY_SERVICES_ENABLED=true):
+  Registry-owned system units proj-<project>-<service>.service run as the service user with the
+  service's registry port. Allowed for the configured operators on every managed project.
+  svc status <project> [--service <id>]     Show unit state for one or all managed services
+  svc start|stop|restart <project> [--service <id>]
+  svc enable|disable <project> [--service <id>]
+                              Mutating actions are recorded in the managed-service audit log
+  svc logs <project> [--service <id>] [-n <lines>] [-f]
+                              journalctl output (default 100 lines, max 10000); -f follows
 
 Split-DNS rollback (local admin command, no daemon round-trip):
   tailscale split-dns rollback --state-file <path>
