@@ -382,6 +382,39 @@ describe("project use cases", () => {
     expect(repository.projects[0]).toBe(persisted[3])
   })
 
+  test("null clears per-service dev and managed-service fields that a deep merge would otherwise keep", async () => {
+    const canonicalR = projectMigrate({
+      schemaVersion: 2,
+      owner: "alice",
+      name: "catalog",
+      services: [
+        {
+          id: "default",
+          units: [],
+          ownership: "registry",
+          caddy: { port: 3000, domains: ["catalog.example"] },
+          dev: { command: "vite --port {port}" },
+          service: { command: "bun run start", envFile: ".env", autostart: true },
+        },
+      ],
+    })
+    if (!canonicalR.success) throw new Error(canonicalR.errorMessage)
+    const repository = repositoryCreate([canonicalR.data])
+    const access = accessCreate({ subject: "alice-subject", username: "alice", role: "own" }, { alice: "own" })
+
+    const result = await projectEdit(
+      useCaseOptions(repository, access),
+      { owner: "alice", name: "catalog" },
+      { schemaVersion: 2, services: [{ id: "default", dev: null, service: { command: null, autostart: false } }] },
+      { expectedRevision: currentRevision },
+    )
+
+    expect(result.success).toBe(true)
+    const [service] = (repository.projects[0] as Project & { services: Record<string, unknown>[] }).services
+    expect(service).not.toHaveProperty("dev")
+    expect(service?.service).toEqual({ envFile: ".env", autostart: false })
+  })
+
   test("merges an explicit canonical service edit without dropping sibling ownership", async () => {
     const canonicalR = projectMigrate({
       schemaVersion: 2,

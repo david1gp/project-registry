@@ -16,11 +16,11 @@ describe("projectServicesDevApply", () => {
     })
   })
 
-  test("clears the dev command", () => {
+  test("clears the dev command with an explicit null so the daemon merge cannot restore it", () => {
     const result = projectServicesDevApply(services, "web", undefined, true)
     expect(result.success).toBe(true)
     if (!result.success) return
-    expect(result.data[0]).not.toHaveProperty("dev")
+    expect(result.data[0]).toHaveProperty("dev", null)
     expect(result.data[1]).toBe(services[1]!)
   })
 

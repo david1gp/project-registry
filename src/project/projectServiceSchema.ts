@@ -1,6 +1,7 @@
 import * as a from "valibot"
 import { projectCaddySchema } from "./projectCaddySchema.js"
 import { projectServiceDevSchema } from "./projectServiceDevSchema.js"
+import { projectServiceManagedSchema } from "./projectServiceManagedSchema.js"
 import { projectServiceOwnershipSchema } from "./projectServiceOwnershipSchema.js"
 
 const serviceUnitSchema = a.pipe(a.string(), a.regex(/^[A-Za-z0-9_.@:-]+(?:\.service)?$/))
@@ -18,6 +19,7 @@ export const projectServiceSchema = a.strictObject({
   caddy: a.optional(a.nullable(projectCaddySchema), null),
   ownership: a.optional(projectServiceOwnershipSchema, "registry"),
   dev: a.optional(projectServiceDevSchema),
+  service: a.optional(projectServiceManagedSchema),
 })
 
 export type ProjectService = a.InferOutput<typeof projectServiceSchema>

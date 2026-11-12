@@ -89,6 +89,29 @@ function projectEditCanonicalPatch(input: Record<string, unknown>): Record<strin
   return patch
 }
 
+// Service patches deep-merge into the stored service, so omitting a key can
+// never remove it. `null` is the explicit clear for the optional per-service
+// metadata objects (`dev`, `service`) and for the optional fields inside
+// `service`; `caddy: null` keeps its own meaning (no route).
+const projectEditServiceClearableKeys = ["dev", "service"]
+const projectEditManagedServiceClearableKeys = ["command", "envFile"]
+
+function projectEditServiceClearsApply(service: Record<string, unknown>): Record<string, unknown> {
+  const cleared = { ...service }
+  for (const key of projectEditServiceClearableKeys) {
+    if (cleared[key] === null) delete cleared[key]
+  }
+  const managed = cleared.service
+  if (managed && typeof managed === "object" && !Array.isArray(managed)) {
+    const managedCleared = { ...(managed as Record<string, unknown>) }
+    for (const key of projectEditManagedServiceClearableKeys) {
+      if (managedCleared[key] === null) delete managedCleared[key]
+    }
+    cleared.service = managedCleared
+  }
+  return cleared
+}
+
 function projectEditCanonicalServicesMerge(
   existing: ProjectCanonical,
   patch: Record<string, unknown>,
@@ -106,7 +129,9 @@ function projectEditCanonicalServicesMerge(
     const servicePatch = patchesById.get(service.id)
     if (servicePatch === undefined) return service
     patchesById.delete(service.id)
-    return projectEditRecordMerge(service as unknown as Record<string, unknown>, servicePatch)
+    return projectEditServiceClearsApply(
+      projectEditRecordMerge(service as unknown as Record<string, unknown>, servicePatch),
+    )
   })
   for (const service of patchServices) {
     if (patchesById.has(service.id as string)) services.push(service)

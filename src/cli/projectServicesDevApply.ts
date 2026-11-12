@@ -20,10 +20,9 @@ export function projectServicesDevApply(
   return createResult(
     services.map((service) => {
       if (service.id !== serviceId) return service
-      if (clearDevCommand === true) {
-        const { dev: _dev, ...rest } = service
-        return rest
-      }
+      // `dev: null` is the daemon's explicit clear: an omitted key would be
+      // deep-merged back from the stored service.
+      if (clearDevCommand === true) return { ...service, dev: null } as unknown as ProjectService
       return { ...service, dev: { command: devCommand as string } }
     }),
   )
