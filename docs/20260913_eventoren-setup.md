@@ -1,5 +1,5 @@
 # Goal
-Set up existing `leo@leo-server:~/projects/eventoren` using the default project-creator profile. The user explicitly authorizes recipe overwrites for this one-off Eventoren exception.
+Set up existing `leo@wonder1-server:~/projects/eventoren` using the default project-creator profile. The user explicitly authorizes recipe overwrites for this one-off Eventoren exception.
 
 # Decisions
 - Preserve dirty CLI checkouts; use a separate clean checkout of current upstream.

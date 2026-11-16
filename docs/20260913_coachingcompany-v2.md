@@ -1,5 +1,5 @@
 # Goal
-Extend project-creator and set up coachingcompany-v2 on leo@leo-server in ~/projects/coachingcompany-v2 using the default profile; verify development and production deployments, DNS and TLS.
+Extend project-creator and set up coachingcompany-v2 on leo@wonder1-server in ~/projects/coachingcompany-v2 using the default profile; verify development and production deployments, DNS and TLS.
 
 # Decisions
 - Preserve the existing dirty ~/adaptive/project-creator checkout. Implement and install from a separate current-upstream checkout.

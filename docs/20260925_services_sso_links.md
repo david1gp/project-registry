@@ -1,7 +1,7 @@
 # Services dashboard SSO links
 
 ## Goal
-On leo@leo-server, add preview and production SSO links for semesterkur-v2, coachingcompany-v2, filmschauspielschule-v2, crm, eventoren, allgroups-chat, archive, multichat. Display link.* labels without their prefix, including renamed link.official and link.production. Commit using a Luna agent and commits skill, deploy, and verify the deployed dashboard.
+On leo@wonder1-server, add preview and production SSO links for semesterkur-v2, coachingcompany-v2, filmschauspielschule-v2, crm, eventoren, allgroups-chat, archive, multichat. Display link.* labels without their prefix, including renamed link.official and link.production. Commit using a Luna agent and commits skill, deploy, and verify the deployed dashboard.
 
 ## Scope and decisions
 - Services checkout: /home/leo/projects/services. Read its instructions. Registry is authoritative; preserve unrelated metadata and service routes.
@@ -22,4 +22,4 @@ Run only relevant model/favicon tests, no watch mode, maximum concurrency 1; aft
 
 ## Current context
 Renamed-label changes, relative-link resolution and the homePageStateCreate jobsVisited accessor fix are committed, pushed and deployed at https://services.contentoren.de.
-Relative SSO labels and necessary explicit bases are set on all eight projects. The deployed registry uses shared project labels across service records. Access services files through ssh leo@leo-server, not local filesystem paths.
+Relative SSO labels and necessary explicit bases are set on all eight projects. The deployed registry uses shared project labels across service records. Access services files through ssh leo@wonder1-server, not local filesystem paths.

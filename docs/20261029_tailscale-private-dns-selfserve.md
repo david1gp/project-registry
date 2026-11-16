@@ -5,7 +5,7 @@ Date: 2026-10-29. Status: plan, not implemented.
 ## Goal
 
 Move the Tailscale private-DNS logic that currently lives in `~/ds`
-(`dev-servers`, `leo-server/` scope manifest, dnsmasq resolver, split-DNS
+(`dev-servers`, `wonder1-server/` scope manifest, dnsmasq resolver, split-DNS
 control, private Caddy + TLS, retirement/verifier tooling) into
 `project-registry`, so users can add/edit/delete their own private domains
 with `project-registry project create/edit` and no manifest PR.
@@ -49,9 +49,9 @@ Narrower access stays manual Tailscale-admin ACL work.
   the async pattern to mirror
   (`src/runtime/projectRegistryDaemonCloudflareDnsCreate.ts`).
 - `~/ds` owns: central scope manifest
-  (`leo-server/tailscale-rollout/leoTailscalePrivateScopePolicy.ts`),
-  dnsmasq exact-host resolver (`leo-server/tailscale/`), Tailscale split-DNS
-  API control (`leo-server/tailscale-control/`, per-batch state files,
+  (`wonder1-server/tailscale-rollout/wonder1TailscalePrivateScopePolicy.ts`),
+  dnsmasq exact-host resolver (`wonder1-server/tailscale/`), Tailscale split-DNS
+  API control (`wonder1-server/tailscale-control/`, per-batch state files,
   root-only token), private Caddy + per-host TLS, retirement/verification.
 - Credential files exist for all four owners in
   `/etc/project-registry/cloudflare/` (`leo/david/fabian/musa.env`,

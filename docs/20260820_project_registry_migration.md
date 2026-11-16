@@ -6,7 +6,7 @@ Replace the Leo host's legacy `caddy-projects` daemon with `project-registry` wh
 
 ## Decisions
 
-- Perform the replacement on `leo-server`; keep `contentoren-server` and its independent root Caddy unchanged.
+- Perform the replacement on `wonder1-server`; keep `contentoren-server` and its independent root Caddy unchanged.
 - Leo already runs the authoritative system `caddy.service` as user `caddy`, with live configuration under `/home/caddy/.config/caddy` and TLS state under `/home/caddy/.local/share/caddy`. Keep this Caddy running before, during, and after the daemon replacement.
 - Replace only the system `caddy-projects.service` control daemon with `project-registryd`; both use the same local Caddy admin API at `127.0.0.1:2019` at different times.
 - Do not copy stale `/home/leo` Caddy data over the established live `/home/caddy` data. Reuse the live data in place and make a non-destructive backup for rollback.
@@ -48,11 +48,11 @@ Replace the Leo host's legacy `caddy-projects` daemon with `project-registry` wh
 ## Paths
 
 - `ops/migration/`
-- `/home/david/leo_internal/dev-servers/leo-server/caddy/projects/`
-- `/home/david/leo_internal/dev-servers/leo-server/caddy/generate.mjs`
-- `/home/david/leo_internal/dev-servers/leo-server/caddy/install/leoProjectRegistryInstallCli.ts`
-- `/home/david/leo_internal/dev-servers/leo-server/caddy/service/caddy.service`
-- `/home/david/leo_internal/dev-servers/leo-server/caddy/oidc/leonardomora.oidc.env`
+- `/home/david/leo_internal/dev-servers/wonder1-server/caddy/projects/`
+- `/home/david/leo_internal/dev-servers/wonder1-server/caddy/generate.mjs`
+- `/home/david/leo_internal/dev-servers/wonder1-server/caddy/install/wonder1ProjectRegistryInstallCli.ts`
+- `/home/david/leo_internal/dev-servers/wonder1-server/caddy/service/caddy.service`
+- `/home/david/leo_internal/dev-servers/wonder1-server/caddy/oidc/leonardomora.oidc.env`
 - `/home/david/leo/contentoren-server/caddy/config/Caddyfile`
 - `/home/david/leo/contentoren-server/shared/routes.json`
 - `/home/caddy/.local/share/caddy`
