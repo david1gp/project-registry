@@ -7,13 +7,14 @@ export type ManagedServiceEntries = {
   entries: ManagedServiceEntry[]
   /** Unit names claimed by more than one row (same project name, different owners): never rendered. */
   conflicts: string[]
-  /** Rows that declare a managed service but cannot run one (no port, external ownership, bad names). */
+  /** Rows that declare a managed service but cannot run one (external ownership, bad names). */
   invalid: string[]
 }
 
 /**
  * Flatten every row service with a `service` definition into reconcile
- * entries. Pure. Unit names are `proj-<project>-<service>`, so two owners
+ * entries. Pure. A service without a Caddy route is a background worker:
+ * it runs without a port or domains. Unit names are `proj-<project>-<service>`, so two owners
  * with the same project name collide: both are reported and skipped rather
  * than letting one silently win.
  */
@@ -27,8 +28,8 @@ export function managedServiceEntriesList(projects: readonly Project[]): Managed
       if (service.service === undefined) continue
       const label = `${project.owner}/${project.name}/${service.id}`
       const unit = managedServiceUnitName(project.name, service.id)
-      const caddy = service.caddy
-      if (unit === undefined || caddy === null || caddy === undefined || service.ownership === "external") {
+      const caddy = service.caddy ?? undefined
+      if (unit === undefined || service.ownership === "external") {
         invalid.push(label)
         continue
       }
@@ -37,8 +38,8 @@ export function managedServiceEntriesList(projects: readonly Project[]): Managed
         project: project.name,
         serviceId: service.id,
         unit,
-        port: caddy.port,
-        domains: [...caddy.domains],
+        ...(caddy === undefined ? {} : { port: caddy.port }),
+        domains: caddy === undefined ? [] : [...caddy.domains],
         managed: service.service,
       }
       byUnit.set(unit, [...(byUnit.get(unit) ?? []), entry])

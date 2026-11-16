@@ -9,7 +9,8 @@ export type ManagedServiceUnitSpec = {
   workingDirectory: string
   slice: string
   pathValue: string
-  port: number
+  /** Registry port; absent for background workers without a Caddy route. */
+  port?: number
   domains: readonly string[]
   /** Absolute env file path; already validated to live inside the project dir. */
   envFile?: string

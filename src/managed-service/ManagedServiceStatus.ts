@@ -3,7 +3,8 @@ export type ManagedServiceStatus = {
   project: string
   service: string
   unit: string
-  port: number
+  /** Absent for background workers without a Caddy route. */
+  port?: number
   domains: string[]
   autostart: boolean
   activeState: string

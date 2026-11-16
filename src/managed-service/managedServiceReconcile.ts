@@ -55,7 +55,8 @@ export async function managedServiceReconcile(
 
   const listed = managedServiceEntriesList(options.projects)
   for (const unit of listed.conflicts) summary.failures.push(`${unit}: claimed by more than one owner`)
-  for (const label of listed.invalid) summary.failures.push(`${label}: managed service needs a registry port`)
+  for (const label of listed.invalid)
+    summary.failures.push(`${label}: managed service needs registry ownership and a unit-safe name`)
 
   let existingNames: string[]
   try {
@@ -92,7 +93,7 @@ export async function managedServiceReconcile(
       workingDirectory: commandR.data.workingDirectory,
       slice: config.slice,
       pathValue: config.pathValue,
-      port: entry.port,
+      ...(entry.port === undefined ? {} : { port: entry.port }),
       domains: entry.domains,
       ...(commandR.data.envFile === undefined ? {} : { envFile: commandR.data.envFile }),
       command: commandR.data.command,

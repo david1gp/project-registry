@@ -23,7 +23,8 @@ function underDirectory(directory: string, candidate: string): boolean {
  * Resolve the argv, working directory, and env file for one managed service.
  * Same derivation as `dev up` (row command with {port}/{host}, else the
  * package.json dev script, else `bun run dev`), but on the row's registered
- * port and loopback. Project-relative executables and the env file must stay
+ * port and loopback. Workers without a port need an explicit row command,
+ * and `{port}` placeholders fail for them. Project-relative executables and the env file must stay
  * inside the real project directory; symlinks out of it are refused because
  * systemd (PID 1, root) reads EnvironmentFile before dropping privileges.
  */
@@ -37,12 +38,21 @@ export async function managedServiceCommandResolve(options: {
   const directoryR = await devProjectDirectoryResolve({ projectsRoot, project: entry.project, filesystem })
   if (!directoryR.success) return { ...directoryR, op }
   const directory = directoryR.data
+  // Workers (no registry port) never fall back to the package.json dev
+  // script: that derivation targets a port-bound dev server.
+  if (entry.port === undefined && entry.managed.command === undefined) {
+    return createResultErrorCode(
+      op,
+      "background worker without a registry port needs an explicit service command",
+      "request.invalid",
+    )
+  }
   const commandR = await devCommandResolve({
     directory,
     projectsRoot,
     filesystem,
     ...(entry.managed.command === undefined ? {} : { rowCommand: entry.managed.command }),
-    port: entry.port,
+    ...(entry.port === undefined ? {} : { port: entry.port }),
     host: managedServiceHost,
     project: entry.project,
   })

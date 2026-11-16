@@ -66,6 +66,21 @@ describe("managedServiceUnitRender", () => {
     expect(result.data).not.toContain("EnvironmentFile=")
   })
 
+  test("a worker without a port or domains gets no PORT or allowed-hosts environment", () => {
+    const { port: _port, ...withoutPort } = spec
+    const result = managedServiceUnitRender({
+      ...withoutPort,
+      domains: [],
+      command: "bun",
+      args: ["run", "./worker.ts"],
+    })
+    expect(result.success).toBe(true)
+    if (!result.success) return
+    expect(result.data).not.toContain("PORT=")
+    expect(result.data).not.toContain("__VITE_ADDITIONAL_SERVER_ALLOWED_HOSTS")
+    expect(lines(result.data)).toContain("Environment=HOST=127.0.0.1")
+  })
+
   test("escapes systemd % specifiers so argv reaches the process verbatim", () => {
     const result = managedServiceUnitRender({ ...spec, args: ["--format=%h"] })
     expect(result.success).toBe(true)

@@ -207,4 +207,51 @@ describe("managedServiceReconcile", () => {
       "proj-archive-web.service: service env file must not be a symlink",
     ])
   })
+
+  test("a background worker without a Caddy route runs its explicit command with no port or domains", async () => {
+    const calls: RunnerCall[] = []
+    const filesystem = managedServiceFilesystemFake()
+    const result = await managedServiceReconcile({
+      config: managedServiceConfigFixture,
+      projects: [
+        managedServiceProjectFixture("leo", "archive", [
+          { id: "worker", service: { autostart: true, command: "bun run ./worker.ts" } },
+        ]),
+      ],
+      runner: managedServiceRunnerFake(calls),
+      filesystem,
+      projectFilesystem,
+    })
+    expect(result.success && result.data.failures).toEqual([])
+    const unit = filesystem.files.get(`${unitDirectory}/proj-archive-worker.service`) ?? ""
+    expect(unit).toContain("ExecStart=/usr/bin/env bun run ./worker.ts")
+    expect(unit).not.toContain("PORT=")
+    expect(unit).not.toContain("__VITE_ADDITIONAL_SERVER_ALLOWED_HOSTS")
+    expect(systemctlCalls(calls)).toEqual([
+      "systemctl daemon-reload",
+      "systemctl enable proj-archive-worker.service",
+      "systemctl restart proj-archive-worker.service",
+    ])
+  })
+
+  test("a background worker needs an explicit command and {port} placeholders fail", async () => {
+    const filesystem = managedServiceFilesystemFake()
+    const result = await managedServiceReconcile({
+      config: managedServiceConfigFixture,
+      projects: [
+        managedServiceProjectFixture("leo", "archive", [
+          { id: "derived", service: { autostart: true } },
+          { id: "ported", service: { autostart: true, command: "bun run ./worker.ts --port {port}" } },
+        ]),
+      ],
+      runner: managedServiceRunnerFake([]),
+      filesystem,
+      projectFilesystem,
+    })
+    expect(filesystem.writes).toEqual([])
+    expect(result.success && result.data.failures).toEqual([
+      "proj-archive-derived.service: background worker without a registry port needs an explicit service command",
+      "proj-archive-ported.service: dev command placeholders need a port",
+    ])
+  })
 })

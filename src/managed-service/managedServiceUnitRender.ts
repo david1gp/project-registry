@@ -22,7 +22,7 @@ function absolutePathIsSafe(value: string): boolean {
 /**
  * Render a registry-owned system unit for one managed project service. Pure:
  * no filesystem or systemd access. The unit runs as the unprivileged service
- * user in its own slice with the registry row's port; `/servers` and every
+ * user in its own slice with the registry row's port (workers get none); `/servers` and every
  * home except the service user's own stay invisible, and only the projects
  * root plus that home are writable.
  */
@@ -32,7 +32,7 @@ export function managedServiceUnitRender(spec: ManagedServiceUnitSpec): Result<s
     return createResultError(op, "service user or group is invalid")
   }
   if (!slicePattern.test(spec.slice)) return createResultError(op, "service slice is invalid")
-  if (!Number.isInteger(spec.port) || spec.port < 1 || spec.port > 65535) {
+  if (spec.port !== undefined && (!Number.isInteger(spec.port) || spec.port < 1 || spec.port > 65535)) {
     return createResultError(op, "service port is invalid")
   }
   for (const path of [spec.homeDirectory, spec.projectsRoot, spec.workingDirectory]) {
@@ -58,7 +58,7 @@ export function managedServiceUnitRender(spec: ManagedServiceUnitSpec): Result<s
   const environment = [
     `PATH=${spec.pathValue}`,
     `HOME=${home}`,
-    `PORT=${spec.port}`,
+    ...(spec.port === undefined ? [] : [`PORT=${spec.port}`]),
     "HOST=127.0.0.1",
     ...(spec.domains.length === 0 ? [] : [`__VITE_ADDITIONAL_SERVER_ALLOWED_HOSTS=${spec.domains.join(",")}`]),
   ]

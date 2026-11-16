@@ -33,7 +33,7 @@ export async function managedServiceStatusRead(
       project: entry.project,
       service: entry.serviceId,
       unit: entry.unit,
-      port: entry.port,
+      ...(entry.port === undefined ? {} : { port: entry.port }),
       domains: [...entry.domains],
       autostart: entry.managed.autostart,
       activeState: properties.get("ActiveState") || "unknown",
