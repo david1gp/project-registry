@@ -46,6 +46,7 @@ describe("devUnitStart", () => {
       "--unit=dev-tim-akademie.service",
       "--property=User=tim",
       "--property=Slice=user-1002.slice",
+      "--property=UMask=0002",
       "--property=Description=project-registry dev tim/dev-tim-akademie.service",
       "--working-directory=/projects/akademie",
       "--setenv=PATH=/usr/local/bin:/usr/bin",

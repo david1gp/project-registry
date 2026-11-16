@@ -73,6 +73,7 @@ async function startInternal(
     `--unit=${spec.unit}`,
     `--property=User=${spec.user}`,
     `--property=Slice=user-${spec.uid}.slice`,
+    "--property=UMask=0002",
     `--property=Description=project-registry dev ${spec.user}/${spec.unit}`,
     `--working-directory=${spec.workingDirectory}`,
     `--setenv=PATH=${spec.pathValue}`,
