@@ -60,7 +60,8 @@ Project create/edit options:
   --dev-command "<argv>"     Service dev command override with {port}/{host} placeholders (edit with --service)
   --clear-dev-command        Remove the service dev command override (edit with --service)
   --service-command "<argv>" Managed service command with {port}/{host} (edit with --service); default derives
-                              from the package.json dev script on the service port
+                              from the package.json dev script on the service port; on a new --service
+                              id it adds a background worker with no port or domain
   --clear-service-command    Remove the managed service command (edit with --service)
   --service-env-file <rel>   Managed service env file relative to the project directory (edit with --service)
   --clear-service-env-file   Remove the managed service env file (edit with --service)

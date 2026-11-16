@@ -13,7 +13,9 @@ export type ProjectServicesManagedPatch = {
  * Apply `--service-command`/`--service-env-file`/`--autostart` edits to one
  * service's managed `service` definition. A first definition needs an
  * explicit `--autostart`/`--no-autostart`; clears travel as `null` so the
- * daemon's deep merge removes them instead of restoring stored values.
+ * daemon's deep merge removes them instead of restoring stored values. A
+ * service id that does not exist yet is added as a background worker (no
+ * Caddy route, so no port or domain); it needs an explicit `--service-command`.
  */
 export function projectServicesManagedApply(
   services: readonly ProjectService[],
@@ -24,7 +26,22 @@ export function projectServicesManagedApply(
   if (patch === undefined) return createResult([...services])
   const target = services.find((service) => service.id === serviceId)
   if (target === undefined) {
-    return createResultError(op, `Service ${serviceId} does not exist; add it with --domain first.`)
+    if (patch.command === undefined) {
+      return createResultError(
+        op,
+        `Service ${serviceId} does not exist; add it with --domain, or pass --service-command to add a background worker.`,
+      )
+    }
+    if (patch.autostart === undefined) {
+      return createResultError(
+        op,
+        `Service ${serviceId} has no managed definition yet; pass --autostart or --no-autostart.`,
+      )
+    }
+    const managed: Record<string, unknown> = { autostart: patch.autostart, command: patch.command }
+    if (patch.envFile !== undefined) managed.envFile = patch.envFile
+    const worker = { id: serviceId, units: [], caddy: null, ownership: "registry", service: managed }
+    return createResult([...services, worker as unknown as ProjectService])
   }
   const autostart = patch.autostart ?? target.service?.autostart
   if (autostart === undefined) {

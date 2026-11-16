@@ -167,7 +167,7 @@ const managedServiceStatusSchema = a.looseObject({
   project: a.string(),
   service: a.string(),
   unit: a.string(),
-  port: a.number(),
+  port: a.optional(a.number()),
   autostart: a.boolean(),
   activeState: a.string(),
   subState: a.string(),
@@ -177,7 +177,7 @@ const managedServiceListSchema = a.object({ services: a.array(managedServiceStat
 const managedServiceActionSchema = a.object({ service: managedServiceStatusSchema })
 
 function managedServiceLine(status: a.InferOutput<typeof managedServiceStatusSchema>): string {
-  return `${status.owner}/${status.project}\t${status.service}\t${status.activeState}/${status.subState}\t${status.unitFileState}\tport ${status.port}\t${status.unit}`
+  return `${status.owner}/${status.project}\t${status.service}\t${status.activeState}/${status.subState}\t${status.unitFileState}\t${status.port === undefined ? "worker" : `port ${status.port}`}\t${status.unit}`
 }
 
 function dataParse<TSchema extends a.BaseSchema<unknown, unknown, a.BaseIssue<unknown>>>(

@@ -1032,6 +1032,102 @@ describe("projectRegistryCliRun", () => {
     expect((bodies[0] as { services: Record<string, unknown>[] }).services[1]).not.toHaveProperty("service")
   })
 
+  test("adds a background worker service without a port or domain via --service-command", async () => {
+    const bodies: unknown[] = []
+    const requestFetch = async (_input: string | URL | Request, init?: RequestInit & { unix?: string }) => {
+      if (init?.method === "PATCH") {
+        bodies.push(typeof init.body === "string" ? JSON.parse(init.body) : undefined)
+        return Response.json({ success: true, data: mutation("edit") })
+      }
+      return Response.json({
+        success: true,
+        data: {
+          project: {
+            schemaVersion: 2,
+            owner: "leo",
+            name: "crawler",
+            services: [
+              { id: "web", units: [], ownership: "registry", caddy: { port: 4310, domains: ["crawler.example"] } },
+            ],
+          },
+          revision: "current",
+        },
+      })
+    }
+    const errors: string[] = []
+    const options = {
+      environment: { USER: "leo" },
+      requestFetch,
+      stdout: () => {},
+      stderr: (text: string) => errors.push(text),
+    }
+
+    expect(
+      await projectRegistryCliRun(["project", "edit", "crawler", "--service", "worker", "--autostart"], options),
+    ).toBe(1)
+    expect(errors.join("")).toContain("pass --service-command to add a background worker")
+
+    expect(
+      await projectRegistryCliRun(
+        ["project", "edit", "crawler", "--service", "worker", "--service-command", "bun run ./worker.ts"],
+        options,
+      ),
+    ).toBe(1)
+    expect(errors.join("")).toContain("pass --autostart or --no-autostart")
+
+    expect(
+      await projectRegistryCliRun(
+        [
+          "project",
+          "edit",
+          "crawler",
+          "--service",
+          "worker",
+          "--service-command",
+          "bun run ./worker.ts",
+          "--service-env-file",
+          ".env.worker",
+          "--autostart",
+        ],
+        options,
+      ),
+    ).toBe(0)
+    expect(bodies).toEqual([
+      expect.objectContaining({
+        services: [
+          expect.objectContaining({ id: "web", caddy: expect.objectContaining({ port: 4310 }) }),
+          {
+            id: "worker",
+            units: [],
+            caddy: null,
+            ownership: "registry",
+            service: { autostart: true, command: "bun run ./worker.ts", envFile: ".env.worker" },
+          },
+        ],
+      }),
+    ])
+  })
+
+  test("svc status shows a background worker without a port", async () => {
+    const status = {
+      owner: "leo",
+      project: "crawler",
+      service: "worker",
+      unit: "proj-crawler-worker.service",
+      autostart: true,
+      activeState: "active",
+      subState: "running",
+      unitFileState: "enabled",
+    }
+    const requestFetch = async () => Response.json({ success: true, data: { services: [status] } })
+    const output: string[] = []
+    const options = { environment: { USER: "leo" }, requestFetch, stdout: (text: string) => output.push(text) }
+    expect(await projectRegistryCliRun(["svc", "status", "crawler"], options)).toBe(0)
+    expect(output.join("")).toContain(
+      "leo/crawler\tworker\tactive/running\tenabled\tworker\tproj-crawler-worker.service",
+    )
+  })
+
   test("svc verbs call the services API; logs stream plain text and errors keep the JSON envelope", async () => {
     const status = {
       owner: "leo",
