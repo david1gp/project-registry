@@ -4,6 +4,7 @@ import { projectFilter } from "../project/projectFilter.js"
 import { projectLabelsSchema } from "../project/projectLabelsSchema.js"
 import { projectServiceOwnershipSchema } from "../project/projectServiceOwnershipSchema.js"
 import { projectRegistryVersion } from "../projectRegistryVersion.js"
+import { historyPushStatusSchema, type HistoryPushStatus } from "../project-store/historyPushStatusSchema.js"
 import {
   type ProjectRegistryDaemonCloudflareDnsStatus,
   projectRegistryDaemonCloudflareDnsStatusSchema,
@@ -50,6 +51,7 @@ const statusSchema = a.looseObject({
   cloudflareDns: a.optional(projectRegistryDaemonCloudflareDnsStatusSchema),
   privateDns: a.optional(projectRegistryDaemonPrivateDnsStatusSchema),
   privateTls: a.optional(projectRegistryDaemonPrivateTlsStatusSchema),
+  historyPush: a.optional(historyPushStatusSchema),
 })
 const mutationSchema = a.looseObject({
   action: a.picklist(["create", "edit", "delete"]),
@@ -59,7 +61,7 @@ const mutationSchema = a.looseObject({
   localCommit: a.looseObject({ status: a.picklist(["committed", "unchanged"]), revision: a.string() }),
   push: a.looseObject({
     requested: a.boolean(),
-    status: a.picklist(["not-requested", "pushed", "failed"]),
+    status: a.picklist(["not-requested", "queued", "pushed", "failed"]),
     errorMessage: a.optional(a.string()),
   }),
 })
@@ -78,7 +80,7 @@ const userDefaultDomainMutationSchema = a.looseObject({
   localCommit: a.looseObject({ status: a.picklist(["committed", "unchanged"]), revision: a.string() }),
   push: a.looseObject({
     requested: a.boolean(),
-    status: a.picklist(["not-requested", "pushed", "failed"]),
+    status: a.picklist(["not-requested", "queued", "pushed", "failed"]),
     errorMessage: a.optional(a.string()),
   }),
 })
@@ -231,6 +233,22 @@ function privateTlsStatusLines(tls: ProjectRegistryDaemonPrivateTlsStatus | unde
     lines.push(`TLS error${scope === "" ? "" : ` [${scope}]`}: ${error.operation}: ${error.errorMessage}`)
   }
   if (tls.errors.length > 5) lines.push(`... and ${tls.errors.length - 5} more TLS errors`)
+  return lines
+}
+
+function historyPushStatusLines(push: HistoryPushStatus | undefined): string[] {
+  if (push === undefined) return ["History push: unavailable (older/degraded daemon; not healthy)"]
+  if (!push.enabled) return ["History push: disabled"]
+  const health = push.lastError !== null ? "error" : push.inFlight ? "pushing" : push.pending ? "queued" : "idle"
+  const lines = [
+    `History push: ${health} (pending: ${push.pending}, in flight: ${push.inFlight}, ahead: ${push.aheadCount ?? "unknown"}, failures: ${push.consecutiveFailures})`,
+    `History push last attempt: ${push.lastAttemptAt === null ? "never" : new Date(push.lastAttemptAt).toISOString()}; last success: ${push.lastSuccessAt === null ? "never" : new Date(push.lastSuccessAt).toISOString()}`,
+  ]
+  if (push.lastPushedRevision !== null) lines.push(`History push last revision: ${push.lastPushedRevision}`)
+  if (push.lastError !== null)
+    lines.push(
+      `WARNING: History push failed at ${new Date(push.lastError.at).toISOString()}: ${push.lastError.message} (retry queued)`,
+    )
   return lines
 }
 
@@ -440,6 +458,7 @@ export function projectRegistryCliOutputFormat(
     lines.push(...cloudflareDnsStatusLines(status.cloudflareDns))
     lines.push(...privateDnsStatusLines(status.privateDns))
     lines.push(...privateTlsStatusLines(status.privateTls))
+    lines.push(...historyPushStatusLines(status.historyPush))
     return createResult(`${lines.join("\n")}\n`)
   }
   if (command.kind === "project-create" || command.kind === "project-edit" || command.kind === "project-delete") {

@@ -27,6 +27,39 @@ console.log(projectList([normalized.data]).data.map((project) => project.name))
 
 Project identity is the `(owner, name)` pair. Normalization validates the combined registry and Caddy model, and listing applies deterministic Software-compatible ordering. Fallible operations return a `Result` from `@adaptive-ds/result`.
 
+## Asynchronous history backup
+
+With `PROJECT_REGISTRY_GIT_PUSH=true`, daemon mutations commit locally and return
+`push: { requested: true, status: "queued" }`. Remote Git latency or failure does not
+block CLI/API mutations. One background worker per repository pushes the latest
+committed HEAD to the configured branch's upstream (no force push or rebase),
+coalescing commits received during a push into one follow-up push.
+
+Failures remain visible in `project-registry status` (including a `WARNING` line)
+and `project-registry status --json`, under `data.historyPush` in the existing
+`GET /api/v1/caddy/status` response. Fields include pending/in-flight state,
+last attempt/success times (epoch milliseconds), last pushed revision, last error,
+consecutive failure count, and the last observed local ahead count (`null` when
+unknown). This is in-memory operational state, not a durable audit log.
+
+Failed pushes retry after 30 seconds, 2 minutes, then 10 minutes (capped); a new
+commit triggers an immediate retry. Startup checks the local upstream-tracking
+ref for unpushed commits to catch up after a restart. This check does not fetch
+or contact the remote. Errors are also logged through the daemon logger:
+
+```bash
+sudo journalctl -u project-registryd.service --since '30 minutes ago' --no-pager | grep 'history push'
+```
+
+The worker captures an immutable committed SHA under the mutation lock, then
+releases the lock before all push/verification network I/O. Push updates remote
+tracking refs atomically and does not touch the worktree or index. Shutdown
+cancels future retries without waiting for network I/O; startup recovers any
+remaining local commits. Direct, short-lived library consumers keep synchronous
+`autoPush: true` unless they explicitly opt into `asyncPush: true` and own the
+returned repository's `historyPush.start(logger)` / `stop()` lifecycle. Offline
+migration defaults to no push, unchanged.
+
 ## Default user domains
 
 Each owner can persist a default base domain in the Git-backed registry with the CLI:

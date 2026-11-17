@@ -224,6 +224,7 @@ export async function projectRegistryDaemonOpen(
           dir: config.repositoryPath,
           branch: config.repositoryBranch,
           autoPush: config.gitPush,
+          asyncPush: true,
         })
       : createResult(options.repository)
   if (!repositoryR.success) return repositoryR

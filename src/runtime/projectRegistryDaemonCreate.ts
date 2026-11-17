@@ -1230,6 +1230,7 @@ export function projectRegistryDaemonCreate(options: ProjectRegistryDaemonOption
   }
 
   async function stopResourcesInternal(): Promise<string[]> {
+    repository.historyPush?.stop()
     const failures: string[] = []
     const cloudflareDnsShutdownR = await cloudflareDns.shutdown()
     if (!cloudflareDnsShutdownR.success)
@@ -1345,6 +1346,7 @@ export function projectRegistryDaemonCreate(options: ProjectRegistryDaemonOption
   }
 
   const guardedRepository: ProjectRepository = {
+    ...(repository.historyPush === undefined ? {} : { historyPush: repository.historyPush }),
     read: () => gitQueueRun("projectRegistryRepositoryRead", () => repository.read()),
     get: (key) => gitQueueRun("projectRegistryRepositoryGet", () => repository.get(key)),
     getUserDefaultDomain: (owner) =>
@@ -1725,6 +1727,7 @@ export function projectRegistryDaemonCreate(options: ProjectRegistryDaemonOption
 
   async function startInternal(): PromiseResult<void> {
     if (state !== "starting") return createResultError(op, "daemon has stopped")
+    repository.historyPush?.start(serverIpLoggerOption)
     serverIp.start()
     const cloudflareDnsStartR = cloudflareDns.start()
     if (!cloudflareDnsStartR.success) return startupFailure(cloudflareDnsStartR.errorMessage)

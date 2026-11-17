@@ -899,6 +899,60 @@ describe("projectRegistryDaemonCreate", () => {
     }
   })
 
+  test("owns the history worker lifecycle, shares its logger, and exposes failures through status", async () => {
+    const fakeFilesystem = filesystemCreate()
+    const fakeServers = serverFactoryCreate(fakeFilesystem.entries)
+    const apiRepository = repository()
+    const historyPush = {
+      enabled: true,
+      pending: true,
+      inFlight: false,
+      lastAttemptAt: 100,
+      lastSuccessAt: null,
+      lastPushedRevision: null,
+      lastError: { message: "upstream unavailable", at: 100 },
+      consecutiveFailures: 2,
+      aheadCount: 3,
+    }
+    const lifecycle: string[] = []
+    const logger = (_message: string) => undefined
+    apiRepository.historyPush = {
+      start: (writeLog) => {
+        expect(writeLog).toBe(logger)
+        lifecycle.push("start")
+      },
+      stop: () => {
+        lifecycle.push("stop")
+      },
+      schedule: () => undefined,
+      status: () => historyPush,
+    }
+    const daemonR = projectRegistryDaemonCreate({
+      config: config({ mappedUsers: ["leo"], socketDirectory: "/run/project-registry" }),
+      repository: apiRepository,
+      caddyApplication: caddyApplication(),
+      serverIpLogger: logger,
+      socketAccessResolve: async (username) => createResult(socketAccessCreate(username, "own", { leo: "own" })),
+      filesystem: fakeFilesystem.filesystem,
+      serverFactory: fakeServers.factory,
+      posix: { isRoot: () => true, userResolve: async () => createResult({ username: "leo", uid: 1001, gid: 1002 }) },
+    })
+    expect(daemonR.success).toBe(true)
+    if (!daemonR.success) return
+    try {
+      expect((await daemonR.data.start()).success).toBe(true)
+      const unix = fakeServers.requests.find((entry) => entry.context.endsWith("/leo.sock"))
+      expect(unix).toBeDefined()
+      if (unix === undefined) return
+      const response = await unix.fetch(new Request("http://localhost/api/v1/caddy/status"))
+      expect(response.status).toBe(200)
+      expect(await response.json()).toMatchObject({ success: true, data: { historyPush } })
+    } finally {
+      await daemonR.data.shutdown()
+    }
+    expect(lifecycle).toEqual(["start", "stop"])
+  })
+
   test("resolves current Unix roles for cross-owner access without trusting request headers", async () => {
     const fakeFilesystem = filesystemCreate()
     const fakeServers = serverFactoryCreate(fakeFilesystem.entries)

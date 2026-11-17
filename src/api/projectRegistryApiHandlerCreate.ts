@@ -2195,6 +2195,9 @@ export function projectRegistryApiHandlerCreate(options: ApiHandlerOptions): Pro
         ...(cloudflareDns === undefined ? {} : { cloudflareDns }),
         ...(privateDns === undefined ? {} : { privateDns }),
         ...(privateTls === undefined ? {} : { privateTls }),
+        ...(options.repository.historyPush === undefined
+          ? {}
+          : { historyPush: options.repository.historyPush.status() }),
       })
     } catch {
       return errorResponse(

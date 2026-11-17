@@ -648,7 +648,7 @@ describe("projectRegistryCliRun", () => {
         args: ["status"],
         data: status,
         output:
-          "Caddy: pending\nDesired: new\nApplied: old\nPending: new\nCloudflare DNS: unavailable (older/degraded daemon; not healthy)\nPrivate DNS: unavailable (older/degraded daemon; not healthy)\nPrivate TLS: unavailable (older/degraded daemon; not healthy)\n",
+          "Caddy: pending\nDesired: new\nApplied: old\nPending: new\nCloudflare DNS: unavailable (older/degraded daemon; not healthy)\nPrivate DNS: unavailable (older/degraded daemon; not healthy)\nPrivate TLS: unavailable (older/degraded daemon; not healthy)\nHistory push: unavailable (older/degraded daemon; not healthy)\n",
       },
       {
         args: ["version"],
@@ -674,6 +674,55 @@ describe("projectRegistryCliRun", () => {
     expect(exitCode).toBe(0)
     expect(JSON.parse(stdout.join(""))).toEqual({ success: true, data: [project] })
     expect(stdout.join("")).toBe(`${JSON.stringify({ success: true, data: [project] })}\n`)
+  })
+
+  test("shows history push failures as a warning and preserves every worker field in JSON status", async () => {
+    const historyPush = {
+      enabled: true,
+      pending: true,
+      inFlight: false,
+      lastAttemptAt: 1000,
+      lastSuccessAt: 500,
+      lastPushedRevision: "previous",
+      lastError: { message: "upstream denied", at: 1000 },
+      consecutiveFailures: 2,
+      aheadCount: 3,
+    }
+    const stdout: string[] = []
+    expect(await projectRegistryCliRun(["status"], runOptions({ ...status, historyPush }, [], stdout, []))).toBe(0)
+    expect(stdout.join("")).toContain("History push: error (pending: true, in flight: false, ahead: 3, failures: 2)")
+    expect(stdout.join("")).toContain(
+      "WARNING: History push failed at 1970-01-01T00:00:01.000Z: upstream denied (retry queued)",
+    )
+    stdout.length = 0
+    expect(
+      await projectRegistryCliRun(["status", "--json"], runOptions({ ...status, historyPush }, [], stdout, [])),
+    ).toBe(0)
+    expect(JSON.parse(stdout.join("")).data.historyPush).toEqual(historyPush)
+  })
+
+  test("accepts queued push results for project and default-domain mutations", async () => {
+    for (const [args, data] of [
+      [["project", "create", "--name", "site", "--port", "4321"], mutation("create")],
+      [["user", "default-domain", "set", "example.com"], defaultDomainMutation("set", "example.com")],
+    ] as const) {
+      const stdout: string[] = []
+      const stderr: string[] = []
+      const queued = { ...data, push: { requested: true, status: "queued" } }
+      const code = await projectRegistryCliRun([...args, "--json"], {
+        environment: { USER: "david" },
+        requestFetch: async (input, init) => {
+          if (init?.method === "POST" || init?.method === "PUT") return Response.json({ success: true, data: queued })
+          const data = String(input).endsWith("default-domain") ? defaultDomain : { projects: [], revision: "current" }
+          return Response.json({ success: true, data })
+        },
+        stdout: (text) => stdout.push(text),
+        stderr: (text) => stderr.push(text),
+      })
+      expect(stderr).toEqual([])
+      expect(code).toBe(0)
+      expect(JSON.parse(stdout.join("")).data.push).toEqual(queued.push)
+    }
   })
 
   test("emits backend, CLI, and library versions in JSON", async () => {
@@ -2055,7 +2104,7 @@ describe("projectRegistryCliRun", () => {
 
     expect(exitCode).toBe(0)
     expect(stdout.join("")).toBe(
-      "Caddy: pending\nDesired: new\nApplied: old\nPending: new\nCloudflare DNS: healthy (pending projects: 0, pending deletions: 0)\nPrivate DNS: unavailable (older/degraded daemon; not healthy)\nPrivate TLS: unavailable (older/degraded daemon; not healthy)\n",
+      "Caddy: pending\nDesired: new\nApplied: old\nPending: new\nCloudflare DNS: healthy (pending projects: 0, pending deletions: 0)\nPrivate DNS: unavailable (older/degraded daemon; not healthy)\nPrivate TLS: unavailable (older/degraded daemon; not healthy)\nHistory push: unavailable (older/degraded daemon; not healthy)\n",
     )
   })
 
@@ -2082,7 +2131,7 @@ describe("projectRegistryCliRun", () => {
 
     expect(exitCode).toBe(0)
     expect(stdout.join("")).toBe(
-      "Caddy: pending\nDesired: new\nApplied: old\nPending: new\nCloudflare DNS: disabled\nPrivate DNS: unavailable (older/degraded daemon; not healthy)\nPrivate TLS: unavailable (older/degraded daemon; not healthy)\n",
+      "Caddy: pending\nDesired: new\nApplied: old\nPending: new\nCloudflare DNS: disabled\nPrivate DNS: unavailable (older/degraded daemon; not healthy)\nPrivate TLS: unavailable (older/degraded daemon; not healthy)\nHistory push: unavailable (older/degraded daemon; not healthy)\n",
     )
   })
 
@@ -2123,7 +2172,7 @@ describe("projectRegistryCliRun", () => {
         "Cloudflare DNS: unavailable (older/degraded daemon; not healthy)\n" +
         "Private DNS: error (pending projects: 1, pending deletions: 0)\n" +
         "DNS error [claim] leo/app app.wonder1.de: not claimable (attempts: 0)\n" +
-        "Private TLS: unavailable (older/degraded daemon; not healthy)\n",
+        "Private TLS: unavailable (older/degraded daemon; not healthy)\nHistory push: unavailable (older/degraded daemon; not healthy)\n",
     )
   })
 
@@ -2166,7 +2215,8 @@ describe("projectRegistryCliRun", () => {
         "Cloudflare DNS: unavailable (older/degraded daemon; not healthy)\n" +
         "Private DNS: unavailable (older/degraded daemon; not healthy)\n" +
         "Private TLS: error (pending owners: 1, enrolled: 1, wildcard-covered: 1)\n" +
-        'TLS error [leo deep.api.wonder1.de]: tls-token: Private TLS credentials for owner "leo" are missing\n',
+        'TLS error [leo deep.api.wonder1.de]: tls-token: Private TLS credentials for owner "leo" are missing\n' +
+        "History push: unavailable (older/degraded daemon; not healthy)\n",
     )
   })
 
@@ -2223,7 +2273,7 @@ describe("projectRegistryCliRun", () => {
         "Tracking: blocked (state unavailable)\n" +
         "DNS error [reconcile] david/site site.example: Cloudflare DNS request failed (attempts: 3 status=503 cf=10000 retry=2023-11-14T22:14:20.000Z)\n" +
         "DNS error [delete] david/site record record-id: Cloudflare DNS delete failed (attempts: 1)\n" +
-        "Private DNS: unavailable (older/degraded daemon; not healthy)\nPrivate TLS: unavailable (older/degraded daemon; not healthy)\n",
+        "Private DNS: unavailable (older/degraded daemon; not healthy)\nPrivate TLS: unavailable (older/degraded daemon; not healthy)\nHistory push: unavailable (older/degraded daemon; not healthy)\n",
     )
   })
 
