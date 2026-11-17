@@ -3,13 +3,13 @@ import { projectDomainNormalize } from "./projectDomainNormalize.js"
 
 /**
  * Static owner-to-zones map for self-serve private (Tailscale) DNS. One
- * writer per zone, no crossing: an owner may only claim exact hosts inside
- * their own zones. Future zones are not self-serve (code change first).
+ * Explicit grants only: an owner may only claim exact hosts inside their
+ * allowed zones. Future zones are not self-serve (code change first).
  */
 export const projectTailscaleZonePolicy: Readonly<Record<string, readonly string[]>> = {
   leo: ["wonder1.de"],
   shared: ["wonder1.de"],
-  david: ["david-siewert.com"],
+  david: ["david-siewert.com", "wonder1.de"],
   fabian: ["webflows.de"],
   musa: ["covux-design.de"],
   tim: ["wonder1.de"],

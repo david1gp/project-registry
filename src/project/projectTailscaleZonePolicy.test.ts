@@ -2,11 +2,11 @@ import { describe, expect, test } from "bun:test"
 import { projectTailscaleZoneClaimValidate, projectTailscaleZonePolicy } from "./projectTailscaleZonePolicy.js"
 
 describe("projectTailscaleZonePolicy", () => {
-  test("pins one exclusive zone per owner", () => {
+  test("pins explicitly allowed zones per owner", () => {
     expect(projectTailscaleZonePolicy).toEqual({
       leo: ["wonder1.de"],
       shared: ["wonder1.de"],
-      david: ["david-siewert.com"],
+      david: ["david-siewert.com", "wonder1.de"],
       fabian: ["webflows.de"],
       musa: ["covux-design.de"],
       tim: ["wonder1.de"],
@@ -16,6 +16,22 @@ describe("projectTailscaleZonePolicy", () => {
 })
 
 describe("projectTailscaleZoneClaimValidate", () => {
+  test("allows david exact hosts in both zones without granting apex, wildcard, or foreign claims", () => {
+    for (const [hostname, zone] of [
+      ["coding-configurator.wonder1.de", "wonder1.de"],
+      ["preview.coding-configurator.wonder1.de", "wonder1.de"],
+      ["preview.coding-configurator.david-siewert.com", "david-siewert.com"],
+    ]) {
+      expect(projectTailscaleZoneClaimValidate("david", hostname)).toMatchObject({ success: true, data: zone })
+    }
+    for (const hostname of [
+      "wonder1.de", "david-siewert.com", "*.wonder1.de", "*.david-siewert.com",
+      "evilwonder1.de", "wonder1.de.evil.com", "app.webflows.de",
+    ]) {
+      expect(projectTailscaleZoneClaimValidate("david", hostname).success).toBe(false)
+    }
+  })
+
   test("accepts exact hosts inside the owner's zone and returns the owning zone", () => {
     expect(projectTailscaleZoneClaimValidate("shared", "checkout.wonder1.de")).toMatchObject({
       success: true,
