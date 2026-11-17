@@ -8,6 +8,7 @@ import { projectDomainNormalize } from "./projectDomainNormalize.js"
  */
 export const projectTailscaleZonePolicy: Readonly<Record<string, readonly string[]>> = {
   leo: ["wonder1.de"],
+  shared: ["wonder1.de"],
   david: ["david-siewert.com"],
   fabian: ["webflows.de"],
   musa: ["covux-design.de"],

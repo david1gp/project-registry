@@ -80,12 +80,13 @@ export function projectRegistryWikiSyncCreate(options: {
     }
     if (stopped) return
     try {
-      // The writer filters to owner Leo and skips ambiguous matches; the
+      // The writer includes shared in Leo's wiki and skips ambiguous matches; the
       // latest persisted snapshot is always read here so concurrent
       // mutations cannot reconcile stale project metadata.
       const result = await reconcile({
         root: wikiRoot,
         owner: "leo",
+        owners: ["leo", "shared"],
         snapshot: { projects: snapshot.data },
         logger: reconcileLogger(),
       })

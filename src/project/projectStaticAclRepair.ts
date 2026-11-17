@@ -132,6 +132,7 @@ function rootParts(owner: string, root: string): string[] {
     throw new Error("invalid static root")
   const parts = root.slice(1).split("/")
   if (parts.some((part) => part === "." || part === ".." || !part)) throw new Error("invalid static root")
+  if (owner === "shared" && parts[0] === "projects" && parts.length > 1) return parts
   if (parts[0] !== "home" || parts[1] !== owner) throw new Error("root does not belong to owner")
   if (parts[2] === "projects" && parts.length > 3) return parts
   if (parts[2] === "wiki" && parts.length >= 3) return parts

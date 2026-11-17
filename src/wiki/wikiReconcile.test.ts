@@ -29,6 +29,37 @@ async function tempRoot(): Promise<string> {
 }
 
 describe("wikiReconcile", () => {
+  test("moving leo to shared retains the page, while colliding owners are both skipped", async () => {
+    const root = await tempRoot()
+    const logger = loggerCapture().logger
+    try {
+      const owners = ["leo", "shared"]
+      await wikiReconcile({
+        root,
+        owners,
+        projects: [canonical("leo", "site", { alternativeName: "Original" })],
+        logger,
+      })
+      const path = join(root, "Projekte", "Interne", "Original", "Original.md")
+      const moved = await wikiReconcile({
+        root,
+        owners,
+        projects: [canonical("shared", "site", { alternativeName: "Renamed" })],
+        logger,
+      })
+      expect(moved).toMatchObject({ success: true, data: { updated: 1, created: 0 } })
+      expect(await readFile(path, "utf8")).toContain("owner: shared")
+      for (const projects of [
+        [canonical("leo", "site"), canonical("shared", "site")],
+        [canonical("shared", "site"), canonical("leo", "site")],
+      ]) {
+        const collision = await wikiReconcile({ root, owners, projects, logger })
+        expect(collision).toMatchObject({ success: true, data: { skipped: 2, created: 0, updated: 0 } })
+      }
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
   test("skips projects owned by someone other than leo without creating files", async () => {
     const root = await tempRoot()
     try {

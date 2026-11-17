@@ -2,7 +2,7 @@ import { expect, test } from "bun:test"
 import { chmod, mkdtemp, rm } from "node:fs/promises"
 import { homedir, userInfo } from "node:os"
 import { join } from "node:path"
-import { createResult } from "#result"
+import { createResult, createResultError } from "#result"
 import type { CaddyApplication } from "../caddy/CaddyApplication.js"
 import { projectRepositoryOpen } from "../project-store/projectRepositoryOpen.js"
 import { projectRegistryCliRun } from "../cli/projectRegistryCliRun.js"
@@ -47,6 +47,7 @@ async function harnessCreate() {
   const posixDefault = projectRegistryDaemonPosixDefault()
   let httpUrl = ""
   let member = true
+  let groupUnavailable = false
   let wrongUid = false
   const socketDirectory = join(directory, "sockets")
   const socket = join(socketDirectory, `${owner}.sock`)
@@ -62,7 +63,10 @@ async function harnessCreate() {
       webListener: { hostname: "127.0.0.1", port: 8080 },
     },
     repository: repositoryR.data,
-    groupMembersResolve: async () => createResult(member ? [owner] : []),
+    groupMembersResolve: async () =>
+      groupUnavailable
+        ? createResultError("fixtureGroupResolve", "getent failed")
+        : createResult(member ? [owner] : []),
     caddyApplication,
     posix: {
       ...posixDefault,
@@ -85,7 +89,12 @@ async function harnessCreate() {
     socket,
     socketDirectory,
     repository: repositoryR.data,
-    memberSet: (value: boolean) => { member = value },
+    memberSet: (value: boolean) => {
+      member = value
+    },
+    groupUnavailableSet: () => {
+      groupUnavailable = true
+    },
     wrongUidSet: () => {
       wrongUid = true
     },
@@ -167,10 +176,21 @@ test("user socket rejects another owner and HTTP headers cannot authenticate any
     }
     const errors: string[] = []
     expect(
-      await projectRegistryCliRun(["--socket", harness.socket, "--json", "project", "list"], {
-        environment: { USER: harness.owner === "root" ? "nobody" : "root" },
-        stderr: (value) => errors.push(value),
-      }),
+      await projectRegistryCliRun(
+        [
+          "--socket",
+          harness.socket,
+          "--json",
+          "project",
+          "list",
+          "--owner",
+          harness.owner === "root" ? "nobody" : "root",
+        ],
+        {
+          environment: { USER: harness.owner === "root" ? "nobody" : "root" },
+          stderr: (value) => errors.push(value),
+        },
+      ),
     ).toBe(1)
     expect(JSON.parse(errors.join(""))).toMatchObject({ success: false, error: { code: "projects.forbidden" } })
   } finally {
@@ -195,7 +215,6 @@ test("user-mode authorization fails closed if socket permissions or resolved dae
   }
 })
 
-
 test("shared socket membership is checked on each request without exposing private owners", async () => {
   const harness = await harnessCreate()
   try {
@@ -207,6 +226,11 @@ test("shared socket membership is checked on each request without exposing priva
     expect((await harness.request(shared)).status).toBe(403)
     harness.memberSet(true)
     expect((await harness.request(shared)).status).toBe(200)
+    harness.groupUnavailableSet()
+    const denied = await harness.request(shared)
+    expect(denied.ok).toBe(false)
+    expect(await denied.json()).toMatchObject({ success: false })
+    expect((await harness.request(`/api/v1/users/${harness.owner}/projects`)).status).toBe(200)
   } finally {
     await harness.close()
   }

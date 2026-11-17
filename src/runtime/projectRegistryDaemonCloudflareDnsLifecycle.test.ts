@@ -186,6 +186,59 @@ async function settle(): Promise<void> {
 }
 
 describe("projectRegistryDaemonCloudflareDns lifecycle", () => {
+  test.each(["edit-first", "delete-first"] as const)(
+    "moving a project transfers tracking without deleting or recreating its record (%s)",
+    async (order) => {
+      const timer = timerCreate()
+      const records = new Map<
+        string,
+        { id: string; name: string; type: string; content: string; ttl: number; proxied: boolean }
+      >()
+      const calls: string[] = []
+      const stored = trackingCreate({ version: 1, records: [] })
+      let projects: Project[] = []
+      const queue = projectRegistryDaemonCloudflareDnsCreate({
+        enabled: true,
+        credentialResolve: async () => createResult("token"),
+        timeoutMs: 1000,
+        serverIpCurrent: () => "203.0.113.10",
+        timer: timer.timer,
+        tracking: stored.tracking,
+        repositoryProjectsCurrent: async () => createResult(projects),
+        fetch: fetchCreate(records, calls),
+      })
+      expect(queue.success).toBe(true)
+      if (!queue.success) return
+      expect(queue.data.start().success).toBe(true)
+      const source = project("app", ["app.example.com"])
+      projects = [source]
+      queue.data.projectCreateAfterPersistence(source, { noDns: false })
+      await settle()
+      const originalId = [...records.keys()][0]
+      expect(originalId).toBeDefined()
+      if (originalId === undefined) return
+      calls.length = 0
+      const destination = project("app", ["app.example.com"], "shared")
+      projects = [destination]
+      if (order === "delete-first") {
+        queue.data.projectDeleteAfterPersistence(source)
+        await settle()
+        expect([...records.keys()]).toEqual([originalId])
+        expect(calls.some((call) => call.startsWith("DELETE ") || call.startsWith("POST "))).toBe(false)
+        queue.data.projectEditAfterPersistence(source, destination)
+      } else {
+        queue.data.projectEditAfterPersistence(source, destination)
+        queue.data.projectDeleteAfterPersistence(source)
+      }
+      await settle()
+      expect([...records.keys()]).toEqual([originalId])
+      expect(calls.some((call) => call.startsWith("DELETE ") || call.startsWith("POST "))).toBe(false)
+      expect(stored.state.records).toHaveLength(1)
+      expect(stored.state.records[0]?.projectKeys).toEqual([{ owner: "shared", name: "app" }])
+      await queue.data.shutdown()
+    },
+  )
+
   test("persists ownership, edits tracked domains, and deletes only tracked records", async () => {
     const timer = timerCreate()
     const records = new Map<

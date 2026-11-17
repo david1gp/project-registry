@@ -303,6 +303,7 @@ describe("projectRegistryWikiSyncCreate", () => {
     expect(spy.calls).toHaveLength(1)
     expect(spy.calls[0]?.root).toBe("/home/leo/wiki")
     expect(spy.calls[0]?.owner).toBe("leo")
+    expect(spy.calls[0]?.owners).toEqual(["leo", "shared"])
     expect(spy.calls[0]?.snapshot).toEqual({ projects })
     await syncR.data.shutdown()
   })

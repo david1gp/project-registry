@@ -5,6 +5,7 @@ describe("projectTailscaleZonePolicy", () => {
   test("pins one exclusive zone per owner", () => {
     expect(projectTailscaleZonePolicy).toEqual({
       leo: ["wonder1.de"],
+      shared: ["wonder1.de"],
       david: ["david-siewert.com"],
       fabian: ["webflows.de"],
       musa: ["covux-design.de"],
@@ -16,6 +17,10 @@ describe("projectTailscaleZonePolicy", () => {
 
 describe("projectTailscaleZoneClaimValidate", () => {
   test("accepts exact hosts inside the owner's zone and returns the owning zone", () => {
+    expect(projectTailscaleZoneClaimValidate("shared", "checkout.wonder1.de")).toMatchObject({
+      success: true,
+      data: "wonder1.de",
+    })
     expect(projectTailscaleZoneClaimValidate("leo", "checkout.wonder1.de")).toMatchObject({
       success: true,
       data: "wonder1.de",

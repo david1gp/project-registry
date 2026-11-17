@@ -21,7 +21,10 @@ function wikiProjectResolveIdentityMatch(project: ProjectCanonical, frontmatter:
   const registry = frontmatter.projectRegistry
   if (!registry || typeof registry !== "object" || Array.isArray(registry)) return false
   const record = registry as Record<string, unknown>
-  return record.owner === project.owner && record.name === project.name
+  return (
+    (record.owner === project.owner || (project.owner === "shared" && record.owner === "leo")) &&
+    record.name === project.name
+  )
 }
 
 function wikiProjectResolveIdentity(

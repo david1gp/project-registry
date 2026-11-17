@@ -128,6 +128,17 @@ function fixture() {
 }
 
 describe("projectStaticAclRepair", () => {
+  test("shared owner repairs real project roots without relaxing other owner boundaries", async () => {
+    const f = fixture()
+    const template = f.nodes.get("/home/ada/projects/site/dist")!
+    f.nodes.set("/projects", { ...template, ino: 1001, children: ["site"], acl: new Map(template.acl) })
+    f.nodes.set("/projects/site", { ...template, ino: 1002, children: [], acl: new Map(template.acl) })
+    expect((await projectStaticAclRepair("shared", "/projects/site", f.adapter)).success).toBe(true)
+    for (const root of ["/projects", "/projects-other/site", "/projects/../home/ada/wiki"]) {
+      expect((await projectStaticAclRepair("shared", root, f.adapter)).success).toBe(false)
+    }
+    expect((await projectStaticAclRepair("ada", "/projects/site", f.adapter)).success).toBe(false)
+  })
   test("root Caddy identity succeeds without inspecting paths or invoking ACL tools", async () => {
     const f = fixture()
     const calls: string[] = []

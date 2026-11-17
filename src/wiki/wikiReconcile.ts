@@ -20,6 +20,7 @@ export type WikiReconcileSnapshot = {
 export type WikiReconcileInput = {
   root: string
   owner?: string
+  owners?: readonly string[]
   projects?: readonly unknown[]
   snapshot?: WikiReconcileSnapshot | readonly unknown[]
   logger?: WikiReconcileLogger
@@ -355,7 +356,7 @@ export async function wikiReconcile(input: WikiReconcileInput): Promise<Result<W
       skip(`skipping invalid canonical project: ${a.summarize(parsed.issues)}`)
       continue
     }
-    if (parsed.output.owner !== owner) {
+    if (!(input.owners ?? [owner]).includes(parsed.output.owner)) {
       skip(`skipping project ${parsed.output.owner}/${parsed.output.name}: owner is not ${owner}`)
       continue
     }
@@ -365,9 +366,19 @@ export async function wikiReconcile(input: WikiReconcileInput): Promise<Result<W
   const scanned = await wikiReconcileScan(root, input.logger)
   let tmpCounter = 0
 
+  const names = (project: ProjectCanonical) =>
+    new Set([project.name, project.labels.alternativeName ?? ""].map(wikiProjectNameNormalize).filter(Boolean))
+
   for (const project of projects) {
     summary.processed += 1
     const label = `${project.owner}/${project.name}`
+    const candidates = names(project)
+    if (
+      projects.some((other) => other.owner !== project.owner && [...names(other)].some((name) => candidates.has(name)))
+    ) {
+      skip(`skipping ${label}: cross-owner wiki name collision`)
+      continue
+    }
     const resolution = wikiProjectResolve(project, scanned.entries)
     if (resolution.kind === "ambiguous") {
       const paths = resolution.entries.map((entry) => entry.notePath).join(", ")

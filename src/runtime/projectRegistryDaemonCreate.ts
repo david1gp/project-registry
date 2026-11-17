@@ -36,6 +36,7 @@ import type { ProjectRegistryDaemonSignals } from "./ProjectRegistryDaemonSignal
 import type { ProjectRegistryDaemonSocketRefresh } from "./ProjectRegistryDaemonSocketRefresh.js"
 import type { ProjectRegistryDaemonState } from "./ProjectRegistryDaemonState.js"
 import { projectRegistryDaemonCloudflareCredentialsCreate } from "./projectRegistryDaemonCloudflareCredentialsCreate.js"
+import { projectRegistryCredentialOwnerAliasWrap } from "./projectRegistryCredentialOwnerAliasWrap.js"
 import { projectRegistryDaemonCloudflareCredentialsFilesystemDefault } from "./projectRegistryDaemonCloudflareCredentialsFilesystemDefault.js"
 import { projectRegistryDaemonCloudflareDnsCreate } from "./projectRegistryDaemonCloudflareDnsCreate.js"
 import { projectRegistryDaemonCloudflareDnsTrackingCreate } from "./projectRegistryDaemonCloudflareDnsTrackingCreate.js"
@@ -349,9 +350,13 @@ export function projectRegistryDaemonCreate(options: ProjectRegistryDaemonOption
       cloudflareDnsCredentialsFilesystemOption ?? projectRegistryDaemonCloudflareCredentialsFilesystemDefault(),
   })
   if (!cloudflareCredentialsR.success) return cloudflareCredentialsR
+  const cloudflareCredentialResolve = projectRegistryCredentialOwnerAliasWrap(
+    cloudflareCredentialsR.data.tokenResolve,
+    config.credentialOwnerAliases,
+  )
   const cloudflareDnsR = projectRegistryDaemonCloudflareDnsCreate({
     enabled: config.cloudflareDns.enabled,
-    credentialResolve: cloudflareCredentialsR.data.tokenResolve,
+    credentialResolve: cloudflareCredentialResolve,
     timeoutMs: config.loadTimeoutMs,
     serverIpCurrent: serverIp.current,
     timer,
@@ -388,6 +393,7 @@ export function projectRegistryDaemonCreate(options: ProjectRegistryDaemonOption
     upstreamResolvers: config.privateDns.upstreamResolvers,
     dnsmasqConfigPath: config.privateDns.dnsmasqConfigPath,
     splitDnsStateDirectory: dirname(config.serverIpCachePath),
+    // Private DNS uses a single tailnet-wide tailscale.env, not owner files.
     credentialResolve: privateDnsCredentialsR.data.tokenResolve,
     filesystem: privateDnsFilesystem,
     resolverReload:
@@ -478,7 +484,7 @@ export function projectRegistryDaemonCreate(options: ProjectRegistryDaemonOption
     ...(config.privateDns.nodeAddress === undefined
       ? {}
       : { privateListenerAddresses: [config.privateDns.nodeAddress] }),
-    credentialResolve: cloudflareCredentialsR.data.tokenResolve,
+    credentialResolve: cloudflareCredentialResolve,
     ...(privateTlsProbe === undefined ? {} : { trustedProbe: privateTlsProbe }),
     ...(privateTlsGateStateOption === undefined ? {} : { gateState: privateTlsGateStateOption }),
     repositoryProjectsCurrent: async () => {
