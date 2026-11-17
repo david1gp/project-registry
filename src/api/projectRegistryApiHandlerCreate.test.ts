@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from "bun:test"
+import { afterEach, describe, expect, spyOn, test } from "bun:test"
 import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
@@ -2753,38 +2753,51 @@ describe("projectRegistryApiHandlerCreate", () => {
     }
   })
 
-  test("moving a project notifies both keys and triggers Caddy reconciliation", async () => {
-    const repository = repositoryCreate()
-    repository.projects.length = 0
-    repository.projects.push(docsProjectCreate("leo", "app", ["app.example"]))
-    const application = caddyApplicationCreate()
-    const events: string[] = []
-    const handler = projectRegistryApiHandlerCreate({
-      repository,
-      caddyApplication: application,
-      socketAccessResolve: async (username) =>
-        createResult({
-          actorResolve: async () => createResult({ subject: username, username, role: "own" as const }),
-          ownerRoleResolve: async (owner) =>
-            createResult(
-              owner === "leo" ? ("own" as const) : owner === "shared" ? ("shared-member" as const) : undefined,
-            ),
-        }),
-      projectEditAfterPersistence: (previous, project) => events.push(`edit:${previous.owner}:${project.owner}`),
-      projectDeleteAfterPersistence: (project) => events.push(`delete:${project.owner}`),
-      projectOrganizeAfterPersistence: () => events.push("organize"),
-    })
-    const response = await requestJson(
-      handler,
-      "/api/v1/users/leo/projects/app/move",
-      { transport: "unix", username: "leo" },
-      "POST",
-      { toOwner: "shared", expectedRevision: repository.revision },
-    )
-    expect(response.response.status).toBe(200)
-    expect(events).toEqual(["edit:leo:shared", "delete:leo", "organize"])
-    expect(application.projectChanges).toBe(1)
-  })
+  test.each([false, true])(
+    "a committed move succeeds and notifies both keys even if Caddy fails (%s)",
+    async (fails) => {
+      const repository = repositoryCreate()
+      repository.projects.length = 0
+      repository.projects.push(docsProjectCreate("leo", "app", ["app.example"]))
+      const application = caddyApplicationCreate()
+      if (fails)
+        application.projectChange = async () => {
+          application.projectChanges += 1
+          return createResultError("projectChange", "TLS binding unavailable")
+        }
+      const logged = spyOn(console, "error").mockImplementation(() => {})
+      const events: string[] = []
+      const handler = projectRegistryApiHandlerCreate({
+        repository,
+        caddyApplication: application,
+        socketAccessResolve: async (username) =>
+          createResult({
+            actorResolve: async () => createResult({ subject: username, username, role: "own" as const }),
+            ownerRoleResolve: async (owner) =>
+              createResult(
+                owner === "leo" ? ("own" as const) : owner === "shared" ? ("shared-member" as const) : undefined,
+              ),
+          }),
+        projectEditAfterPersistence: (previous, project) => events.push(`edit:${previous.owner}:${project.owner}`),
+        projectDeleteAfterPersistence: (project) => events.push(`delete:${project.owner}`),
+        projectOrganizeAfterPersistence: () => events.push("organize"),
+      })
+      const response = await requestJson(
+        handler,
+        "/api/v1/users/leo/projects/app/move",
+        { transport: "unix", username: "leo" },
+        "POST",
+        { toOwner: "shared", expectedRevision: repository.revision },
+      )
+      expect(response.response.status).toBe(200)
+      expect(events).toEqual(["edit:leo:shared", "delete:leo", "organize"])
+      expect(application.projectChanges).toBe(1)
+      expect(repository.projects.map((project) => project.owner)).toEqual(["shared"])
+      expect(response.body).toMatchObject({ success: true, data: { changed: true } })
+      if (fails) expect(logged).toHaveBeenCalledWith(expect.stringContaining("TLS binding unavailable"))
+      logged.mockRestore()
+    },
+  )
 
   test("rejects Unix project access when the trusted socket resolver is absent", async () => {
     const handler = projectRegistryApiHandlerCreateProduction({

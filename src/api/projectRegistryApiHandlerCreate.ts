@@ -1142,7 +1142,11 @@ export function projectRegistryApiHandlerCreate(options: ApiHandlerOptions): Pro
           /* Persistence already succeeded. */
         }
         const applicationR = await options.caddyApplication.projectChange()
-        if (!applicationR.success) return resultErrorResponse(applicationR, false, "caddy")
+        if (!applicationR.success) {
+          // The move is committed. Reconciliation remains pending in Caddy status;
+          // returning an operation failure here would invite an unsafe retry.
+          console.error(`project move committed; Caddy reconciliation pending: ${applicationR.errorMessage}`)
+        }
       }
       return successResponse(mutationR.data)
     }
