@@ -79,6 +79,9 @@ Dev servers (dark-gated; the daemon needs PROJECT_REGISTRY_DEV_ENABLED=true):
                               Start an on-demand dev server for <root>/<project>; prints DEV_URL for e2e use.
                               Command: service dev.command, else the package.json dev script (vite/rsbuild/
                               next/astro run directly on the lease port), else 'bun run dev' with PORT/HOST.
+                              The server gets its own leased port and domain (<user>-<project>.wonder1.de)
+                              and reads .env.development; it never takes the preview port, so never run
+                              'bun run dev' on the preview port by hand.
   dev down <project>            Stop the on-demand dev server
   dev ls                        List on-demand dev servers
   --ttl <ms>                    Dev server lifetime in milliseconds up to 86400000 (dev up only)
@@ -88,6 +91,9 @@ Dev servers (dark-gated; the daemon needs PROJECT_REGISTRY_DEV_ENABLED=true):
 Managed services (dark-gated; the daemon needs PROJECT_REGISTRY_SERVICES_ENABLED=true):
   Registry-owned system units proj-<project>-<service>.service run as the service user with the
   service's registry port. Allowed for the configured operators on every managed project.
+  The *.wonder1.de preview is a production build: 'bun run preview:start' with the service
+  env file '.env.preview' (projects not yet migrated still run their dev script). Refresh it with 'bun run preview:deploy', which restarts the unit
+  via 'project-registry svc restart'.
   svc status <project> [--service <id>]     Show unit state for one or all managed services
   svc start|stop|restart <project> [--service <id>]
   svc enable|disable <project> [--service <id>]

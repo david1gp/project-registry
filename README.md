@@ -27,6 +27,23 @@ console.log(projectList([normalized.data]).data.map((project) => project.name))
 
 Project identity is the `(owner, name)` pair. Normalization validates the combined registry and Caddy model, and listing applies deterministic Software-compatible ordering. Fallible operations return a `Result` from `@adaptive-ds/result`.
 
+## Preview vs dev servers
+
+The `*.wonder1.de` preview serves a production build through a registry-managed
+system unit (`proj-<project>-<service>.service`): `bun run preview:start` with the
+service env file `.env.preview` (projects not yet migrated still run their dev
+script). Refresh it with `bun run preview:deploy`, which
+restarts the unit via `project-registry svc restart`:
+
+```bash
+project-registry svc restart <project> --service <service>
+```
+
+Dev servers are separate: `project-registry dev up <project>` leases its own port
+and domain (`<user>-<project>.wonder1.de`), runs the package.json `dev` script with
+`PORT`/`HOST` set, and reads `.env.development` — never the preview port or
+`.env.preview`. Never run `bun run dev` on the preview port by hand.
+
 ## Asynchronous history backup
 
 With `PROJECT_REGISTRY_GIT_PUSH=true`, daemon mutations commit locally and return
