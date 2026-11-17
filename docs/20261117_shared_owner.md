@@ -54,15 +54,13 @@ Add one shared part of the project registry, owner `shared`, that Linux users da
 3. [x] registry: credential owner alias, Tailscale zone, wiki sync including shared, static ACL for shared, with tests
 4. [x] dev-servers: env and installer keys, migration script, Lighthouse switch, with tests
 5. [x] verify: full registry test suite and typecheck, plus the affected dev-servers tests; review the diff against the plan
-6. [ ] ship: commits, merge to main, deploy the daemon, update the CLI for david/leo/tim/mit, run the migration, live checks (each of david/leo/tim/mit lists shared; a private row is still forbidden; Lighthouse dry run)
+6. [x] ship: commits, merge to main, deploy the daemon, update the CLI for david/leo/tim/mit, run the migration, live checks (each of david/leo/tim/mit lists shared; a private row is still forbidden; Lighthouse dry run)
 
 ## Current context
 
-- Task 1 model: socket access returns owner-role marker `shared-member` (after an injected group check, `src/runtime/projectRegistryGroupMembersResolve.ts`, getent, no cache); the actor stays unchanged. 
-- Task 3: the alias wrapper is `src/runtime/projectRegistryCredentialOwnerAliasWrap.ts` (Cloudflare and private TLS). Private DNS uses one tailnet-wide credential, so it needs no alias. Wiki: when names collide across leo and shared, both rows are skipped and reported.
-- Task 4: migration check mode selects 44 leo projects (161 service rows); 24 rows without sourcePath and 8 with other paths stay with leo. The env keys go through the existing managed-env payload (`registry-idle-disabled-env.bash`).
-
-- Move: notifies edit(new key) and delete(old key); Cloudflare delete rechecks snapshot claims, so the record is retained. A default `project list` uses a new unscoped endpoint (own rows plus shared).
-- Known baseline failures (not ours): dev-servers has 77 failing tests and 31 typecheck errors that already exist at base.
-- Base commits: project-registry `73f0f8a`, dev-servers `b970bd79`.
-- Uncommitted changes from another agent are in the dev-servers main checkout (projects-permissions setup). Do not touch them.
+- Live: 44 projects / 161 service rows are under `shared`. Leo keeps 28 projects / 32 rows (24 without sourcePath; 8 outside `/projects`: whisper, wiki, codex-lb, zitadel, n8n, chatwoot, waha, cliproxyapi).
+- Socket access returns the owner-role marker `shared-member` after a getent group check (`src/runtime/projectRegistryGroupMembersResolve.ts`); it denies on error.
+- The credential alias wrapper is `src/runtime/projectRegistryCredentialOwnerAliasWrap.ts` (Cloudflare and private TLS). Private DNS uses one tailnet-wide credential.
+- Move: one transaction, notifies edit(new key) and delete(old key), and keeps legacy private claims within the same zone. It reports success once committed; reconciliation failures are logged and show in status.
+- Wiki: when names collide across leo and shared, both rows are skipped and reported.
+- Registry history on wonder1 is not pushed (`PROJECT_REGISTRY_GIT_PUSH=false`).
