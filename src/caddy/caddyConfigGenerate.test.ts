@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test"
 import { caddyConfigGenerateFixtures } from "../../test/fixtures/caddyConfigGenerateFixtures.js"
 import { caddyConfigOidcFixtures } from "../../test/fixtures/caddyConfigOidcFixtures.js"
 import { projectNormalize } from "../project/projectNormalize.js"
+import { projectPortNext } from "../project/projectPortNext.js"
 import { caddyConfigGenerate } from "./caddyConfigGenerate.js"
 
 function routesOf(config: {
@@ -35,6 +36,18 @@ describe("caddyConfigGenerate", () => {
 
     expect(result.data.apps.http.servers.srv0.listen).toEqual([":443"])
     expect(routesOf(result.data).map(hostOf)).toEqual([["demos.example"], ["opencode.example", "oc.example"]])
+  })
+
+  test("omits the disabled route but keeps its port reserved for allocation", () => {
+    const projects = [caddyConfigGenerateFixtures.proxy, caddyConfigGenerateFixtures.disabled]
+    const result = caddyConfigGenerate(projects)
+
+    expect(result.success).toBe(true)
+    if (!result.success) return
+    expect(JSON.stringify(result.data)).not.toContain("disabled.example")
+
+    const next = projectPortNext(projects, { from: 3998, to: 3999 })
+    expect(next).toMatchObject({ success: true, data: 3999 })
   })
 
   test("generates one independent route per canonical service", () => {

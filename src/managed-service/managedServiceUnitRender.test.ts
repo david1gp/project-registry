@@ -66,6 +66,25 @@ describe("managedServiceUnitRender", () => {
     expect(result.data).not.toContain("EnvironmentFile=")
   })
 
+  test("renders a preview service with preview:start and its .env.preview file", () => {
+    const result = managedServiceUnitRender({
+      ...spec,
+      command: "bun",
+      args: ["run", "preview:start"],
+      envFile: "/projects/archive/.env.preview",
+    })
+    expect(result.success).toBe(true)
+    if (!result.success) return
+    expect(lines(result.data)).toEqual(
+      expect.arrayContaining([
+        "Environment=PORT=4310",
+        "Environment=HOST=127.0.0.1",
+        "EnvironmentFile=-/projects/archive/.env.preview",
+        "ExecStart=/usr/bin/env bun run preview:start",
+      ]),
+    )
+  })
+
   test("a worker without a port or domains gets no PORT or allowed-hosts environment", () => {
     const { port: _port, ...withoutPort } = spec
     const result = managedServiceUnitRender({

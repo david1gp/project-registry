@@ -186,6 +186,42 @@ describe("managedServiceReconcile", () => {
     expect(unit).toContain("Environment=PORT=4400")
   })
 
+  test("reconciles a preview service with preview:start and its .env.preview file", async () => {
+    const calls: RunnerCall[] = []
+    const filesystem = managedServiceFilesystemFake()
+    const previewFilesystem = managedServiceProjectFilesystemFake({
+      archive: {
+        packageJson: { scripts: { dev: "vite --port 3000" } },
+        files: ["node_modules/.bin/vite", ".env.preview"],
+      },
+    })
+    const result = await managedServiceReconcile({
+      config: managedServiceConfigFixture,
+      projects: [
+        managedServiceProjectFixture("leo", "archive", [
+          {
+            id: "web",
+            port: 4310,
+            service: { autostart: true, command: "bun run preview:start", envFile: ".env.preview" },
+          },
+        ]),
+      ],
+      runner: managedServiceRunnerFake(calls),
+      filesystem,
+      projectFilesystem: previewFilesystem,
+    })
+    expect(result.success && result.data.failures).toEqual([])
+    const unit = filesystem.files.get(archiveUnit) ?? ""
+    expect(unit).toContain("ExecStart=/usr/bin/env bun run preview:start")
+    expect(unit).toContain("EnvironmentFile=-/projects/archive/.env.preview")
+    expect(unit).toContain("Environment=PORT=4310")
+    expect(systemctlCalls(calls)).toEqual([
+      "systemctl daemon-reload",
+      "systemctl enable proj-archive-web.service",
+      "systemctl restart proj-archive-web.service",
+    ])
+  })
+
   test("refuses env files that symlink out of the project directory", async () => {
     const linked = managedServiceProjectFilesystemFake({
       archive: { packageJson: { scripts: { dev: "vite" } }, symlinks: { ".env": "/home/leo/.secrets" } },
