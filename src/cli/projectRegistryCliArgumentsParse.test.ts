@@ -4,6 +4,31 @@ import { projectRegistryCliArgumentsParse } from "./projectRegistryCliArgumentsP
 describe("projectRegistryCliArgumentsParse", () => {
   test.each([
     [["project", "list"], { kind: "project-list" }],
+    [["project", "list", "--owner", "shared"], { kind: "project-list", owner: "shared" }],
+    [["project", "get", "site", "--owner", "shared"], { kind: "project-get", name: "site", owner: "shared" }],
+    [
+      ["project", "create", "--owner", "shared"],
+      { kind: "project-create", owner: "shared", name: undefined, caddy: {} },
+    ],
+    [
+      ["project", "edit", "site", "--owner", "shared"],
+      { kind: "project-edit", owner: "shared", name: "site", caddy: {} },
+    ],
+    [["project", "delete", "site", "--owner", "shared"], { kind: "project-delete", owner: "shared", name: "site" }],
+    [
+      ["project", "history", "site", "--owner", "shared"],
+      { kind: "project-history", owner: "shared", name: "site", limit: undefined },
+    ],
+    [
+      ["project", "move", "site", "--owner", "alice", "--to-owner", "shared", "--source-path-rewrite", "/old/=/new/"],
+      {
+        kind: "project-move",
+        name: "site",
+        owner: "alice",
+        toOwner: "shared",
+        sourcePathRewrite: { from: "/old/", to: "/new/" },
+      },
+    ],
     [["project", "list", "--section", "adaptive"], { kind: "project-list", section: "adaptive" }],
     [
       ["project", "list", "--section", "Adaptive", "--metadata", "code=https://github.com/foo,logo"],

@@ -402,6 +402,8 @@ export function projectRegistryCliOutputFormat(
   }
 
   if (invocation.json) return jsonSerialize({ success: true, data: parsedData })
+  if (command.kind === "project-move")
+    return createResult(`moved ${command.owner}/${command.name} to ${command.toOwner}/${command.name}\n`)
   if (command.kind === "project-list") {
     const projects = parsedData as a.InferOutput<typeof projectSchema>[]
     if (projects.length === 0) return createResult("No projects.\n")

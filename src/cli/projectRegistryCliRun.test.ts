@@ -93,7 +93,8 @@ function tokenStdin(value: string): ReadableStream<Uint8Array> {
 
 describe("projectRegistryCliRun", () => {
   test.each([
-    [["project", "list"], [project], "/api/v1/users/david/projects"],
+    [["project", "list"], [project], "/api/v1/projects"],
+    [["project", "list", "--owner", "david"], [project], "/api/v1/users/david/projects"],
     [["project", "get", "site-name"], project, "/projects/site-name"],
     [["project", "history", "site-name", "--limit", "2"], history, "/history?name=site-name&limit=2"],
     [["history"], history, "/history"],
@@ -113,6 +114,40 @@ describe("projectRegistryCliRun", () => {
     expect(paths).toEqual([expectedPath])
     expect(stdout).toHaveLength(1)
     expect(stderr).toEqual([])
+  })
+
+  test("moves a project with the source revision and explicit destination", async () => {
+    const requests: Array<{ path: string; method: string; body?: unknown }> = []
+    const output: string[] = []
+    const exit = await projectRegistryCliRun(
+      ["project", "move", "site", "--owner", "alice", "--to-owner", "shared", "--source-path-rewrite", "/old/=/new/"],
+      {
+        environment: { USER: "alice" },
+        requestFetch: async (input, init) => {
+          requests.push({
+            path: new URL(String(input)).pathname,
+            method: init?.method ?? "GET",
+            body: init?.body ? JSON.parse(String(init.body)) : undefined,
+          })
+          return Response.json({
+            success: true,
+            data: init?.method === "POST" ? { changed: true } : { revision: "current" },
+          })
+        },
+        stdout: (text) => output.push(text),
+        stderr: (text) => output.push(text),
+      },
+    )
+    expect(exit).toBe(0)
+    expect(requests).toEqual([
+      { path: "/api/v1/users/alice/projects/site", method: "GET", body: undefined },
+      {
+        path: "/api/v1/users/alice/projects/site/move",
+        method: "POST",
+        body: { expectedRevision: "current", toOwner: "shared", sourcePathRewrite: { from: "/old/", to: "/new/" } },
+      },
+    ])
+    expect(output.join("")).toContain("moved alice/site to shared/site")
   })
 
   test("dispatches dev commands through the owner dev route and prints DEV_URL", async () => {
@@ -706,7 +741,7 @@ describe("projectRegistryCliRun", () => {
       }),
     ).toBe(0)
 
-    expect(paths).toEqual(["/api/v1/users/david/projects", "/api/v1/users/david/projects/site"])
+    expect(paths).toEqual(["/api/v1/projects", "/api/v1/users/david/projects/site"])
     expect(JSON.parse(listOutput.join("")).data[0].labels).toEqual({
       team: "platform",
       ["__proto__"]: "safe",
@@ -1884,7 +1919,7 @@ describe("projectRegistryCliRun", () => {
     })
   })
 
-  test("does not request the daemon for untrusted owner input, help, or version", async () => {
+  test("does not request the daemon for invalid owner input, help, or version", async () => {
     let requests = 0
     const output: string[] = []
     const options = {
@@ -1896,7 +1931,7 @@ describe("projectRegistryCliRun", () => {
       stderr: (text: string) => output.push(text),
     }
 
-    expect(await projectRegistryCliRun(["project", "list", "--owner", "root"], options)).toBe(2)
+    expect(await projectRegistryCliRun(["project", "list", "--owner", "../bad"], options)).toBe(2)
     expect(await projectRegistryCliRun(["--help"], options)).toBe(0)
     expect(await projectRegistryCliRun(["--version"], options)).toBe(0)
     expect(requests).toBe(0)

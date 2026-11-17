@@ -264,12 +264,19 @@ async function jsonProjectReadRequest(
   environment: Readonly<Record<string, string | undefined>>,
   requestFetch?: ProjectRegistryCliFetch,
 ): Promise<Result<unknown>> {
-  const ownerR = ownerResolve(environment)
+  const unscopedList = command.kind === "project-list" && command.owner === undefined
+  const ownerR = unscopedList
+    ? createResult("")
+    : command.owner === undefined
+      ? ownerResolve(environment)
+      : createResult(command.owner)
   if (!ownerR.success) return ownerR
   const ownerPath = encodeURIComponent(ownerR.data)
   const path =
     command.kind === "project-list"
-      ? `/api/v1/users/${ownerPath}/projects`
+      ? unscopedList
+        ? "/api/v1/projects"
+        : `/api/v1/users/${ownerPath}/projects`
       : `/api/v1/users/${ownerPath}/projects/${encodeURIComponent(command.name)}`
   const responseR = await projectRegistryCliRequest(socketPath, path, {}, requestFetch)
   if (!responseR.success) return responseR
@@ -316,8 +323,40 @@ async function commandRequest(
   stdin?: ReadableStream<Uint8Array>,
 ): Promise<Result<unknown> & { hint?: string }> {
   const command = invocation.command
-  if (command.kind === "project-list" || (invocation.json && command.kind === "project-get")) {
+  if (
+    command.kind === "project-list" ||
+    (command.kind === "project-get" && (invocation.json || command.owner !== undefined))
+  ) {
     return jsonProjectReadRequest(command, socketPath, environment, requestFetch)
+  }
+  if (command.kind === "project-move") {
+    const path = `/api/v1/users/${encodeURIComponent(command.owner)}/projects/${encodeURIComponent(command.name)}`
+    const currentR = await projectRegistryCliRequest(socketPath, path, {}, requestFetch)
+    if (!currentR.success) return currentR
+    const revisionR = revisionParse(currentR.data)
+    if (!revisionR.success) return revisionR
+    return projectRegistryCliRequest(
+      socketPath,
+      `${path}/move`,
+      {
+        method: "POST",
+        body: {
+          expectedRevision: revisionR.data,
+          toOwner: command.toOwner,
+          ...(command.sourcePathRewrite === undefined ? {} : { sourcePathRewrite: command.sourcePathRewrite }),
+        },
+      },
+      requestFetch,
+    )
+  }
+  if (command.kind === "project-history" && command.owner !== undefined) {
+    const query = command.limit === undefined ? "" : `?${new URLSearchParams({ limit: String(command.limit) })}`
+    return projectRegistryCliRequest(
+      socketPath,
+      `/api/v1/users/${encodeURIComponent(command.owner)}/projects/${encodeURIComponent(command.name)}/history${query}`,
+      {},
+      requestFetch,
+    )
   }
   if (
     command.kind !== "project-create" &&
@@ -394,7 +433,8 @@ async function commandRequest(
     )
   }
 
-  const ownerR = ownerResolve(environment)
+  const ownerR =
+    "owner" in command && command.owner !== undefined ? createResult(command.owner) : ownerResolve(environment)
   if (!ownerR.success) return ownerR
   const ownerPath = encodeURIComponent(ownerR.data)
 

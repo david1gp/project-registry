@@ -1,14 +1,15 @@
 export const projectRegistryCliHelp = `Usage: project-registry [--socket <path>] [--json] <command>
 
 Commands:
-  project list [--section <name>] [--metadata <KEY[=VALUE]>]
-  project get <name>
-  project create [--name <name>] [--service <id>] [--ownership <ownership>] [--domain <hostname>] [options]
-  project edit <name> [--service <id>] [--ownership <ownership>] [options]
-  project delete <name> [--service <id>]
+  project list [--owner <owner>] [--section <name>] [--metadata <KEY[=VALUE]>]
+  project get <name> [--owner <owner>]
+  project create [--owner <owner>] [--name <name>] [--service <id>] [--ownership <ownership>] [--domain <hostname>] [options]
+  project edit <name> [--owner <owner>] [--service <id>] [--ownership <ownership>] [options]
+  project delete <name> [--service <id>] [--owner <owner>]
+  project move <name> --owner <from> --to-owner <to> [--source-path-rewrite <fromPrefix>=<toPrefix>]
   project fix-acl <name>
   delete --port <port>
-  project history <name> [--limit <n>]
+  project history <name> [--owner <owner>] [--limit <n>]
   project access-logs <name> [--owner <owner>] [--limit <n>] [--before <cursor>]
   project route-check <name> [--service <id>]
   history [--limit <n>]

@@ -13,12 +13,14 @@ export type ProjectRegistryCliInvocation = {
     | { kind: "user-cloudflare-token-set"; tokenStdin: true }
     | {
         kind: "project-list"
+        owner?: string
         section?: string
         metadata?: Record<string, string | undefined>
       }
-    | { kind: "project-get"; name: string }
+    | { kind: "project-get"; name: string; owner?: string }
     | {
         kind: "project-create"
+        owner?: string
         name?: string
         service?: string
         ownership?: ProjectServiceOwnership
@@ -28,6 +30,7 @@ export type ProjectRegistryCliInvocation = {
       }
     | {
         kind: "project-edit"
+        owner?: string
         name: string
         service?: string
         ownership?: ProjectServiceOwnership
@@ -39,11 +42,18 @@ export type ProjectRegistryCliInvocation = {
         clearDevCommand?: boolean
         managed?: ProjectServicesManagedPatch
       }
-    | { kind: "project-delete"; name: string }
-    | { kind: "project-service-delete"; name: string; service: string }
+    | {
+        kind: "project-move"
+        name: string
+        owner: string
+        toOwner: string
+        sourcePathRewrite?: { from: string; to: string }
+      }
+    | { kind: "project-delete"; name: string; owner?: string }
+    | { kind: "project-service-delete"; name: string; service: string; owner?: string }
     | { kind: "project-fix-acl"; name: string }
     | { kind: "project-delete-by-port"; port: number }
-    | { kind: "project-history"; name: string; limit?: number }
+    | { kind: "project-history"; name: string; limit?: number; owner?: string }
     | { kind: "dev-up"; name: string; ttlMs?: number; service?: string; root?: string }
     | { kind: "dev-down"; name: string }
     | { kind: "dev-ls" }

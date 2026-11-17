@@ -75,6 +75,8 @@ export function projectRegistryCliArgumentsParse(args: readonly string[]): Resul
   let port: number | undefined
   let path: string | undefined
   let owner: string | undefined
+  let toOwner: string | undefined
+  let sourcePathRewrite: { from: string; to: string } | undefined
   let before: string | undefined
   let ttlMs: number | undefined
   let devRoot: string | undefined
@@ -168,6 +170,8 @@ export function projectRegistryCliArgumentsParse(args: readonly string[]): Resul
       "--oidc-path",
       "--flush-interval",
       "--owner",
+      "--to-owner",
+      "--source-path-rewrite",
       "--before",
       "--ttl",
       "--root",
@@ -251,6 +255,19 @@ export function projectRegistryCliArgumentsParse(args: readonly string[]): Resul
       if (option === "--path") {
         if (value === undefined || value.startsWith("-")) return createResultError(op, "Option --path requires a path.")
         path = value
+        continue
+      }
+      if (option === "--to-owner") {
+        if (value === undefined || !ownerPattern.test(value))
+          return createResultError(op, "Option --to-owner requires a valid Unix username.")
+        toOwner = value
+        continue
+      }
+      if (option === "--source-path-rewrite") {
+        const separator = value?.indexOf("=") ?? -1
+        if (value === undefined || separator <= 0 || separator === value.length - 1)
+          return createResultError(op, "Option --source-path-rewrite requires <fromPrefix>=<toPrefix>.")
+        sourcePathRewrite = { from: value.slice(0, separator), to: value.slice(separator + 1) }
         continue
       }
       if (option === "--owner") {
@@ -516,6 +533,37 @@ export function projectRegistryCliArgumentsParse(args: readonly string[]): Resul
   const hasStateOptions = stateFile !== undefined || stateDir !== undefined
   const hasHttp = booleans.has("--http")
 
+  if ((toOwner !== undefined || sourcePathRewrite !== undefined) && !(subject === "project" && action === "move"))
+    return createResultError(op, "Move options require project move.")
+  if (subject === "project" && action === "move") {
+    if (
+      value === undefined ||
+      !projectNamePattern.test(value) ||
+      extra.length !== 0 ||
+      owner === undefined ||
+      toOwner === undefined ||
+      limit !== undefined ||
+      hasMutationOptions ||
+      before !== undefined ||
+      hasHttp
+    )
+      return createResultError(
+        op,
+        "Usage: project move <name> --owner <from> --to-owner <to> [--source-path-rewrite <fromPrefix>=<toPrefix>].",
+      )
+    return createResult({
+      command: {
+        kind: "project-move",
+        name: value,
+        owner,
+        toOwner,
+        ...(sourcePathRewrite === undefined ? {} : { sourcePathRewrite }),
+      },
+      json,
+      socket,
+    })
+  }
+
   if (
     subject === "version" &&
     action === undefined &&
@@ -542,13 +590,14 @@ export function projectRegistryCliArgumentsParse(args: readonly string[]): Resul
     removeLabels.length === 0 &&
     !clearLabels &&
     !tokenStdin &&
-    !hasAccessLogOptions &&
+    before === undefined &&
     !hasStateOptions &&
     !hasHttp
   ) {
     return createResult({
       command: {
         kind: "project-list",
+        ...(owner === undefined ? {} : { owner }),
         ...(section === undefined ? {} : { section }),
         ...(hasListMetadata ? { metadata: listMetadata } : {}),
       },
@@ -632,11 +681,15 @@ export function projectRegistryCliArgumentsParse(args: readonly string[]): Resul
     extra.length === 0 &&
     limit === undefined &&
     !hasMutationOptions &&
-    !hasAccessLogOptions &&
+    before === undefined &&
     !hasHttp
   ) {
     if (!projectNamePattern.test(value)) return projectNameError(op)
-    return createResult({ command: { kind: "project-get", name: value }, json, socket })
+    return createResult({
+      command: { kind: "project-get", ...(owner === undefined ? {} : { owner }), name: value },
+      json,
+      socket,
+    })
   }
   if (
     subject === "project" &&
@@ -790,7 +843,7 @@ export function projectRegistryCliArgumentsParse(args: readonly string[]): Resul
     action === "create" &&
     value === undefined &&
     limit === undefined &&
-    !hasAccessLogOptions &&
+    before === undefined &&
     !hasStateOptions &&
     !hasHttp
   ) {
@@ -812,6 +865,7 @@ export function projectRegistryCliArgumentsParse(args: readonly string[]): Resul
     return createResult({
       command: {
         kind: "project-create",
+        ...(owner === undefined ? {} : { owner }),
         name: flagName,
         ...(service === undefined ? {} : { service }),
         ...(ownership === undefined ? {} : { ownership }),
@@ -829,7 +883,7 @@ export function projectRegistryCliArgumentsParse(args: readonly string[]): Resul
     value !== undefined &&
     extra.length === 0 &&
     limit === undefined &&
-    !hasAccessLogOptions &&
+    before === undefined &&
     !hasStateOptions &&
     !noDns &&
     !hasHttp
@@ -862,6 +916,7 @@ export function projectRegistryCliArgumentsParse(args: readonly string[]): Resul
     return createResult({
       command: {
         kind: "project-edit",
+        ...(owner === undefined ? {} : { owner }),
         name: value,
         ...(service === undefined ? {} : { service }),
         ...(ownership === undefined ? {} : { ownership }),
@@ -909,14 +964,22 @@ export function projectRegistryCliArgumentsParse(args: readonly string[]): Resul
     extra.length === 0 &&
     limit === undefined &&
     !hasNonServiceMutationOptions &&
-    !hasAccessLogOptions &&
+    before === undefined &&
     !hasHttp
   ) {
     if (!projectNamePattern.test(value)) return createResultError(op, "Project name is invalid.")
     if (service !== undefined) {
-      return createResult({ command: { kind: "project-service-delete", name: value, service }, json, socket })
+      return createResult({
+        command: { kind: "project-service-delete", name: value, service, ...(owner === undefined ? {} : { owner }) },
+        json,
+        socket,
+      })
     }
-    return createResult({ command: { kind: "project-delete", name: value }, json, socket })
+    return createResult({
+      command: { kind: "project-delete", ...(owner === undefined ? {} : { owner }), name: value },
+      json,
+      socket,
+    })
   }
   if (
     subject === "project" &&
@@ -924,11 +987,15 @@ export function projectRegistryCliArgumentsParse(args: readonly string[]): Resul
     value !== undefined &&
     extra.length === 0 &&
     !hasMutationOptions &&
-    !hasAccessLogOptions &&
+    before === undefined &&
     !hasHttp
   ) {
     if (!projectNamePattern.test(value)) return projectNameError(op)
-    return createResult({ command: { kind: "project-history", name: value, limit }, json, socket })
+    return createResult({
+      command: { kind: "project-history", ...(owner === undefined ? {} : { owner }), name: value, limit },
+      json,
+      socket,
+    })
   }
   if (subject === "history" && action === undefined && !hasMutationOptions && !hasAccessLogOptions && !hasHttp) {
     return createResult({ command: { kind: "history", limit }, json, socket })
