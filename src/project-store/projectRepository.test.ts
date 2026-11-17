@@ -211,6 +211,54 @@ describe("projectRepositoryOpen", () => {
     })
   })
 
+  test("moves a project to a previously unused owner in one clean commit", async () => {
+    const directory = temporaryRepository()
+    const openR = await projectRepositoryOpen({ dir: directory })
+    expect(openR.success).toBe(true)
+    if (!openR.success) return
+    const source = canonicalProject("presentations", 3126)
+    const createdR = await openR.data.create(source, { actor: "alice", expectedRevision: "" })
+    expect(createdR.success).toBe(true)
+    if (!createdR.success) return
+    expect(existsSync(join(directory, "projects/shared"))).toBe(false)
+    expect(existsSync(join(directory, "users/shared"))).toBe(false)
+
+    const moved = { ...source, owner: "shared", labels: { ...source.labels, sourcePath: "/projects/presentations" } }
+    const transactionR = await openR.data.transact({
+      actor: "alice",
+      expectedRevision: createdR.data.revision,
+      writes: [moved],
+      removals: [{ owner: source.owner, name: source.name }],
+    })
+    expect(transactionR).toMatchObject({
+      success: true,
+      data: {
+        changed: true,
+        written: [{ owner: "shared", name: source.name }],
+        removed: [{ owner: source.owner, name: source.name }],
+      },
+    })
+    if (!transactionR.success) return
+    expect(existsSync(join(directory, "projects/alice/presentations.json"))).toBe(false)
+    expect(JSON.parse(readFileSync(join(directory, "projects/shared/presentations.json"), "utf8"))).toEqual(moved)
+    expect(await openR.data.read()).toMatchObject({
+      success: true,
+      data: { projects: [moved], revision: transactionR.data.revision },
+    })
+    const gitR = await gitStoreOpen({ dir: directory })
+    expect(gitR.success).toBe(true)
+    if (!gitR.success) return
+    expect(await gitStoreRun(gitR.data, ["rev-list", "--count", `${createdR.data.revision}..HEAD`])).toMatchObject({
+      success: true,
+      data: "1\n",
+    })
+    expect(await gitStoreRun(gitR.data, ["log", "-1", "--format=%s"])).toMatchObject({
+      success: true,
+      data: "project-registry transaction actor=alice\n",
+    })
+    expect(await gitStoreRun(gitR.data, ["status", "--porcelain"])).toMatchObject({ success: true, data: "" })
+  })
+
   test("merges then splits to a new project while retaining service configuration", async () => {
     const openR = await projectRepositoryOpen({ dir: temporaryRepository() })
     expect(openR.success).toBe(true)
@@ -319,13 +367,8 @@ describe("projectRepositoryOpen", () => {
     expect(initialR.success).toBe(true)
     if (!initialR.success) return
 
-    const binDirectory = join(temporaryRepository(), "bin")
-    mkdirSync(binDirectory)
-    const gitWrapper = join(binDirectory, "git")
-    writeFileSync(gitWrapper, '#!/bin/sh\nif [ "$1" = "add" ]; then exit 73; fi\nexec /usr/bin/git "$@"\n')
-    chmodSync(gitWrapper, 0o755)
-    const originalPath = process.env.PATH
-    process.env.PATH = `${binDirectory}:${originalPath ?? ""}`
+    const indexLock = join(directory, ".git/index.lock")
+    writeFileSync(indexLock, "")
     let transaction
     try {
       transaction = await openR.data.transact({
@@ -335,11 +378,11 @@ describe("projectRepositoryOpen", () => {
         removals: [],
       })
     } finally {
-      if (originalPath === undefined) delete process.env.PATH
-      else process.env.PATH = originalPath
+      rmSync(indexLock)
     }
 
     expect(transaction?.success).toBe(false)
+    if (transaction && !transaction.success) expect(transaction.errorMessage).toContain("index.lock")
     expect(existsSync(join(directory, "projects/alice/new-project.json"))).toBe(false)
     const afterR = await openR.data.read()
     expect(afterR).toMatchObject({ success: true, data: { projects: [], revision: initialR.data.revision } })

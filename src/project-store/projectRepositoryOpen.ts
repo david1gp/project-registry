@@ -1675,8 +1675,11 @@ async function projectRepositoryTransact(
       const stagedR = await projectRepositoryMigrationStageWrite(stagingDirectory, write.path, write.data)
       if (!stagedR.success) return stagedR
     }
-    for (const write of writesToCommit)
+    for (const write of writesToCommit) {
+      const parentR = await projectRepositoryParentDirectory(store, write.path.slice(0, write.path.lastIndexOf("/")))
+      if (!parentR.success) return parentR
       await rename(join(stagingDirectory, write.path), join(store.git.dir, write.path))
+    }
     const removalPaths = [...removals.values()].map(({ path }) => path)
     if (removalPaths.length > 0) {
       const removeR = await gitStoreRun(store.git, ["rm", "-f", "--", ...removalPaths])
