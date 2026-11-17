@@ -7,7 +7,11 @@ import { projectCanonicalNormalize } from "./projectCanonicalNormalize.js"
 import { projectMigrate } from "./projectMigrate.js"
 import { projectMutationExpectedRevision } from "./projectMutationExpectedRevision.js"
 import { projectOwnerAuthorize } from "./projectOwnerAuthorize.js"
-import { projectTailscalePrivateRoutesValidate } from "./projectTailscalePrivateRoutesValidate.js"
+import {
+  projectTailscalePrivateRouteDomains,
+  projectTailscalePrivateRoutesValidate,
+} from "./projectTailscalePrivateRoutesValidate.js"
+import { projectTailscaleZonePolicy } from "./projectTailscaleZonePolicy.js"
 
 export async function projectMove(
   options: ProjectUseCaseOptions,
@@ -48,7 +52,18 @@ export async function projectMove(
     },
   )
   if (!projectR.success) return projectR
-  const tailscaleR = projectTailscalePrivateRoutesValidate(projectR.data, toOwner, op)
+  // Preserve existing private claims just as edit does, but only when the
+  // destination has exactly the same zone authority. A move cannot grant
+  // legacy claims to an owner in a different zone.
+  const sourceZones = projectTailscaleZonePolicy[key.owner] ?? []
+  const targetZones = projectTailscaleZonePolicy[toOwner] ?? []
+  const grandfatheredDomains =
+    sourceZones.length > 0 &&
+    sourceZones.length === targetZones.length &&
+    sourceZones.every((zone) => targetZones.includes(zone))
+      ? projectTailscalePrivateRouteDomains(sourceR.data)
+      : []
+  const tailscaleR = projectTailscalePrivateRoutesValidate(projectR.data, toOwner, op, grandfatheredDomains)
   if (!tailscaleR.success) return tailscaleR
   const mutationR = await options.repository.transact({
     actor: actorR.data.username,

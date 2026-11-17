@@ -183,6 +183,29 @@ function useCaseOptions(repository: RepositoryFake, access: ProjectAccess, portR
 }
 
 describe("project move", () => {
+  test.each(["shared", "david"])(
+    "legacy private apex claims only move within the same zone authority (%s)",
+    async (toOwner) => {
+      const source = project("leo", "services", 3000)
+      source.caddy!.domains = ["wonder1.de", "projects.wonder1.de"]
+      source.caddy!.networkVisibility = "private"
+      const repository = repositoryCreate([source])
+      const access = accessCreate(
+        { subject: null, username: "leo", role: "own" },
+        { leo: "own", [toOwner]: "shared-member" },
+      )
+      const result = await projectMove(
+        useCaseOptions(repository, access),
+        { owner: "leo", name: "services" },
+        toOwner,
+        undefined,
+        { expectedRevision: currentRevision },
+      )
+      expect(result.success).toBe(toOwner === "shared")
+      expect(repository.calls.transact).toHaveLength(toOwner === "shared" ? 1 : 0)
+    },
+  )
+
   test("rewrites sourcePath and moves in one transaction without self collision", async () => {
     const source = project("alice", "site", 3000)
     source.labels = { sourcePath: "/old/site" }
