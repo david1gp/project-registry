@@ -17,6 +17,7 @@ import { projectGetUseCase } from "./projectGetUseCase.js"
 import { projectHistory } from "./projectHistory.js"
 import type { ProjectKey } from "./projectKey.js"
 import { projectListUseCase } from "./projectListUseCase.js"
+import { projectMove } from "./projectMove.js"
 import { projectMigrate } from "./projectMigrate.js"
 import { projectOrganize } from "./projectOrganize.js"
 import { projectServiceDelete } from "./projectServiceDelete.js"
@@ -161,7 +162,7 @@ type AccessFake = ProjectAccess & {
   ownerResult?: Result<Role | undefined>
 }
 
-function accessCreate(actor: Actor, ownerRoles: Record<string, Role | undefined> = {}): AccessFake {
+function accessCreate(actor: Actor, ownerRoles: Record<string, Role | "shared-member" | undefined> = {}): AccessFake {
   const access: AccessFake = {
     ownerCalls: [] as string[],
     actorCalls: 0,
@@ -169,7 +170,7 @@ function accessCreate(actor: Actor, ownerRoles: Record<string, Role | undefined>
       access.actorCalls += 1
       return access.actorResult ?? createResult(actor)
     },
-    ownerRoleResolve: async (owner: string): Promise<Result<Role | undefined>> => {
+    ownerRoleResolve: async (owner: string): Promise<Result<Role | "shared-member" | undefined>> => {
       access.ownerCalls.push(owner)
       return access.ownerResult ?? createResult(ownerRoles[owner])
     },
@@ -181,9 +182,68 @@ function useCaseOptions(repository: RepositoryFake, access: ProjectAccess, portR
   return { repository, access, portRange } satisfies ProjectUseCaseOptions
 }
 
+describe("project move", () => {
+  test("rewrites sourcePath and moves in one transaction without self collision", async () => {
+    const source = project("alice", "site", 3000)
+    source.labels = { sourcePath: "/old/site" }
+    const repository = repositoryCreate([source])
+    const access = accessCreate(
+      { subject: null, username: "alice", role: "own" },
+      { alice: "own", shared: "shared-member" },
+    )
+    const result = await projectMove(
+      useCaseOptions(repository, access),
+      { owner: "alice", name: "site" },
+      "shared",
+      { from: "/old/", to: "/new/" },
+      { expectedRevision: currentRevision },
+    )
+    expect(result.success).toBe(true)
+    expect(repository.calls.transact).toHaveLength(1)
+    expect(repository.calls.transact[0]!.options).toMatchObject({
+      expectedRevision: currentRevision,
+      removals: [{ owner: "alice", name: "site" }],
+      writes: [{ owner: "shared", name: "site", labels: { sourcePath: "/new/site" } }],
+    })
+  })
+  test("rejects an existing target without a transaction", async () => {
+    const repository = repositoryCreate([project("alice", "site"), project("shared", "site")])
+    const access = accessCreate(
+      { subject: null, username: "alice", role: "own" },
+      { alice: "own", shared: "shared-member" },
+    )
+    const result = await projectMove(
+      useCaseOptions(repository, access),
+      { owner: "alice", name: "site" },
+      "shared",
+      undefined,
+      { expectedRevision: currentRevision },
+    )
+    expect(result.success).toBe(false)
+    expect(repository.calls.transact).toHaveLength(0)
+  })
+  test("rejects an actor without destination access", async () => {
+    const repository = repositoryCreate([project("alice", "site")])
+    const access = accessCreate({ subject: null, username: "alice", role: "own" }, { alice: "own" })
+    const result = await projectMove(
+      useCaseOptions(repository, access),
+      { owner: "alice", name: "site" },
+      "shared",
+      undefined,
+      { expectedRevision: currentRevision },
+    )
+    expect(result.success).toBe(false)
+    expect(repository.calls.transact).toHaveLength(0)
+  })
+})
+
 describe("project use cases", () => {
   test("default list includes shared membership but not another user's private projects", async () => {
-    const repository = repositoryCreate([project("alice", "mine"), project("shared", "team"), project("bob", "private")])
+    const repository = repositoryCreate([
+      project("alice", "mine"),
+      project("shared", "team"),
+      project("bob", "private"),
+    ])
     const actor = { subject: null, username: "alice", role: "own" as const }
     const access: ProjectAccess = {
       actorResolve: async () => createResult(actor),

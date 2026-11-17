@@ -44,6 +44,7 @@ import { projectGetUseCase } from "../project/projectGetUseCase.js"
 import { projectHistory } from "../project/projectHistory.js"
 import { projectListUseCase } from "../project/projectListUseCase.js"
 import { projectLocalCaddyEntries } from "../project/projectLocalCaddyEntries.js"
+import { projectMove } from "../project/projectMove.js"
 import { projectOrganize } from "../project/projectOrganize.js"
 import { projectOwnerAuthorize } from "../project/projectOwnerAuthorize.js"
 import type { ProjectPortRange } from "../project/projectPortNext.js"
@@ -102,6 +103,7 @@ type ApiHandlerOptions = {
 
 type ApiRoute =
   | { kind: "projects"; legacy: boolean; owner?: string }
+  | { kind: "project-move"; legacy: false; owner: string; name: string }
   | { kind: "organization"; legacy: false; owner: string }
   | { kind: "docs"; legacy: boolean; owner?: string; name: string }
   | { kind: "docs-publication"; legacy: false; owner: string }
@@ -235,6 +237,7 @@ function segmentDecode(value: string, pattern: RegExp): string | undefined {
 
 function routeParse(path: string, method: string): ApiRoute | undefined {
   if (path === "/projects") return { kind: "projects", legacy: true }
+  if (path === "/api/v1/projects") return { kind: "projects", legacy: false }
   if (path === "/config") return { kind: "config", legacy: true }
   if (path === "/history") return { kind: "history", legacy: true }
   if (path === "/api/v1/caddy/config") return { kind: "config", legacy: false }
@@ -293,6 +296,14 @@ function routeParse(path: string, method: string): ApiRoute | undefined {
     if (owner === undefined) return undefined
     if (method === "POST") return { kind: "dev-up", legacy: false, owner }
     return { kind: "dev-ls", legacy: false, owner }
+  }
+
+  const versionedMove = path.match(/^\/api\/v1\/users\/([^/]+)\/projects\/([^/]+)\/move$/)
+  if (versionedMove !== null) {
+    const owner = segmentDecode(versionedMove[1]!, ownerPattern)
+    const name = segmentDecode(versionedMove[2]!, projectNamePattern)
+    if (owner === undefined || name === undefined) return undefined
+    return { kind: "project-move", legacy: false, owner, name }
   }
 
   const versionedHistory = path.match(/^\/api\/v1\/users\/([^/]+)\/projects\/([^/]+)\/history$/)
@@ -425,6 +436,7 @@ function routeRequiresProjectAccess(route: ApiRoute): boolean {
   return (
     route.kind === "projects" ||
     route.kind === "organization" ||
+    route.kind === "project-move" ||
     route.kind === "docs" ||
     route.kind === "docs-publication" ||
     route.kind === "project" ||
@@ -550,7 +562,7 @@ function routeMethods(route: ApiRoute): readonly string[] {
   if (route.kind === "project-service") return ["DELETE"]
   if (route.kind === "fix-acl") return ["POST"]
   if (route.kind === "projects") return route.legacy ? ["GET"] : ["GET", "POST"]
-  if (route.kind === "organization") return ["POST"]
+  if (route.kind === "organization" || route.kind === "project-move") return ["POST"]
   if (route.kind === "docs") return ["GET"]
   if (route.kind === "docs-publication") return ["POST"]
   if (route.kind === "project") return route.legacy ? ["GET", "PUT", "PATCH", "DELETE"] : ["GET", "PATCH", "DELETE"]
@@ -1079,6 +1091,60 @@ export function projectRegistryApiHandlerCreate(options: ApiHandlerOptions): Pro
       access: resolvedAccess,
       portRange: options.portRange,
       defaultUserDomains: options.defaultUserDomains,
+    }
+
+    if (route.kind === "project-move") {
+      const body = await requestBodyJson(request, false)
+      if (body instanceof Response) return body
+      const input = recordValue(body)
+      const rewrite = input?.sourcePathRewrite === undefined ? undefined : recordValue(input.sourcePathRewrite)
+      if (
+        !input ||
+        typeof input.toOwner !== "string" ||
+        !ownerPattern.test(input.toOwner) ||
+        typeof input.expectedRevision !== "string" ||
+        (input.sourcePathRewrite !== undefined &&
+          (!rewrite ||
+            typeof rewrite.from !== "string" ||
+            !rewrite.from ||
+            typeof rewrite.to !== "string" ||
+            !rewrite.to))
+      ) {
+        return errorResponse(
+          {
+            code: "request.invalid",
+            message: "A valid toOwner, expectedRevision and optional sourcePathRewrite are required.",
+            op: "projectRegistryApiMove",
+            status: 400,
+          },
+          false,
+        )
+      }
+      const mutationR = await projectMove(
+        useCaseOptions,
+        { owner, name: route.name },
+        input.toOwner,
+        rewrite as { from: string; to: string } | undefined,
+        expectedRevision(body),
+        (previous, project) => {
+          try {
+            options.projectEditAfterPersistence?.(previous, project)
+          } finally {
+            options.projectDeleteAfterPersistence?.(previous)
+          }
+        },
+      )
+      if (!mutationR.success) return resultErrorResponse(mutationR, false, "projects")
+      if (mutationR.data.changed) {
+        try {
+          options.projectOrganizeAfterPersistence?.()
+        } catch {
+          /* Persistence already succeeded. */
+        }
+        const applicationR = await options.caddyApplication.projectChange()
+        if (!applicationR.success) return resultErrorResponse(applicationR, false, "caddy")
+      }
+      return successResponse(mutationR.data)
     }
 
     if (route.kind === "organization") {
@@ -1706,9 +1772,12 @@ export function projectRegistryApiHandlerCreate(options: ApiHandlerOptions): Pro
           !caddy.docsPath.startsWith("/") ||
           caddy.docsPath.includes("\0") ||
           parts.some((part) => !part || part === "." || part === "..") ||
-          parts[0] !== "home" ||
-          parts[1] !== owner ||
-          !((parts[2] === "projects" && parts.length > 3) || (parts[2] === "wiki" && parts.length >= 3))
+          !(
+            (owner === "shared" && parts[0] === "projects" && parts.length > 1) ||
+            (parts[0] === "home" &&
+              parts[1] === owner &&
+              ((parts[2] === "projects" && parts.length > 3) || (parts[2] === "wiki" && parts.length >= 3)))
+          )
         ) {
           return errorResponse(
             {
@@ -1922,7 +1991,7 @@ export function projectRegistryApiHandlerCreate(options: ApiHandlerOptions): Pro
     }
 
     if (route.kind === "projects") {
-      const projectsR = await projectListUseCase(useCaseOptions, { owner })
+      const projectsR = await projectListUseCase(useCaseOptions, { owner: route.legacy ? owner : route.owner })
       if (!projectsR.success) return resultErrorResponse(projectsR, route.legacy, "projects")
       if (!route.legacy) return successResponse(projectsR.data)
       const projects = url.searchParams.get("templates") === "1" ? [] : projectsR.data.projects

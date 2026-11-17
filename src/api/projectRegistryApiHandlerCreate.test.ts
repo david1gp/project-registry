@@ -665,6 +665,44 @@ describe("project static ACL repair API", () => {
     expect(calls).toEqual([root, docsRoot])
   })
 
+  test("allows a shared project docs root under /projects but rejects it for private owners", async () => {
+    for (const owner of ["shared", "david"]) {
+      const repository = repositoryCreate()
+      const docsRoot = "/projects/example/docs"
+      const projectR = projectMigrate({
+        schemaVersion: 2,
+        owner,
+        name: "static-docs",
+        services: [
+          {
+            id: "web",
+            caddy: { kind: "static", port: 4101, path: root, domains: ["web.example"], docs: true, docsPath: docsRoot },
+          },
+        ],
+      })
+      expect(projectR.success).toBe(true)
+      if (!projectR.success) return
+      repository.projects.push(projectR.data)
+      const calls: string[] = []
+      const handler = projectRegistryApiHandlerCreate({
+        repository,
+        caddyApplication: caddyApplicationCreate(),
+        projectStaticAclRepair: async (_owner, staticRoot) => {
+          calls.push(staticRoot)
+          return createResult({ root: staticRoot, entries: 1 })
+        },
+      })
+      const response = await requestJson(
+        handler,
+        `/api/v1/users/${owner}/projects/static-docs/fix-acl`,
+        { transport: "unix", username: owner },
+        "POST",
+      )
+      expect(response.response.status).toBe(owner === "shared" ? 200 : 500)
+      expect(calls).toEqual(owner === "shared" ? [root, docsRoot] : [])
+    }
+  })
+
   test("rejects a served docsPath outside the owner allowlist before modifying any root", async () => {
     const repository = repositoryCreate()
     const docsRoot = "/home/other/projects/docs"
@@ -2680,6 +2718,72 @@ describe("projectRegistryApiHandlerCreate", () => {
 
     expect(spoofed.response.status).toBe(404)
     expect(resolvedUsers).toEqual(["leo"])
+  })
+
+  test("unscoped versioned list includes shared projects only for members", async () => {
+    const repository = repositoryCreate()
+    repository.projects.length = 0
+    repository.projects.push(
+      docsProjectCreate("leo", "own-app", ["own.example"]),
+      docsProjectCreate("shared", "shared-app", ["shared.example"]),
+      docsProjectCreate("other", "private-app", ["private.example"]),
+    )
+    for (const member of [true, false]) {
+      const handler = projectRegistryApiHandlerCreate({
+        repository,
+        caddyApplication: caddyApplicationCreate(),
+        socketAccessResolve: async (username) =>
+          createResult({
+            actorResolve: async () => createResult({ subject: username, username, role: "own" as const }),
+            ownerRoleResolve: async (owner) =>
+              createResult(
+                owner === username
+                  ? ("own" as const)
+                  : owner === "shared" && member
+                    ? ("shared-member" as const)
+                    : undefined,
+              ),
+          }),
+      })
+      const response = await requestJson(handler, "/api/v1/projects", { transport: "unix", username: "leo" })
+      expect(response.response.status).toBe(200)
+      expect((response.body.data as { projects: Project[] }).projects.map((project) => project.owner).sort()).toEqual(
+        member ? ["leo", "shared"] : ["leo"],
+      )
+    }
+  })
+
+  test("moving a project notifies both keys and triggers Caddy reconciliation", async () => {
+    const repository = repositoryCreate()
+    repository.projects.length = 0
+    repository.projects.push(docsProjectCreate("leo", "app", ["app.example"]))
+    const application = caddyApplicationCreate()
+    const events: string[] = []
+    const handler = projectRegistryApiHandlerCreate({
+      repository,
+      caddyApplication: application,
+      socketAccessResolve: async (username) =>
+        createResult({
+          actorResolve: async () => createResult({ subject: username, username, role: "own" as const }),
+          ownerRoleResolve: async (owner) =>
+            createResult(
+              owner === "leo" ? ("own" as const) : owner === "shared" ? ("shared-member" as const) : undefined,
+            ),
+        }),
+      projectEditAfterPersistence: (previous, project) => events.push(`edit:${previous.owner}:${project.owner}`),
+      projectDeleteAfterPersistence: (project) => events.push(`delete:${project.owner}`),
+      projectOrganizeAfterPersistence: () => events.push("organize"),
+    })
+    const response = await requestJson(
+      handler,
+      "/api/v1/users/leo/projects/app/move",
+      { transport: "unix", username: "leo" },
+      "POST",
+      { toOwner: "shared", expectedRevision: repository.revision },
+    )
+    expect(response.response.status).toBe(200)
+    expect(events).toEqual(["edit:leo:shared", "delete:leo", "organize"])
+    expect(application.projectChanges).toBe(1)
   })
 
   test("rejects Unix project access when the trusted socket resolver is absent", async () => {
