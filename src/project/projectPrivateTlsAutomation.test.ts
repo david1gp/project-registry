@@ -5,6 +5,17 @@ import {
 } from "./projectPrivateTlsAutomation.js"
 
 describe("projectPrivateTlsAutomationRender", () => {
+  test("keeps multi-level shared hostnames on the wonder1 credential after an owner move", () => {
+    const hostname = "api.preview.filmschauspielschule.wonder1.de"
+    const previous = projectPrivateTlsAutomationRender({ claims: [{ owner: "leo", hostnames: [hostname] }] })
+    const moved = projectPrivateTlsAutomationRender({ claims: [{ owner: "shared", hostnames: [hostname] }] })
+    expect(previous.success).toBe(true)
+    expect(moved.success).toBe(true)
+    if (!previous.success || !moved.success) return
+    expect(moved.data.enrolled).toEqual([hostname])
+    expect(moved.data.tls).toEqual(previous.data.tls)
+  })
+
   test("renders per-zone DNS-01 policies plus the automate loader for multi-level names", () => {
     const rendered = projectPrivateTlsAutomationRender({
       claims: [

@@ -13,7 +13,7 @@ import { projectPrivateTlsTokenOwnerSelect } from "./projectPrivateTlsTokenSelec
  * `{env.VAR}` so the token value is resolved server-side at runtime and
  * never appears in registry output, logs, or API payloads.
  *
- * `leo` keeps the default variable (it covers `wonder1.de`); `david`
+ * `leo` and its shared namespace use the default variable (it covers `wonder1.de`); `david`
  * uses the David-zones variable (it covers `david-siewert.com`).
  * `fabian`/`musa` are unbound until they join the tailnet: rendering
  * their enrollments fails closed, exactly like the "code change first"
@@ -21,6 +21,7 @@ import { projectPrivateTlsTokenOwnerSelect } from "./projectPrivateTlsTokenSelec
  */
 export const projectPrivateTlsTokenEnvVarsDefault: Readonly<Record<string, string>> = {
   leo: "CLOUDFLARE_API_TOKEN",
+  shared: "CLOUDFLARE_API_TOKEN",
   david: "CLOUDFLARE_API_TOKEN_DAVID_ZONES",
 }
 
