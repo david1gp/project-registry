@@ -711,7 +711,7 @@ describe("project use cases", () => {
     expect(initial.success).toBe(true)
   })
 
-  test("rejects create and edit collisions before mutation and does not reserve disabled projects", async () => {
+  test("rejects create and edit collisions before mutation and reserves disabled projects", async () => {
     const repository = repositoryCreate([
       project("alice", "catalog", 3002),
       project("bob", "active", 3000),
@@ -749,15 +749,10 @@ describe("project use cases", () => {
       { owner: "alice", name: "disabled-compatible", caddy: { domains: ["disabled.bob.example"] } },
       { expectedRevision: currentRevision },
     )
-    expect(disabledResult.success).toBe(true)
-    expect(repository.calls.create).toHaveLength(1)
-    expect(repository.calls.create[0]?.project).toMatchObject({
-      owner: "alice",
-      name: "disabled-compatible",
-      services: [
-        expect.objectContaining({ caddy: expect.objectContaining({ port: 3001, domains: ["disabled.bob.example"] }) }),
-      ],
-    })
+    expect(disabledResult.success).toBe(false)
+    if (disabledResult.success) return
+    expect(disabledResult.errorMessage).toContain("no free port in range 3001-3001")
+    expect(repository.calls.create).toHaveLength(0)
   })
 
   test("allows superadmins to see and operate unresolved owners while non-superadmins cannot", async () => {

@@ -112,7 +112,7 @@ describe("projectCanonicalNormalize", () => {
     expect(result).toMatchObject({ success: false, errorMessage: "no free port in range 3200-3200" })
   })
 
-  test("does not reserve a disabled submitted port for a local sibling", () => {
+  test("reserves a disabled submitted port for a local sibling", () => {
     const result = projectCanonicalNormalize(
       {
         schemaVersion: 2,
@@ -123,7 +123,7 @@ describe("projectCanonicalNormalize", () => {
           { id: "sibling", units: [], caddy: { domains: ["sibling.example"] } },
         ],
       },
-      { allocatePortServiceIds: ["sibling"], portRange: { from: 3200, to: 3200 } },
+      { allocatePortServiceIds: ["sibling"], portRange: { from: 3200, to: 3201 } },
     )
 
     expect(result).toMatchObject({
@@ -131,7 +131,7 @@ describe("projectCanonicalNormalize", () => {
       data: {
         services: [
           { id: "disabled", caddy: { port: 3200 } },
-          { id: "sibling", caddy: { port: 3200 } },
+          { id: "sibling", caddy: { port: 3201 } },
         ],
       },
     })
@@ -162,7 +162,7 @@ describe("projectCanonicalNormalize", () => {
     })
   })
 
-  test("does not reserve a disabled existing port for a local sibling", () => {
+  test("reuses a disabled existing port removed by the submitted collection", () => {
     const result = projectCanonicalNormalize(
       {
         schemaVersion: 2,

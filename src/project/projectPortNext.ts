@@ -33,7 +33,8 @@ export function projectPortNext(
   for (const project of projects) {
     if (excludeKey && projectKeyEqual(project, excludeKey)) continue
     for (const entry of projectLocalCaddyEntries(project)) {
-      if (entry.caddy.disabled) continue
+      // Disabled routes still own their port: re-enabling one must not
+      // collide with a project that was auto-allocated the same port.
       used.add(entry.caddy.port)
     }
   }

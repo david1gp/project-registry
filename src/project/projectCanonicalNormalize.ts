@@ -15,12 +15,15 @@ function canonicalInput(input: unknown): unknown {
   return record
 }
 
-function canonicalServiceIsActiveLocal(service: Record<string, unknown>): boolean {
+// Local services reserve their port for sibling allocation even when
+// disabled: the disabled service still owns its port, so a new sibling
+// must never be handed it.
+function canonicalServiceIsLocal(service: Record<string, unknown>): boolean {
   const caddy = service.caddy
   if (!caddy || typeof caddy !== "object" || Array.isArray(caddy)) return false
   if (service.ownership === "external") return false
   const caddyRecord = caddy as Record<string, unknown>
-  if (caddyRecord.disabled || !Array.isArray(caddyRecord.domains)) return false
+  if (!Array.isArray(caddyRecord.domains)) return false
   return caddyRecord.domains.some(
     (domain) => typeof domain === "string" && !projectDomainIsCloudflarePages(projectDomainNormalize(domain)),
   )
@@ -56,7 +59,7 @@ function canonicalExternalPortlessNormalize(
     for (const service of services) {
       if (!service || typeof service !== "object" || Array.isArray(service)) continue
       const serviceRecord = service as Record<string, unknown>
-      if (!canonicalServiceIsActiveLocal(serviceRecord)) continue
+      if (!canonicalServiceIsLocal(serviceRecord)) continue
       const caddy = serviceRecord.caddy as Record<string, unknown>
       const port = caddy.port
       if (Number.isInteger(port)) reservedPorts.push(port as number)
@@ -88,7 +91,7 @@ function canonicalExternalPortlessNormalize(
     )
     if (!portR.success) return portR
     servicesWithPorts[index] = { ...serviceRecord, caddy: { ...(caddy as Record<string, unknown>), port: portR.data } }
-    if (reserveSiblingPorts && canonicalServiceIsActiveLocal(serviceRecord)) reservedPorts.push(portR.data)
+    if (reserveSiblingPorts && canonicalServiceIsLocal(serviceRecord)) reservedPorts.push(portR.data)
   }
   return createResult({ ...record, services: servicesWithPorts })
 }

@@ -19,6 +19,7 @@ function canonicalProject(
   name: string,
   ports: number[],
   ownership: "registry" | "external" = "registry",
+  disabled = false,
 ): ProjectCanonical {
   return {
     schemaVersion: 2,
@@ -39,7 +40,7 @@ function canonicalProject(
         docs: true,
         browse: false,
         headerUp: {},
-        disabled: false,
+        disabled,
         denyDotfiles: false,
         spa: false,
       },
@@ -48,7 +49,7 @@ function canonicalProject(
 }
 
 describe("projectPortNext", () => {
-  test("returns the lowest available port and ignores disabled projects", () => {
+  test("returns the lowest available port and reserves disabled routes", () => {
     const result = projectPortNext([
       project("alice", "first", 3000),
       project("bob", "disabled", 3001, true),
@@ -57,7 +58,7 @@ describe("projectPortNext", () => {
 
     expect(result.success).toBe(true)
     if (!result.success) return
-    expect(result.data).toBe(3001)
+    expect(result.data).toBe(3002)
   })
 
   test("returns an expected failure when the range is full", () => {
@@ -92,13 +93,13 @@ describe("projectPortNext", () => {
     for (const range of ranges) expect(projectPortNext([], range).success).toBe(false)
   })
 
-  test("does not reserve disabled projects or catalog-only projects", () => {
+  test("reserves disabled routes but not catalog-only projects", () => {
     const catalogOnly = projectNormalize({ owner: "alice", name: "catalog" })
     if (!catalogOnly.success) throw new Error(catalogOnly.errorMessage)
 
     const result = projectPortNext([catalogOnly.data, project("bob", "disabled", 3000, true)])
 
-    expect(result).toMatchObject({ success: true, data: 3000 })
+    expect(result).toMatchObject({ success: true, data: 3001 })
   })
 
   test("allocates after every active service across canonical projects", () => {
@@ -108,6 +109,15 @@ describe("projectPortNext", () => {
     )
 
     expect(result).toMatchObject({ success: true, data: 3003 })
+  })
+
+  test("reserves ports of disabled canonical services", () => {
+    const result = projectPortNext([canonicalProject("alice", "catalog", [3000], "registry", true)], {
+      from: 3000,
+      to: 3001,
+    })
+
+    expect(result).toMatchObject({ success: true, data: 3001 })
   })
 
   test("does not reserve external service ports", () => {
