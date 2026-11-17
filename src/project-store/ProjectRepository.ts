@@ -12,8 +12,10 @@ import type { ProjectRepositoryReadiness } from "./ProjectRepositoryReadiness.js
 import type { ProjectRepositorySnapshot } from "./ProjectRepositorySnapshot.js"
 import type { ProjectRepositoryTransaction } from "./ProjectRepositoryTransaction.js"
 import type { ProjectRepositoryTransactionOptions } from "./ProjectRepositoryTransactionOptions.js"
+import type { HistoryPushWorker } from "./HistoryPushWorker.js"
 
 export interface ProjectRepository {
+  historyPush?: HistoryPushWorker
   read(): PromiseResult<ProjectRepositorySnapshot>
   get(key: ProjectKey): PromiseResult<ProjectRepositoryEntry>
   getUserDefaultDomain(owner: string): PromiseResult<UserDefaultDomainEntry>

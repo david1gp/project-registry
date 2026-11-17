@@ -12,7 +12,7 @@ export type UserDefaultDomainMutation = {
   }
   push: {
     requested: boolean
-    status: "not-requested" | "pushed" | "failed"
+    status: "not-requested" | "queued" | "pushed" | "failed"
     errorMessage?: string
   }
 }

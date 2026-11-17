@@ -867,6 +867,83 @@ describe("projectRepositoryOpen", () => {
     expect(readR.data.projects).toHaveLength(1)
   })
 
+  test("daemon mutations and reads finish while a slow history push is blocked outside the mutation queue", async () => {
+    const directory = temporaryRepository()
+    const remotePath = join(temporaryRepository(), "history.git")
+    const gitR = await gitStoreOpen({ dir: directory, authorName: "fixture", authorEmail: "fixture@localhost" })
+    expect(gitR.success).toBe(true)
+    if (!gitR.success) return
+    for (const args of [
+      ["init", "--bare", remotePath],
+      ["commit", "--allow-empty", "-m", "seed"],
+      ["remote", "add", "upstream", remotePath],
+      ["push", "--set-upstream", "upstream", "main:release"],
+    ])
+      expect((await gitStoreRun(gitR.data, args)).success).toBe(true)
+    const seedR = await gitStoreRun(gitR.data, ["rev-parse", "HEAD"])
+    expect(seedR.success).toBe(true)
+    if (!seedR.success) return
+
+    const localR = await projectRepositoryOpen({ dir: directory })
+    expect(localR.success).toBe(true)
+    if (!localR.success) return
+    const first = await localR.data.create(project("first", 3001), {
+      actor: "alice",
+      expectedRevision: seedR.data.trim(),
+    })
+    expect(first.success).toBe(true)
+    if (!first.success) return
+
+    const entered = Promise.withResolvers<void>()
+    const release = Promise.withResolvers<void>()
+    const finished = Promise.withResolvers<void>()
+    const openR = await projectRepositoryOpen(
+      { dir: directory, autoPush: true, asyncPush: true },
+      {
+        pushRun: async (store, args) => {
+          if (args[0] === "push") {
+            entered.resolve()
+            await release.promise
+          }
+          const result = await gitStoreRun(store, args)
+          if (args[0] === "ls-remote") finished.resolve()
+          return result
+        },
+      },
+    )
+    expect(openR.success).toBe(true)
+    if (!openR.success) return
+    const repository = openR.data
+    // No new request: startup must discover and push the offline commit above.
+    repository.historyPush?.start()
+    try {
+      await entered.promise
+      const second = await repository.create(project("second", 3002), {
+        actor: "alice",
+        expectedRevision: first.data.revision,
+      })
+      expect(second).toMatchObject({ success: true, data: { push: { status: "queued" } } })
+      if (!second.success) return
+      const domain = await repository.setUserDefaultDomain("alice", "example.com", {
+        actor: "alice",
+        expectedRevision: second.data.revision,
+      })
+      expect(domain).toMatchObject({ success: true, data: { push: { status: "queued" } } })
+      const read = await repository.read()
+      expect(read).toMatchObject({
+        success: true,
+        data: { projects: expect.arrayContaining([expect.objectContaining({ name: "second" })]) },
+      })
+      expect(repository.historyPush?.status().inFlight).toBe(true)
+      const aliasR = await projectRepositoryOpen({ dir: directory, autoPush: true, asyncPush: true })
+      expect(aliasR.success && aliasR.data.historyPush).toBe(repository.historyPush)
+    } finally {
+      repository.historyPush?.stop()
+      release.resolve()
+      await finished.promise
+    }
+  })
+
   test("pushes to a non-origin upstream remote and reports the pushed revision", async () => {
     const directory = temporaryRepository()
     const remoteDirectory = temporaryRepository()

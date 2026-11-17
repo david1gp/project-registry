@@ -43,6 +43,8 @@ import type { ProjectRepositoryTransaction } from "./ProjectRepositoryTransactio
 import type { ProjectRepositoryTransactionOptions } from "./ProjectRepositoryTransactionOptions.js"
 import { projectRepositoryOwnerPath } from "./projectRepositoryOwnerPath.js"
 import { projectRepositoryPath } from "./projectRepositoryPath.js"
+import type { HistoryPushWorker } from "./HistoryPushWorker.js"
+import { historyPushWorkerCreate } from "./historyPushWorkerCreate.js"
 
 const daemonAuthorName = "project-registry"
 const daemonAuthorEmail = "project-registry@localhost"
@@ -51,6 +53,8 @@ type GitProjectRepository = {
   git: GitStore
   autoPush: boolean
   queueKey: string
+  historyPush?: HistoryPushWorker
+  pushRun: typeof gitStoreRun
 }
 
 type WorktreeStatus = {
@@ -69,6 +73,7 @@ type ProjectRepositoryUpstream = {
 }
 
 const mutationQueues = new Map<string, Promise<void>>()
+const historyPushWorkers = new Map<string, HistoryPushWorker>()
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
@@ -1082,16 +1087,7 @@ async function projectRepositoryMigrationCommit(
       localCommit: { status: "committed" as const, revision },
       push: { requested: false as const, status: "not-requested" as const },
     }
-    if (!store.autoPush) return createResult(result)
-
-    const pushR = await projectRepositoryPush(store, revision, op)
-    if (!pushR.success) {
-      return createResult({
-        ...result,
-        push: { requested: true, status: "failed", errorMessage: pushR.errorMessage },
-      })
-    }
-    return createResult({ ...result, push: { requested: true, status: "pushed" } })
+    return createResult({ ...result, push: await projectRepositoryPushRequest(store, revision, op) })
   } catch (error) {
     return createResultError(op, errorMessage(error))
   } finally {
@@ -1229,17 +1225,34 @@ async function projectRepositoryPush(store: GitProjectRepository, revision: stri
   if (!upstreamR.success) return upstreamR
   const { remote, ref } = upstreamR.data
 
-  const pushR = await gitStoreRun(store.git, ["push", remote, `${revision}:${ref}`])
+  const pushR = await store.pushRun(store.git, ["push", remote, `${revision}:${ref}`])
   if (!pushR.success) return pushR
 
-  const pushUrlR = await gitStoreRun(store.git, ["remote", "get-url", "--push", remote])
+  const pushUrlR = await store.pushRun(store.git, ["remote", "get-url", "--push", remote])
   const targetRepository = pushUrlR.success ? pushUrlR.data.trim() : remote
-  const targetR = await gitStoreRun(store.git, ["ls-remote", targetRepository, ref])
+  const targetR = await store.pushRun(store.git, ["ls-remote", targetRepository, ref])
   if (!targetR.success) return targetR
   if (!projectRepositoryPushTargetMatches(targetR.data, revision, ref)) {
     return createResultError(op, `upstream ${remote}/${ref} does not reach committed revision ${revision}`)
   }
   return createResult(undefined)
+}
+
+async function projectRepositoryPushRequest(
+  store: GitProjectRepository,
+  revision: string,
+  op: string,
+): Promise<ProjectRepositoryMutation["push"]> {
+  if (!store.autoPush) return { requested: false, status: "not-requested" }
+  if (store.historyPush !== undefined) {
+    store.historyPush.schedule()
+    return { requested: true, status: "queued" }
+  }
+  // Short-lived repository consumers cannot own daemon timers. Keep their
+  // explicit autoPush behavior synchronous, using the same safe push operation.
+  const pushR = await projectRepositoryPush(store, revision, op)
+  if (!pushR.success) return { requested: true, status: "failed", errorMessage: pushR.errorMessage }
+  return { requested: true, status: "pushed" }
 }
 
 async function projectRepositoryCommit(
@@ -1289,36 +1302,13 @@ async function projectRepositoryCommit(
   const revision = commitR.data.trim()
   if (revision === "") return createResultError(op, `${action} did not produce a local commit`, relPath)
 
-  if (!store.autoPush) {
-    return createResult({
-      action,
-      key: projectRepositoryMutationKey(key),
-      changed: true,
-      revision,
-      localCommit: { status: "committed", revision },
-      push: { requested: false, status: "not-requested" },
-    })
-  }
-
-  const pushR = await projectRepositoryPush(store, revision, op)
-  if (!pushR.success) {
-    return createResult({
-      action,
-      key: projectRepositoryMutationKey(key),
-      changed: true,
-      revision,
-      localCommit: { status: "committed", revision },
-      push: { requested: true, status: "failed", errorMessage: pushR.errorMessage },
-    })
-  }
-
   return createResult({
     action,
     key: projectRepositoryMutationKey(key),
     changed: true,
     revision,
     localCommit: { status: "committed", revision },
-    push: { requested: true, status: "pushed" },
+    push: await projectRepositoryPushRequest(store, revision, op),
   })
 }
 
@@ -1380,31 +1370,6 @@ async function projectRepositoryUserDefaultDomainCommit(
   const revision = commitR.data.trim()
   if (revision === "") return createResultError(op, `${action} did not produce a local commit`, path)
 
-  if (!store.autoPush) {
-    return createResult({
-      action,
-      owner,
-      domain: domain.domain,
-      changed: true,
-      revision,
-      localCommit: { status: "committed", revision },
-      push: { requested: false, status: "not-requested" },
-    })
-  }
-
-  const pushR = await projectRepositoryPush(store, revision, op)
-  if (!pushR.success) {
-    return createResult({
-      action,
-      owner,
-      domain: domain.domain,
-      changed: true,
-      revision,
-      localCommit: { status: "committed", revision },
-      push: { requested: true, status: "failed", errorMessage: pushR.errorMessage },
-    })
-  }
-
   return createResult({
     action,
     owner,
@@ -1412,7 +1377,7 @@ async function projectRepositoryUserDefaultDomainCommit(
     changed: true,
     revision,
     localCommit: { status: "committed", revision },
-    push: { requested: true, status: "pushed" },
+    push: await projectRepositoryPushRequest(store, revision, op),
   })
 }
 
@@ -1702,11 +1667,7 @@ async function projectRepositoryTransact(
       written: writesToCommit.map(({ project }) => ({ owner: project.owner, name: project.name })),
       removed: [...removals.values()].map(({ key }) => key),
     }
-    if (!store.autoPush) return createResult(result)
-    const pushR = await projectRepositoryPush(store, revision, op)
-    if (!pushR.success)
-      return createResult({ ...result, push: { requested: true, status: "failed", errorMessage: pushR.errorMessage } })
-    return createResult({ ...result, push: { requested: true, status: "pushed" } })
+    return createResult({ ...result, push: await projectRepositoryPushRequest(store, revision, op) })
   } catch (error) {
     return createResultError(op, errorMessage(error))
   } finally {
@@ -1787,7 +1748,10 @@ async function projectRepositoryRecover(store: GitProjectRepository): PromiseRes
   return readinessR
 }
 
-export async function projectRepositoryOpen(options: unknown): PromiseResult<ProjectRepository> {
+export async function projectRepositoryOpen(
+  options: unknown,
+  dependencies: { pushRun?: typeof gitStoreRun } = {},
+): PromiseResult<ProjectRepository> {
   const op = "projectRepositoryOpen"
   const parsed = a.safeParse(projectRepositoryOptionsSchema, options)
   if (!parsed.success) return createResultError(op, a.summarize(parsed.issues))
@@ -1816,11 +1780,38 @@ export async function projectRepositoryOpen(options: unknown): PromiseResult<Pro
     git: { ...gitR.data, dir: canonicalDir },
     autoPush: opts.autoPush,
     queueKey: canonicalDir,
+    pushRun: dependencies.pushRun ?? gitStoreRun,
   }
   const readinessR = await projectRepositoryReadiness(store)
   if (!readinessR.success) return readinessR
 
+  if (opts.asyncPush) {
+    let worker = opts.autoPush ? historyPushWorkers.get(canonicalDir) : undefined
+    if (worker === undefined) {
+      worker = historyPushWorkerCreate({
+        enabled: opts.autoPush,
+        snapshot: () =>
+          projectRepositoryQueue(store, "historyPushSnapshot", async () => {
+            const revisionR = await projectRepositoryRevision(store)
+            if (!revisionR.success) return revisionR
+            if (revisionR.data === "") return createResult({ revision: "", aheadCount: 0 })
+            const aheadR = await gitStoreRun(store.git, ["rev-list", "--count", `@{upstream}..${revisionR.data}`])
+            // A configured remote may not have a local tracking ref yet. Unknown
+            // is not zero: attempt the normal push, which reports upstream errors.
+            return createResult({
+              revision: revisionR.data,
+              aheadCount: aheadR.success ? Number(aheadR.data.trim()) : null,
+            })
+          }),
+        push: (revision) => projectRepositoryPush(store, revision, "historyPush"),
+      })
+      if (opts.autoPush) historyPushWorkers.set(canonicalDir, worker)
+    }
+    store.historyPush = worker
+  }
+
   const repository: ProjectRepository = {
+    ...(store.historyPush === undefined ? {} : { historyPush: store.historyPush }),
     read: () => projectRepositoryQueue(store, "projectRepositoryRead", () => projectRepositoryReadSnapshot(store)),
     get: (key) =>
       projectRepositoryQueue(store, "projectRepositoryGet", async () => {
