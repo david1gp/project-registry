@@ -16,7 +16,11 @@ function actorIsValid(actor: Actor): boolean {
   )
 }
 
-export function projectAuthorize(actor: Actor, owner: string, ownerRole: Role | undefined): Result<void> {
+export function projectAuthorize(
+  actor: Actor,
+  owner: string,
+  ownerRole: Role | "shared-member" | undefined,
+): Result<void> {
   const op = "projectAuthorize"
   if (!actorIsValid(actor))
     return createResultErrorCode(op, "actor mapping or current role is unavailable", "projects.forbidden")
@@ -26,7 +30,7 @@ export function projectAuthorize(actor: Actor, owner: string, ownerRole: Role | 
       errorData: owner,
     }
   }
-  if (ownerRole !== undefined && !roleIsKnown(ownerRole)) {
+  if (ownerRole !== undefined && !roleIsKnown(ownerRole) && ownerRole !== "shared-member") {
     return { ...createResultErrorCode(op, "project owner role is invalid", "projects.forbidden"), errorData: owner }
   }
   if (ownerRole === undefined && actor.role !== "superadmin") {
@@ -35,6 +39,7 @@ export function projectAuthorize(actor: Actor, owner: string, ownerRole: Role | 
       errorData: owner,
     }
   }
+  if (ownerRole === "shared-member") return createResult(undefined)
   if (actor.role === "superadmin") return createResult(undefined)
   if (actor.role === "admin" && (ownerRole === "own" || ownerRole === "admin")) return createResult(undefined)
   if (actor.role === "own" && ownerRole === "own" && actor.username === owner) return createResult(undefined)

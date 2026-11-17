@@ -53,6 +53,8 @@ export function projectRegistryDaemonConfigFromEnv(
       "PROJECT_REGISTRY_LOCAL_HOSTS_FILE",
       "PROJECT_REGISTRY_REPOSITORY_BRANCH",
       "PROJECT_REGISTRY_USERS",
+      "PROJECT_REGISTRY_SHARED_OWNERS",
+      "PROJECT_REGISTRY_CREDENTIAL_OWNER_ALIASES",
       "PROJECT_REGISTRY_DEFAULT_USER_DOMAINS",
       "PROJECT_REGISTRY_SOCKET_DIRECTORY",
       "PROJECT_REGISTRY_WEB_HOST",
@@ -273,7 +275,25 @@ export function projectRegistryDaemonConfigFromEnv(
         .filter(Boolean)
     }
 
+    const mappings: Record<string, Record<string, string>> = {}
+    for (const name of ["PROJECT_REGISTRY_SHARED_OWNERS", "PROJECT_REGISTRY_CREDENTIAL_OWNER_ALIASES"]) {
+      const result: Record<string, string> = Object.create(null)
+      const value = values[name]?.trim()
+      if (value) {
+        for (const pair of value.split(",")) {
+          const parts = pair.split(":").map((part) => part.trim())
+          if (parts.length !== 2 || !parts[0] || !parts[1] || Object.hasOwn(result, parts[0])) {
+            return createResultError(op, `${name} must contain unique owner:value pairs`)
+          }
+          result[parts[0]] = parts[1]
+        }
+      }
+      mappings[name] = result
+    }
+
     return projectRegistryDaemonConfigValidate({
+      sharedOwners: mappings.PROJECT_REGISTRY_SHARED_OWNERS,
+      credentialOwnerAliases: mappings.PROJECT_REGISTRY_CREDENTIAL_OWNER_ALIASES,
       mode,
       ...(localDomainsEnabled === true
         ? {

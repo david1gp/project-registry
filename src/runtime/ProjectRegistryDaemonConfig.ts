@@ -13,6 +13,8 @@ export type ProjectRegistryDaemonConfig = {
   wikiRoot?: string
   repositoryBranch: string
   mappedUsers: readonly string[]
+  sharedOwners: Readonly<Record<string, string>>
+  credentialOwnerAliases: Readonly<Record<string, string>>
   defaultUserDomains: Readonly<Record<string, string>>
   socketDirectory: string
   webListener: {

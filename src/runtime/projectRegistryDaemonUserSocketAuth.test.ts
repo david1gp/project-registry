@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test"
 import { chmod, mkdtemp, rm } from "node:fs/promises"
-import { userInfo } from "node:os"
+import { homedir, userInfo } from "node:os"
 import { join } from "node:path"
 import { createResult } from "#result"
 import type { CaddyApplication } from "../caddy/CaddyApplication.js"
@@ -12,7 +12,7 @@ import { projectRegistryDaemonServerDefault } from "./projectRegistryDaemonServe
 
 async function harnessCreate() {
   // Socket ancestors must not be group/world writable; /tmp is unsuitable.
-  const directory = await mkdtemp(join(process.cwd(), ".registry-socket-auth-test-"))
+  const directory = await mkdtemp(join(homedir(), ".registry-socket-auth-test-"))
   const owner = userInfo().username
   const repositoryPath = join(directory, "data")
   const git = Bun.spawnSync(["git", "init", "--initial-branch=main", repositoryPath])
@@ -46,6 +46,7 @@ async function harnessCreate() {
   const serverDefault = projectRegistryDaemonServerDefault()
   const posixDefault = projectRegistryDaemonPosixDefault()
   let httpUrl = ""
+  let member = true
   let wrongUid = false
   const socketDirectory = join(directory, "sockets")
   const socket = join(socketDirectory, `${owner}.sock`)
@@ -54,12 +55,14 @@ async function harnessCreate() {
       mode: "user",
       repositoryPath,
       mappedUsers: [owner],
+      sharedOwners: { shared: "fixture-group" },
       socketDirectory,
       serverIp: "127.0.0.1",
       cloudflareDns: { enabled: false },
       webListener: { hostname: "127.0.0.1", port: 8080 },
     },
     repository: repositoryR.data,
+    groupMembersResolve: async () => createResult(member ? [owner] : []),
     caddyApplication,
     posix: {
       ...posixDefault,
@@ -82,6 +85,7 @@ async function harnessCreate() {
     socket,
     socketDirectory,
     repository: repositoryR.data,
+    memberSet: (value: boolean) => { member = value },
     wrongUidSet: () => {
       wrongUid = true
     },
@@ -186,6 +190,23 @@ test("user-mode authorization fails closed if socket permissions or resolved dae
     await chmod(harness.socketDirectory, 0o700)
     harness.wrongUidSet()
     expect((await harness.request(path)).status).toBe(401)
+  } finally {
+    await harness.close()
+  }
+})
+
+
+test("shared socket membership is checked on each request without exposing private owners", async () => {
+  const harness = await harnessCreate()
+  try {
+    const shared = "/api/v1/users/shared/projects"
+    expect((await harness.request(shared)).status).toBe(200)
+    const other = harness.owner === "bob" ? "alice" : "bob"
+    expect((await harness.request(`/api/v1/users/${other}/projects`)).status).toBe(403)
+    harness.memberSet(false)
+    expect((await harness.request(shared)).status).toBe(403)
+    harness.memberSet(true)
+    expect((await harness.request(shared)).status).toBe(200)
   } finally {
     await harness.close()
   }

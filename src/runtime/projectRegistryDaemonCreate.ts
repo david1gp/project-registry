@@ -1,3 +1,4 @@
+import { projectRegistryGroupMembersResolve } from "./projectRegistryGroupMembersResolve.js"
 import { dirname, join, relative, resolve } from "node:path"
 import { createResult, createResultError, type PromiseResult, type Result } from "#result"
 import type { Actor } from "../access/Actor.js"
@@ -1422,12 +1423,29 @@ export function projectRegistryDaemonCreate(options: ProjectRegistryDaemonOption
     })
   }
 
-  const socketAccessResolve =
+  const baseSocketAccessResolve =
     socketAccessResolveOption ??
     (config.mode === "user"
       ? userSocketAccessResolve
       : async (username: string) =>
           createResultError("projectRegistryDaemonSocketAccessResolve", "socket actor role is unavailable", username))
+  const groupMembersResolve = options.groupMembersResolve ?? projectRegistryGroupMembersResolve
+  const socketAccessResolve: NonNullable<ProjectRegistryDaemonOptions["socketAccessResolve"]> = async (username) => {
+    const accessR = await baseSocketAccessResolve(username)
+    if (!accessR.success) return accessR
+    const access = accessR.data
+    return createResult({
+      actorResolve: access.actorResolve,
+      ownerRoleResolve: async (owner) => {
+        const group = Object.hasOwn(config.sharedOwners, owner) ? config.sharedOwners[owner] : undefined
+        if (group === undefined) return access.ownerRoleResolve(owner)
+        const membersR = await groupMembersResolve(group)
+        if (!membersR.success) return membersR
+        if (membersR.data.includes(username)) return createResult("shared-member" as const)
+        return access.ownerRoleResolve(owner)
+      },
+    })
+  }
   const handler =
     requestHandlerOption ??
     projectRegistryApiHandlerCreate({

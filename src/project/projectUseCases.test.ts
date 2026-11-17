@@ -182,6 +182,21 @@ function useCaseOptions(repository: RepositoryFake, access: ProjectAccess, portR
 }
 
 describe("project use cases", () => {
+  test("default list includes shared membership but not another user's private projects", async () => {
+    const repository = repositoryCreate([project("alice", "mine"), project("shared", "team"), project("bob", "private")])
+    const actor = { subject: null, username: "alice", role: "own" as const }
+    const access: ProjectAccess = {
+      actorResolve: async () => createResult(actor),
+      ownerRoleResolve: async (owner) => createResult(owner === "shared" ? "shared-member" : "own"),
+    }
+    const listed = await projectListUseCase(useCaseOptions(repository, access))
+    expect(listed.success).toBe(true)
+    if (!listed.success) return
+    expect(listed.data.projects.map((item) => item.owner).sort()).toEqual(["alice", "shared"])
+    expect((await projectListUseCase(useCaseOptions(repository, access), { owner: "shared" })).success).toBe(true)
+    expect((await projectListUseCase(useCaseOptions(repository, access), { owner: "bob" })).success).toBe(false)
+  })
+
   test("lists only projects visible under current owner roles and returns the registry revision", async () => {
     const repository = repositoryCreate([
       project("carol", "superadmin-project", 3002),

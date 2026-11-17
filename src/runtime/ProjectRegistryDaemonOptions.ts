@@ -43,6 +43,7 @@ export type ProjectRegistryDaemonOptions = {
   sessions?: SessionStore
   tokenReferences?: TokenReferenceStore
   zitadelHttp?: ZitadelHttp
+  groupMembersResolve?: (group: string) => PromiseResult<readonly string[]>
   mappedUsersResolve?: ProjectRegistryDaemonMappedUsersResolve
   requestHandler?: ProjectRegistryDaemonRequestHandler
   filesystem?: ProjectRegistryDaemonFilesystem

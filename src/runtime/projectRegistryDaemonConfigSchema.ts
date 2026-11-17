@@ -271,6 +271,8 @@ export const projectRegistryDaemonConfigSchema = a.strictObject({
     ),
     [],
   ),
+  sharedOwners: a.optional(a.record(usernameSchema, usernameSchema), {}),
+  credentialOwnerAliases: a.optional(a.record(usernameSchema, usernameSchema), {}),
   defaultUserDomains: a.optional(a.record(usernameSchema, a.pipe(a.string(), a.minLength(1))), {}),
   socketDirectory: a.optional(absolutePathSchema, "/run/project-registry"),
   webListener: a.optional(a.strictObject({ hostname: loopbackHostnameSchema, port: portSchema }), {

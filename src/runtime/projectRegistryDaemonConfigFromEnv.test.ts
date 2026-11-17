@@ -158,3 +158,22 @@ describe("projectRegistryDaemonConfigFromEnv dev flag", () => {
     }
   })
 })
+
+test("parses and validates shared owner and credential alias mappings", () => {
+  const base = { PROJECT_REGISTRY_REPOSITORY_PATH: "/tmp/repo" }
+  expect(
+    projectRegistryDaemonConfigFromEnv({
+      ...base,
+      PROJECT_REGISTRY_SHARED_OWNERS: "shared:group, team:other",
+      PROJECT_REGISTRY_CREDENTIAL_OWNER_ALIASES: "shared:alice",
+    }),
+  ).toMatchObject({
+    success: true,
+    data: { sharedOwners: { shared: "group", team: "other" }, credentialOwnerAliases: { shared: "alice" } },
+  })
+  for (const name of ["PROJECT_REGISTRY_SHARED_OWNERS", "PROJECT_REGISTRY_CREDENTIAL_OWNER_ALIASES"]) {
+    for (const value of ["shared", "shared:", "shared:group,shared:other", "shared:group,", "shared:bad/group"]) {
+      expect(projectRegistryDaemonConfigFromEnv({ ...base, [name]: value }).success).toBe(false)
+    }
+  }
+})

@@ -66,7 +66,7 @@ export async function projectListUseCase(
   const revisionR = projectRevisionValidate(snapshotR.data.revision, "projectListUseCase")
   if (!revisionR.success) return revisionR
 
-  const ownerRoles = new Map<string, Role | undefined>([[actor.username, actorOwnerRoleR.data]])
+  const ownerRoles = new Map<string, Role | "shared-member" | undefined>([[actor.username, actorOwnerRoleR.data]])
   const visibleProjects: Project[] = []
   for (const project of snapshotR.data.projects) {
     let ownerRole = ownerRoles.get(project.owner)
@@ -82,7 +82,8 @@ export async function projectListUseCase(
       visibleProjects.push(project)
       continue
     }
-    if (ownerRole !== undefined && !["own", "admin", "superadmin"].includes(ownerRole)) return authorizationR
+    if (ownerRole !== undefined && !["own", "admin", "superadmin", "shared-member"].includes(ownerRole))
+      return authorizationR
     if (ownerRole === undefined && actor.role !== "superadmin") continue
     if (actor.role === "admin" && ownerRole === "superadmin") continue
     if (actor.role === "own" && (ownerRole !== "own" || project.owner !== actor.username)) continue
