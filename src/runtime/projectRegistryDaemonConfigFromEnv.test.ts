@@ -14,10 +14,13 @@ describe("docs publisher configuration", () => {
 
   test("parses owner-to-user grants and rejects invalid JSON or schema", () => {
     const environment = { PROJECT_REGISTRY_REPOSITORY_PATH: "/tmp/repo" }
-    expect(projectRegistryDaemonConfigFromEnv({ ...environment, PROJECT_REGISTRY_DOCS_PUBLISHERS: '{"leo":["david"]}' }))
-      .toMatchObject({ success: true, data: { docsPublishers: { leo: ["david"] } } })
+    expect(
+      projectRegistryDaemonConfigFromEnv({ ...environment, PROJECT_REGISTRY_DOCS_PUBLISHERS: '{"leo":["david"]}' }),
+    ).toMatchObject({ success: true, data: { docsPublishers: { leo: ["david"] } } })
     for (const value of ["{", "null", "[]", '{"leo":"david"}', '{"leo":[42]}', '{"bad owner":["david"]}']) {
-      expect(projectRegistryDaemonConfigFromEnv({ ...environment, PROJECT_REGISTRY_DOCS_PUBLISHERS: value }).success).toBe(false)
+      expect(
+        projectRegistryDaemonConfigFromEnv({ ...environment, PROJECT_REGISTRY_DOCS_PUBLISHERS: value }).success,
+      ).toBe(false)
     }
   })
 })

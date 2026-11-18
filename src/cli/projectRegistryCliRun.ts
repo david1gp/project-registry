@@ -438,9 +438,15 @@ async function commandRequest(
     )
   }
 
-  const docsOwnerR = command.kind === "docs-local"
-    ? await docsOwnerConfigResolve({ environment, cwd: cliOptions.docsCwd?.() ?? process.cwd(), read: cliOptions.docsConfigRead, realpath: cliOptions.docsRealpath })
-    : createResult(undefined)
+  const docsOwnerR =
+    command.kind === "docs-local"
+      ? await docsOwnerConfigResolve({
+          environment,
+          cwd: cliOptions.docsCwd?.() ?? process.cwd(),
+          read: cliOptions.docsConfigRead,
+          realpath: cliOptions.docsRealpath,
+        })
+      : createResult(undefined)
   if (!docsOwnerR.success) return docsOwnerR
   const selectedOwner = ("owner" in command ? command.owner : undefined) ?? docsOwnerR.data
   const ownerR = selectedOwner !== undefined ? createResult(selectedOwner) : ownerResolve(environment)

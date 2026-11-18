@@ -5,10 +5,12 @@ import { createResult, createResultError, type Result } from "#result"
 
 const schema = a.object({
   docs: a.object({
-    rules: a.array(a.object({
-      paths: a.array(a.pipe(a.string(), a.minLength(1))),
-      owner: a.pipe(a.string(), a.regex(/^[A-Za-z_][A-Za-z0-9_.-]*\$?$/)),
-    })),
+    rules: a.array(
+      a.object({
+        paths: a.array(a.pipe(a.string(), a.minLength(1))),
+        owner: a.pipe(a.string(), a.regex(/^[A-Za-z_][A-Za-z0-9_.-]*\$?$/)),
+      }),
+    ),
   }),
 })
 
@@ -61,7 +63,8 @@ export async function docsOwnerConfigResolve(options: Options): Promise<Result<s
   for (const rule of parsed.output.docs.rules) {
     for (const path of rule.paths) {
       if ((path === "~" || path.startsWith("~/")) && !environment.HOME) continue
-      const expanded = path === "~" ? environment.HOME! : path.startsWith("~/") ? join(environment.HOME!, path.slice(2)) : path
+      const expanded =
+        path === "~" ? environment.HOME! : path.startsWith("~/") ? join(environment.HOME!, path.slice(2)) : path
       if (!isAbsolute(expanded)) continue
       const prefix = resolve(expanded)
       if (prefix.length <= bestLength) continue
