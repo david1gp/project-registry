@@ -62,4 +62,5 @@ Nothing existing may break: without the new config file / env key, behavior is b
 - Task 1: done (branch `daemon-docs-publishers-grant`, commit 6dbc036)
 - Task 2: done (branch `docs-owner-config-selection`, commit fc3c0b1)
 - Task 3: done (merged to main, db8784e)
-- Task 4-5: pending
+- Task 4: done (deployed; live env has grant; ~/.config/project-registry/config.json created)
+- Task 5: done (live E2E passed on both domains)
