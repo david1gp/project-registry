@@ -1007,9 +1007,9 @@ export function projectRegistryCliArgumentsParse(args: readonly string[]): Resul
     extra.length === 0 &&
     limit === undefined &&
     !hasMutationOptions &&
-    !hasAccessLogOptions
+    before === undefined
   ) {
-    return createResult({ command: { kind: "docs-local", path: action, http: hasHttp }, json, socket })
+    return createResult({ command: { kind: "docs-local", path: action, http: hasHttp, ...(owner === undefined ? {} : { owner }) }, json, socket })
   }
   if (
     subject === "docs" &&

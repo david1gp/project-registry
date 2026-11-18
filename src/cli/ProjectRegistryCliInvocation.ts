@@ -69,7 +69,7 @@ export type ProjectRegistryCliInvocation = {
     | { kind: "route-check"; name: string; service?: string }
     | { kind: "history"; limit?: number }
     | { kind: "docs"; name: string; path: string; http: boolean }
-    | { kind: "docs-local"; path: string; http: boolean }
+    | { kind: "docs-local"; path: string; http: boolean; owner?: string }
     | { kind: "config"; selector?: string }
     | { kind: "regenerate" }
     | { kind: "status" }
