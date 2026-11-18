@@ -95,6 +95,7 @@ describe("projectRegistryCliArgumentsParse", () => {
       { kind: "route-check", name: "site", service: "api-preview" },
     ],
     [["docs", "guide/intro.md"], { kind: "docs-local", path: "guide/intro.md", http: false }],
+    [["docs", "guide/intro.md", "--owner", "leo"], { kind: "docs-local", path: "guide/intro.md", http: false, owner: "leo" }],
     [["docs", "guide/intro.md", "--http"], { kind: "docs-local", path: "guide/intro.md", http: true }],
     [["docs", "site", "guide/intro.md"], { kind: "docs", name: "site", path: "guide/intro.md", http: false }],
     [["docs", "site", "guide/intro.md", "--http"], { kind: "docs", name: "site", path: "guide/intro.md", http: true }],

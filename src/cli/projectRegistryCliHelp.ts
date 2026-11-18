@@ -13,9 +13,9 @@ Commands:
   project access-logs <name> [--owner <owner>] [--limit <n>] [--before <cursor>]
   project route-check <name> [--service <id>]
   history [--limit <n>]
-  docs <path> [--http]
+  docs <path> [--http] [--owner <owner>]
   docs <name> <path> [--http]
-  docs <path> reads local Markdown and publishes it to the authenticated owner's docs space, regardless of cwd/project config
+  docs <path> publishes local Markdown to the owner selected by --owner, cwd config rules, or $USER
   docs <name> <path> requests docs from the explicitly named project
   In-cwd relative paths keep normalized hierarchy; absolute or outside-cwd paths publish by basename.
   Page paths allow only route-safe ASCII letters, digits, ., _, -, and /; index.md is reserved.

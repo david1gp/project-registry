@@ -13,6 +13,7 @@ import { projectSchema } from "../project/projectSchema.js"
 import { projectRegistryVersionMetadataRender } from "../projectRegistryVersionMetadataRender.js"
 import type { TailscaleSplitDnsFetch } from "../tailscale/TailscaleSplitDnsFetch.js"
 import { docsLogicalPagePathResolve } from "./docsLogicalPagePath.js"
+import { docsOwnerConfigResolve } from "./docsOwnerConfigResolve.js"
 import type { ProjectRegistryCliCaddyOptions } from "./ProjectRegistryCliCaddyOptions.js"
 import type { ProjectRegistryCliFetch } from "./ProjectRegistryCliFetch.js"
 import type { ProjectRegistryCliInvocation } from "./ProjectRegistryCliInvocation.js"
@@ -37,6 +38,9 @@ type CliRunOptions = {
   stderr?: (text: string) => void
   tailscaleFetch?: TailscaleSplitDnsFetch
   tailscaleStateRead?: (path: string) => Promise<string>
+  docsConfigRead?: (path: string) => Promise<string>
+  docsCwd?: () => string
+  docsRealpath?: (path: string) => Promise<string>
 }
 
 type RequestOptions = {
@@ -321,6 +325,7 @@ async function commandRequest(
   environment: Readonly<Record<string, string | undefined>>,
   requestFetch?: ProjectRegistryCliFetch,
   stdin?: ReadableStream<Uint8Array>,
+  cliOptions: CliRunOptions = {},
 ): Promise<Result<unknown> & { hint?: string }> {
   const command = invocation.command
   if (
@@ -433,8 +438,12 @@ async function commandRequest(
     )
   }
 
-  const ownerR =
-    "owner" in command && command.owner !== undefined ? createResult(command.owner) : ownerResolve(environment)
+  const docsOwnerR = command.kind === "docs-local"
+    ? await docsOwnerConfigResolve({ environment, cwd: cliOptions.docsCwd?.() ?? process.cwd(), read: cliOptions.docsConfigRead, realpath: cliOptions.docsRealpath })
+    : createResult(undefined)
+  if (!docsOwnerR.success) return docsOwnerR
+  const selectedOwner = ("owner" in command ? command.owner : undefined) ?? docsOwnerR.data
+  const ownerR = selectedOwner !== undefined ? createResult(selectedOwner) : ownerResolve(environment)
   if (!ownerR.success) return ownerR
   const ownerPath = encodeURIComponent(ownerR.data)
 
@@ -721,7 +730,7 @@ export async function projectRegistryCliRun(args: readonly string[], options: Cl
   }
   const stdin =
     invocation.command.kind === "user-cloudflare-token-set" ? (options.stdin ?? Bun.stdin.stream()) : undefined
-  const responseR = await commandRequest(invocation, socketR.data, environment, options.requestFetch, stdin)
+  const responseR = await commandRequest(invocation, socketR.data, environment, options.requestFetch, stdin, options)
   if (!responseR.success) {
     errorWrite(responseR, invocation.json, writeError)
     return 1
