@@ -2314,6 +2314,34 @@ describe("projectRegistryApiHandlerCreate", () => {
     expect(crossOwner.response.status).toBe(403)
   })
 
+  test("docs publisher grants allow only publication for the configured owner", async () => {
+    const repository = repositoryCreate()
+    repository.defaultDomains.leo = "example.test"
+    const storage = mkdtempSync(join(import.meta.dir, ".docs-publication-test-"))
+    temporaryDirectories.push(storage)
+    const store = projectDocsPublicationStoreCreate(join(storage, "published"))
+    const handler = projectRegistryApiHandlerCreate({
+      repository,
+      caddyApplication: caddyApplicationCreate(),
+      docsPublicationStore: store,
+      docsPublishers: { leo: ["david"] },
+    })
+    const david = { transport: "unix", username: "david" } as const
+    const body = { sourcePath: "/work/guide.md", markdown: "# Granted", pagePath: "guide.md" }
+    const denied = await requestJson(handler, "/api/v1/users/leo/docs/publications", { transport: "unix", username: "other" }, "POST", body)
+    expect(denied.response.status).toBe(403)
+    const first = await requestJson(handler, "/api/v1/users/leo/docs/publications", david, "POST", body)
+    expect(first.response.status).toBe(200)
+    expect(first.body).toMatchObject({ success: true, data: { urls: ["https://docs.example.test/docs/guide.md"] } })
+    expect(await Bun.file(join(store.directory("leo"), "guide.md")).text()).toContain("# Granted")
+    const second = await requestJson(handler, "/api/v1/users/leo/docs/publications", david, "POST", body)
+    expect(second.response.status).toBe(200)
+    const list = await requestJson(handler, "/api/v1/users/leo/projects", david)
+    expect(list.response.status).toBe(403)
+    const otherOwner = await requestJson(handler, "/api/v1/users/other/docs/publications", david, "POST", body)
+    expect(otherOwner.response.status).toBe(403)
+  })
+
   test("publishes nested logical pages and updates the same page across source paths", async () => {
     const repository = repositoryCreate()
     repository.defaultDomains.leo = "example.test"

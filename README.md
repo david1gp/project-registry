@@ -106,6 +106,16 @@ DELETE /api/v1/users/:owner/default-domain
 `PUT` accepts `{ "expectedRevision": "...", "domain": "example.com" }`; `DELETE` accepts `{ "expectedRevision": "..." }`.
 The `GET` response reports the effective `domain`, its `source` (`explicit`, `environment`, or `none`), and the registry `revision`. JSON CLI output preserves the complete response or mutation data, including the revision.
 
+## Managed docs publishers
+
+The daemon optionally accepts `PROJECT_REGISTRY_DOCS_PUBLISHERS` as a JSON object mapping owners to usernames allowed to publish managed docs for them:
+
+```bash
+PROJECT_REGISTRY_DOCS_PUBLISHERS='{"leo":["david"]}'
+```
+
+This grants only docs publication, not access to the owner's other API endpoints. An unset or empty value grants no additional access.
+
 ## Project static ACL repair
 
 Repair Caddy's filesystem access for all static service roots in a project with the authenticated daemon API:

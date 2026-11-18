@@ -137,6 +137,7 @@ export function projectRegistryDaemonConfigValidate(input: unknown): Result<Proj
       caddyInstances:
         parsed.output.caddyInstances === undefined ? undefined : caddyInstancesClone(parsed.output.caddyInstances),
       defaultUserDomains: { ...defaultUserDomainsR.data },
+      docsPublishers: { ...parsed.output.docsPublishers },
       oidc:
         parsed.output.oidc === undefined
           ? undefined

@@ -1,6 +1,27 @@
 import { describe, expect, test } from "bun:test"
 import { projectRegistryDaemonConfigFromEnv } from "./projectRegistryDaemonConfigFromEnv.js"
 
+describe("docs publisher configuration", () => {
+  test("defaults absent and blank grants to an empty map", () => {
+    for (const value of [undefined, "  "]) {
+      const result = projectRegistryDaemonConfigFromEnv({
+        PROJECT_REGISTRY_REPOSITORY_PATH: "/tmp/repo",
+        PROJECT_REGISTRY_DOCS_PUBLISHERS: value,
+      })
+      expect(result).toMatchObject({ success: true, data: { docsPublishers: {} } })
+    }
+  })
+
+  test("parses owner-to-user grants and rejects invalid JSON or schema", () => {
+    const environment = { PROJECT_REGISTRY_REPOSITORY_PATH: "/tmp/repo" }
+    expect(projectRegistryDaemonConfigFromEnv({ ...environment, PROJECT_REGISTRY_DOCS_PUBLISHERS: '{"leo":["david"]}' }))
+      .toMatchObject({ success: true, data: { docsPublishers: { leo: ["david"] } } })
+    for (const value of ["{", "null", "[]", '{"leo":"david"}', '{"leo":[42]}', '{"bad owner":["david"]}']) {
+      expect(projectRegistryDaemonConfigFromEnv({ ...environment, PROJECT_REGISTRY_DOCS_PUBLISHERS: value }).success).toBe(false)
+    }
+  })
+})
+
 describe("projectRegistryDaemonConfigFromEnv dev flag", () => {
   test("idle expiry is independently opt-in and rejects invalid values", () => {
     for (const [value, expected] of [

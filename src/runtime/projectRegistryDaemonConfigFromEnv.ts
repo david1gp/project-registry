@@ -56,6 +56,7 @@ export function projectRegistryDaemonConfigFromEnv(
       "PROJECT_REGISTRY_SHARED_OWNERS",
       "PROJECT_REGISTRY_CREDENTIAL_OWNER_ALIASES",
       "PROJECT_REGISTRY_DEFAULT_USER_DOMAINS",
+      "PROJECT_REGISTRY_DOCS_PUBLISHERS",
       "PROJECT_REGISTRY_SOCKET_DIRECTORY",
       "PROJECT_REGISTRY_WEB_HOST",
       "PROJECT_REGISTRY_CADDY_BINARY",
@@ -173,6 +174,18 @@ export function projectRegistryDaemonConfigFromEnv(
         defaultUserDomains = JSON.parse(defaultUserDomainsValue)
       } catch {
         return createResultError(op, "PROJECT_REGISTRY_DEFAULT_USER_DOMAINS must be valid JSON")
+      }
+    }
+    let docsPublishers: unknown
+    const docsPublishersValue = values.PROJECT_REGISTRY_DOCS_PUBLISHERS?.trim()
+    if (docsPublishersValue !== undefined && docsPublishersValue !== "") {
+      try {
+        docsPublishers = JSON.parse(docsPublishersValue)
+      } catch {
+        return createResultError(op, "PROJECT_REGISTRY_DOCS_PUBLISHERS must be valid JSON")
+      }
+      if (docsPublishers === null || typeof docsPublishers !== "object" || Array.isArray(docsPublishers)) {
+        return createResultError(op, "PROJECT_REGISTRY_DOCS_PUBLISHERS must be a JSON object")
       }
     }
     let caddyInstances: unknown
@@ -317,6 +330,7 @@ export function projectRegistryDaemonConfigFromEnv(
         .map((user) => user.trim())
         .filter(Boolean),
       ...(defaultUserDomains === undefined ? {} : { defaultUserDomains }),
+      ...(docsPublishers === undefined ? {} : { docsPublishers }),
       socketDirectory:
         values.PROJECT_REGISTRY_SOCKET_DIRECTORY ??
         (mode === "user" ? `${runtimeDirectory}/project-registry` : undefined),

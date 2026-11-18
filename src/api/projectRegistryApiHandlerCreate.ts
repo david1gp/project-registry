@@ -69,6 +69,7 @@ type ApiHandlerOptions = {
   configOptions?: CaddyConfigOptions
   portRange?: ProjectPortRange
   defaultUserDomains?: Readonly<Record<string, string>>
+  docsPublishers?: Readonly<Record<string, readonly string[]>>
   dev?: {
     enabled: boolean
     tracking?: DevLeaseTracking
@@ -1600,11 +1601,31 @@ export function projectRegistryApiHandlerCreate(options: ApiHandlerOptions): Pro
       const actorR = await resolvedAccess.actorResolve()
       if (!actorR.success) return resultErrorResponse(actorR, false, "projects")
       const authorizationR = await projectOwnerAuthorize(resolvedAccess, actorR.data, owner)
-      if (!authorizationR.success) return resultErrorResponse(authorizationR, false, "projects")
+      const granted =
+        !authorizationR.success &&
+        authorizationR.code === "projects.forbidden" &&
+        Object.hasOwn(options.docsPublishers ?? {}, owner) &&
+        options.docsPublishers?.[owner]?.includes(actorR.data.username) === true
+      if (!authorizationR.success && !granted) return resultErrorResponse(authorizationR, false, "projects")
+      // The grant is confined to this operation and owner; other API use cases keep the original access.
+      const publicationAccess = granted
+        ? {
+            actorResolve: async () => createResult(actorR.data),
+            ownerRoleResolve: async (requestedOwner: string) =>
+              requestedOwner === owner
+                ? createResult("shared-member" as const)
+                : resolvedAccess.ownerRoleResolve(requestedOwner),
+          }
+        : resolvedAccess
+      if (granted) {
+        const grantAuthorizationR = await projectOwnerAuthorize(publicationAccess, actorR.data, owner)
+        if (!grantAuthorizationR.success) return resultErrorResponse(grantAuthorizationR, false, "projects")
+      }
+      const publicationUseCaseOptions = { ...useCaseOptions, access: publicationAccess }
 
       const defaultDomainR = await options.repository.getUserDefaultDomain(owner)
       if (!defaultDomainR.success) return resultErrorResponse(defaultDomainR, false, "projects")
-      const projectsR = await projectListUseCase(useCaseOptions, { owner })
+      const projectsR = await projectListUseCase(publicationUseCaseOptions, { owner })
       if (!projectsR.success) return resultErrorResponse(projectsR, false, "projects")
       const managedProject = projectsR.data.projects.find((project) => project.name === "docs")
       const directory = store.directory(owner)
@@ -1648,7 +1669,7 @@ export function projectRegistryApiHandlerCreate(options: ApiHandlerOptions): Pro
           )
         }
         const mutationR = await projectCreate(
-          useCaseOptions,
+          publicationUseCaseOptions,
           {
             owner,
             name: "docs",
@@ -1671,7 +1692,7 @@ export function projectRegistryApiHandlerCreate(options: ApiHandlerOptions): Pro
         if (!mutationR.success) {
           if (mutationR.code !== "projects.conflict" && mutationR.code !== "projects.revision-conflict")
             return resultErrorResponse(mutationR, false, "projects")
-          const retryR = await projectListUseCase(useCaseOptions, { owner })
+          const retryR = await projectListUseCase(publicationUseCaseOptions, { owner })
           if (!retryR.success) return resultErrorResponse(retryR, false, "projects")
           const existing = retryR.data.projects.find((project) => project.name === "docs")
           if (existing === undefined) return resultErrorResponse(mutationR, false, "projects")
@@ -1706,7 +1727,7 @@ export function projectRegistryApiHandlerCreate(options: ApiHandlerOptions): Pro
           false,
         )
       }
-      const currentProjectsR = await projectListUseCase(useCaseOptions, { owner })
+      const currentProjectsR = await projectListUseCase(publicationUseCaseOptions, { owner })
       if (!currentProjectsR.success) return resultErrorResponse(currentProjectsR, false, "projects")
       const fileUrlsR = await projectDocsUrlsUseCase({
         actor: { subject: actorR.data.subject, username: actorR.data.username, role: "own" },

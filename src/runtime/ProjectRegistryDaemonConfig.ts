@@ -16,6 +16,7 @@ export type ProjectRegistryDaemonConfig = {
   sharedOwners: Readonly<Record<string, string>>
   credentialOwnerAliases: Readonly<Record<string, string>>
   defaultUserDomains: Readonly<Record<string, string>>
+  docsPublishers: Readonly<Record<string, readonly string[]>>
   socketDirectory: string
   webListener: {
     hostname: "127.0.0.1" | "::1"

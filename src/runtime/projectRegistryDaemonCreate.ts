@@ -1469,6 +1469,7 @@ export function projectRegistryDaemonCreate(options: ProjectRegistryDaemonOption
       },
       portRange: config.portRange,
       defaultUserDomains: config.defaultUserDomains,
+      docsPublishers: config.docsPublishers,
       dev: {
         enabled: config.dev.enabled,
         tracking: devTracking,
