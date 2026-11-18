@@ -119,7 +119,31 @@ describe("managedServiceReconcile", () => {
     expect(result.success && result.data.removed).toEqual(["proj-gone-web.service"])
     expect(filesystem.removals).toEqual([stale])
     expect(filesystem.files.has(handWritten)).toBe(true)
-    expect(systemctlCalls(calls)).toEqual(["systemctl disable --now proj-gone-web.service", "systemctl daemon-reload"])
+    expect(systemctlCalls(calls)).toEqual([
+      "systemctl disable --now proj-gone-web.service",
+      "systemctl daemon-reload",
+      "systemctl reset-failed proj-gone-web.service",
+    ])
+  })
+
+  test("a failing reset-failed for a never-loaded unit is ignored", async () => {
+    const calls: RunnerCall[] = []
+    const stale = `${unitDirectory}/proj-gone-web.service`
+    const filesystem = managedServiceFilesystemFake({ [stale]: `${managedServiceUnitMarker}\n[Service]\n` })
+    const result = await managedServiceReconcile({
+      config: managedServiceConfigFixture,
+      projects: [],
+      runner: managedServiceRunnerFake(calls, (call) =>
+        call.args[0] === "reset-failed"
+          ? { exitCode: 1, stderr: "Unit proj-gone-web.service not loaded." }
+          : { exitCode: 0 },
+      ),
+      filesystem,
+      projectFilesystem,
+    })
+    expect(result.success && result.data.removed).toEqual(["proj-gone-web.service"])
+    expect(result.success && result.data.failures).toEqual([])
+    expect(systemctlCalls(calls)).toContain("systemctl reset-failed proj-gone-web.service")
   })
 
   test("never overwrites an unmanaged unit that has the managed name", async () => {

@@ -43,7 +43,7 @@ function failureMessage(error: unknown): string {
  * removals, changed autostart units are enabled and restarted (unchanged
  * ones only started at daemon start), changed non-autostart units are
  * disabled (never stopped), and marker-bearing units whose row or definition vanished
- * are stopped, disabled, and deleted. Files without the marker are never
+ * are stopped, disabled, deleted, and reset-failed. Files without the marker are never
  * touched. A row that fails to resolve keeps its existing unit untouched.
  */
 export async function managedServiceReconcile(
@@ -149,6 +149,14 @@ export async function managedServiceReconcile(
       summary.failures.push(`daemon-reload: ${reloadR.errorMessage}`)
       return createResult(summary)
     }
+  }
+
+  for (const unit of summary.removed) {
+    // The stop above exits 143 on SIGTERM; clear the failed state so no
+    // not-found ghost remains after the file is gone. Never-loaded units
+    // fail here and are ignored.
+    const resetR = await managedServiceSystemctl(runner, ["reset-failed", unit], true)
+    if (!resetR.success) summary.failures.push(`${unit}: ${resetR.errorMessage}`)
   }
 
   for (const entry of listed.entries) {
