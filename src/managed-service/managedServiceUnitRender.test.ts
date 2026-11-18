@@ -57,6 +57,15 @@ describe("managedServiceUnitRender", () => {
     )
   })
 
+  test("a SIGTERM stop is clean so stopping never leaves a failed unit, while crashes still restart", () => {
+    const result = managedServiceUnitRender(spec)
+    expect(result.success).toBe(true)
+    if (!result.success) return
+    expect(lines(result.data)).toEqual(
+      expect.arrayContaining(["SuccessExitStatus=143 SIGTERM", "Restart=on-failure", "RestartSec=5"]),
+    )
+  })
+
   test("bare executables run through env so the configured PATH applies; no env file means no EnvironmentFile", () => {
     const { envFile: _envFile, ...withoutEnvFile } = spec
     const result = managedServiceUnitRender({ ...withoutEnvFile, command: "bun", args: ["run", "dev"] })

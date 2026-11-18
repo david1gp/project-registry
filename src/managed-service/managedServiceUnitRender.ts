@@ -81,6 +81,9 @@ export function managedServiceUnitRender(spec: ManagedServiceUnitSpec): Result<s
     `ExecStart=${[...executable, ...spec.args].map(specifierEscape).join(" ")}`,
     "Restart=on-failure",
     "RestartSec=5",
+    // A systemd stop sends SIGTERM and bun exits 143 on it. Both are a
+    // clean stop, never a failure; real crashes still restart above.
+    "SuccessExitStatus=143 SIGTERM",
     `Slice=${spec.slice}`,
     "NoNewPrivileges=yes",
     "ProtectSystem=strict",
