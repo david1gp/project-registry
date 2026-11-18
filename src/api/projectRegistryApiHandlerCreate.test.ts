@@ -2328,19 +2328,121 @@ describe("projectRegistryApiHandlerCreate", () => {
     })
     const david = { transport: "unix", username: "david" } as const
     const body = { sourcePath: "/work/guide.md", markdown: "# Granted", pagePath: "guide.md" }
-    const denied = await requestJson(handler, "/api/v1/users/leo/docs/publications", { transport: "unix", username: "other" }, "POST", body)
+    const denied = await requestJson(
+      handler,
+      "/api/v1/users/leo/docs/publications",
+      { transport: "unix", username: "other" },
+      "POST",
+      body,
+    )
     expect(denied.response.status).toBe(403)
+    const forgedIdentity = await handler(
+      new Request("http://localhost/api/v1/users/leo/docs/publications?username=david", {
+        method: "POST",
+        headers: { "content-type": "application/json", "x-user": "david" },
+        body: JSON.stringify({ ...body, username: "david", actor: { username: "david" } }),
+      }),
+      { transport: "unix", username: "other" },
+    )
+    expect(forgedIdentity.status).toBe(403)
+    for (const method of ["GET", "PUT", "PATCH", "DELETE"]) {
+      const response = await requestJson(handler, "/api/v1/users/leo/docs/publications", david, method)
+      expect(response.response.status).toBe(405)
+    }
     const first = await requestJson(handler, "/api/v1/users/leo/docs/publications", david, "POST", body)
     expect(first.response.status).toBe(200)
     expect(first.body).toMatchObject({ success: true, data: { urls: ["https://docs.example.test/docs/guide.md"] } })
     expect(await Bun.file(join(store.directory("leo"), "guide.md")).text()).toContain("# Granted")
     const second = await requestJson(handler, "/api/v1/users/leo/docs/publications", david, "POST", body)
     expect(second.response.status).toBe(200)
-    const list = await requestJson(handler, "/api/v1/users/leo/projects", david)
-    expect(list.response.status).toBe(403)
+    for (const path of [
+      "/api/v1/users/leo/projects",
+      "/api/v1/users/leo/projects/docs",
+      "/api/v1/users/leo/projects/docs/docs?path=guide.md",
+      "/api/v1/users/leo/default-domain",
+    ]) {
+      const response = await requestJson(handler, path, david)
+      expect(response.response.status).toBe(403)
+    }
+    const mutation = await requestJson(handler, "/api/v1/users/leo/projects", david, "POST", {
+      name: "unauthorized",
+      expectedRevision: revision,
+    })
+    expect(mutation.response.status).toBe(403)
     const otherOwner = await requestJson(handler, "/api/v1/users/other/docs/publications", david, "POST", body)
     expect(otherOwner.response.status).toBe(403)
   })
+
+  test("docs publisher grants use the authenticated HTTP session actor", async () => {
+    const repository = repositoryCreate()
+    repository.defaultDomains.leo = "example.test"
+    const storage = mkdtempSync(join(import.meta.dir, ".docs-publication-test-"))
+    temporaryDirectories.push(storage)
+    const handler = projectRegistryApiHandlerCreate({
+      repository,
+      caddyApplication: caddyApplicationCreate(),
+      docsPublicationStore: projectDocsPublicationStoreCreate(join(storage, "published")),
+      docsPublishers: { leo: ["david"] },
+    })
+    const body = { sourcePath: "/work/guide.md", markdown: "# Session", pagePath: "guide.md", username: "david" }
+    const path = "/api/v1/users/leo/docs/publications"
+    const unauthenticated = await requestJson(handler, path, { transport: "http" }, "POST", body)
+    expect(unauthenticated.response.status).toBe(401)
+    const denied = await requestJson(
+      handler,
+      path,
+      {
+        transport: "http",
+        access: socketAccessCreate("other", "own", { other: "own" }),
+      },
+      "POST",
+      body,
+    )
+    expect(denied.response.status).toBe(403)
+    const granted = await requestJson(
+      handler,
+      path,
+      {
+        transport: "http",
+        access: socketAccessCreate("david", "own", { david: "own" }),
+      },
+      "POST",
+      body,
+    )
+    expect(granted.response.status).toBe(200)
+  })
+
+  test.each(["own", "shared-member", "superadmin"] as const)(
+    "docs publication preserves %s authorization without publisher grants",
+    async (role) => {
+      const repository = repositoryCreate()
+      repository.defaultDomains.leo = "example.test"
+      const storage = mkdtempSync(join(import.meta.dir, ".docs-publication-test-"))
+      temporaryDirectories.push(storage)
+      const username = role === "own" ? "leo" : "david"
+      const access: ProjectAccess = {
+        actorResolve: async () =>
+          createResult({ subject: null, username, role: role === "superadmin" ? "superadmin" : "own" }),
+        ownerRoleResolve: async () => createResult(role === "superadmin" ? undefined : role),
+      }
+      const handler = projectRegistryApiHandlerCreate({
+        repository,
+        caddyApplication: caddyApplicationCreate(),
+        docsPublicationStore: projectDocsPublicationStoreCreate(join(storage, "published")),
+      })
+      const result = await requestJson(
+        handler,
+        "/api/v1/users/leo/docs/publications",
+        {
+          transport: "http",
+          access,
+        },
+        "POST",
+        { sourcePath: "/work/guide.md", markdown: "# Existing access", pagePath: "guide.md" },
+      )
+      expect(result.response.status).toBe(200)
+    },
+  )
 
   test("publishes nested logical pages and updates the same page across source paths", async () => {
     const repository = repositoryCreate()
