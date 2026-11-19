@@ -7,7 +7,10 @@ import { caddyConfigGenerateFixtures } from "../../test/fixtures/caddyConfigGene
 import { projectAccessLogCaddyRetention } from "../access-log/projectAccessLogCaddyRetention.js"
 import { projectAccessLogId } from "../access-log/projectAccessLogId.js"
 import { projectAccessLogRetentionMaximumActiveProjectIds } from "../access-log/projectAccessLogRetentionMaximumActiveProjectIds.js"
-import { projectAccessLogRetentionReconcile } from "../access-log/projectAccessLogRetentionReconcile.js"
+import {
+  type ProjectAccessLogRetentionReconcileOptions,
+  projectAccessLogRetentionReconcile,
+} from "../access-log/projectAccessLogRetentionReconcile.js"
 import type { Project } from "../project/Project.js"
 import type { ProjectRepositorySnapshot } from "../project-store/ProjectRepositorySnapshot.js"
 import { caddyAdminLoad } from "./caddyAdminLoad.js"
@@ -68,6 +71,62 @@ function timeoutTimerFake() {
       handle.active = false
       handle.callback()
     },
+  }
+}
+
+/**
+ * Real retention reconciliation without fsync that runs `onFirstQuarantine` right before its first quarantine
+ * rename: a deterministic "while retention is reconciling" point, instead of racing a timer against a slow scan.
+ */
+function retentionReconcileOnFirstQuarantine(onFirstQuarantine: () => void) {
+  let fired = false
+  return (options: ProjectAccessLogRetentionReconcileOptions) =>
+    projectAccessLogRetentionReconcile({
+      ...options,
+      filesystem: {
+        syncDirectory: async () => undefined,
+        beforeQuarantineRename: async () => {
+          if (fired) return
+          fired = true
+          onFirstQuarantine()
+        },
+      },
+    })
+}
+
+/** Real retention reconciliation whose n-th run (0-based) a test can await instead of polling the filesystem. */
+function retentionReconcileRecorder() {
+  const runs: Array<ReturnType<typeof deferred<Result<true>>>> = []
+  const run = (index: number) => {
+    runs[index] ??= deferred<Result<true>>()
+    return runs[index]
+  }
+  let calls = 0
+  return {
+    reconcile: async (options: ProjectAccessLogRetentionReconcileOptions) => {
+      const index = calls
+      calls += 1
+      const result = await projectAccessLogRetentionReconcile(options)
+      run(index).resolve(result)
+      return result
+    },
+    settled: (index: number) => run(index).promise,
+  }
+}
+
+/** An expired inactive project directory whose ID sorts before `projectId`, so retention reaches it first. */
+async function retentionExpiredDirectoryBefore(root: string, projectId: string, owner: string): Promise<string> {
+  for (let index = 0; ; index += 1) {
+    const id = projectAccessLogId({ owner, name: `project-${index}` })
+    if (id >= projectId) continue
+    const directory = join(root, "projects", id)
+    await mkdir(directory)
+    await writeFile(join(directory, "access.jsonl"), "")
+    await writeFile(
+      join(directory, ".project-registry-retention.json"),
+      '{"version":1,"state":"inactive","inactiveAt":0}',
+    )
+    return id
   }
 }
 
@@ -657,6 +716,7 @@ describe("caddyApplication", () => {
     const archive = join(activeDirectory, "access-2026-08-01T00-00-00.000-size.jsonl.gz")
     const now = projectAccessLogCaddyRetention.rollKeepDays * 24 * 60 * 60 * 1_000 + 1
     const fakeTimer = timerFake()
+    const retention = retentionReconcileRecorder()
     let validates = 0
     let loads = 0
     try {
@@ -665,6 +725,7 @@ describe("caddyApplication", () => {
       const applicationR = caddyApplicationCreate({
         repository: { read: async () => createResult(snapshot("revision-archive-periodic")) },
         configOptions: { caddyAccessLogRoot: root },
+        retentionReconcile: retention.reconcile,
         clock: () => now,
         timer: fakeTimer.timer,
         processRunner: async () => {
@@ -684,9 +745,7 @@ describe("caddyApplication", () => {
       await utimes(archive, 0, 0)
 
       fakeTimer.intervals[0]?.()
-      for (let attempt = 0; attempt < 20 && (await Bun.file(archive).exists()); attempt += 1) {
-        await new Promise((resolve) => setTimeout(resolve, 0))
-      }
+      expect((await retention.settled(1)).success).toBe(true)
 
       expect(await Bun.file(archive).exists()).toBe(false)
       expect(validates).toBe(1)
@@ -704,6 +763,7 @@ describe("caddyApplication", () => {
     const oldDirectory = join(projectsPath, oldId)
     const retentionNow = projectAccessLogCaddyRetention.rollKeepDays * 24 * 60 * 60 * 1_000 + 1
     const fakeTimer = timerFake()
+    const retention = retentionReconcileRecorder()
     let validates = 0
     let loads = 0
     try {
@@ -714,6 +774,7 @@ describe("caddyApplication", () => {
       const applicationR = caddyApplicationCreate({
         repository: { read: async () => createResult(snapshot("revision-retention-retry")) },
         configOptions: { caddyAccessLogRoot: root },
+        retentionReconcile: retention.reconcile,
         clock: () => retentionNow,
         timer: fakeTimer.timer,
         processRunner: async () => {
@@ -740,16 +801,8 @@ describe("caddyApplication", () => {
         '{"version":1,"state":"inactive","inactiveAt":0}',
       )
       fakeTimer.intervals[0]?.()
-      let quarantined = false
-      for (let attempt = 0; attempt < 20; attempt += 1) {
-        try {
-          quarantined = (await lstat(join(root, "quarantine", oldId))).isDirectory()
-        } catch {
-          quarantined = false
-        }
-        if (quarantined) break
-        await new Promise((resolve) => setTimeout(resolve, 0))
-      }
+      expect((await retention.settled(1)).success).toBe(true)
+      const quarantined = (await lstat(join(root, "quarantine", oldId))).isDirectory()
 
       expect(validates).toBe(1)
       expect(loads).toBe(1)
@@ -1007,21 +1060,11 @@ describe("caddyApplication", () => {
     const projectId = projectAccessLogId(project)
     const projectDirectory = join(root, "projects", projectId)
     const retentionNow = projectAccessLogCaddyRetention.rollKeepDays * 24 * 60 * 60 * 1_000 + 1
-    const noiseCount = 128
     let application: (() => void) | undefined
     let reads = 0
-    let loads = 0
     try {
       await mkdir(join(root, "projects"), { recursive: true })
-      for (let index = 0; index < noiseCount; index += 1) {
-        const noiseDirectory = join(root, "projects", projectAccessLogId({ owner: "noise", name: `project-${index}` }))
-        await mkdir(noiseDirectory)
-        await writeFile(join(noiseDirectory, "access.jsonl"), "")
-        await writeFile(
-          join(noiseDirectory, ".project-registry-retention.json"),
-          '{"version":1,"state":"inactive","inactiveAt":0}',
-        )
-      }
+      const noiseId = await retentionExpiredDirectoryBefore(root, projectId, "noise")
       await mkdir(projectDirectory)
       await writeFile(join(projectDirectory, "access.jsonl"), "")
       await writeFile(
@@ -1042,11 +1085,9 @@ describe("caddyApplication", () => {
         clock: () => retentionNow,
         timer: timerFake().timer,
         processRunner: async () => createResult({ exitCode: 0, stdout: "", stderr: "" }),
-        fetch: async () => {
-          loads += 1
-          if (loads === 1) setTimeout(() => application?.(), 0)
-          return new Response("", { status: 200 })
-        },
+        fetch: async () => new Response("", { status: 200 }),
+        // The reactivation arrives after retention quarantined the noise directory and before it reaches the project.
+        retentionReconcile: retentionReconcileOnFirstQuarantine(() => application?.()),
       })
       expect(applicationR.success).toBe(true)
       if (!applicationR.success) return
@@ -1061,6 +1102,7 @@ describe("caddyApplication", () => {
         data: { revision: "revision-retention-await-reactivated", applied: true },
       })
       expect(reads).toBe(2)
+      expect((await lstat(join(root, "quarantine", noiseId))).isDirectory()).toBe(true)
       expect((await lstat(projectDirectory)).isDirectory()).toBe(true)
       expect(await readFile(join(projectDirectory, ".project-registry-retention.json"), "utf8")).toBe(
         '{"version":1,"state":"active"}',
@@ -1080,25 +1122,12 @@ describe("caddyApplication", () => {
     const retentionNow = projectAccessLogCaddyRetention.rollKeepDays * 24 * 60 * 60 * 1_000 + 1
     const secondLoad = deferred<Response>()
     const secondLoadStarted = deferred<void>()
-    const noiseCount = 128
     let application: (() => void) | undefined
     let reads = 0
     let loads = 0
     try {
       await mkdir(join(root, "projects"), { recursive: true })
-      for (let index = 0; index < noiseCount; index += 1) {
-        const noiseDirectory = join(
-          root,
-          "projects",
-          projectAccessLogId({ owner: "write-noise", name: `project-${index}` }),
-        )
-        await mkdir(noiseDirectory)
-        await writeFile(join(noiseDirectory, "access.jsonl"), "")
-        await writeFile(
-          join(noiseDirectory, ".project-registry-retention.json"),
-          '{"version":1,"state":"inactive","inactiveAt":0}',
-        )
-      }
+      await retentionExpiredDirectoryBefore(root, projectId, "write-noise")
       await mkdir(projectDirectory)
       await writeFile(join(projectDirectory, "access.jsonl"), "")
 
@@ -1117,13 +1146,12 @@ describe("caddyApplication", () => {
         processRunner: async () => createResult({ exitCode: 0, stdout: "", stderr: "" }),
         fetch: async () => {
           loads += 1
-          if (loads === 1) {
-            setTimeout(() => application?.(), 0)
-            return new Response("", { status: 200 })
-          }
+          if (loads === 1) return new Response("", { status: 200 })
           secondLoadStarted.resolve()
           return secondLoad.promise
         },
+        // The newer desired state arrives before retention reaches the project's missing metadata.
+        retentionReconcile: retentionReconcileOnFirstQuarantine(() => application?.()),
       })
       expect(applicationR.success).toBe(true)
       if (!applicationR.success) return
@@ -1407,6 +1435,7 @@ describe("caddyApplication", () => {
     const oldDirectory = join(projectsPath, oldId)
     const retentionNow = projectAccessLogCaddyRetention.rollKeepDays * 24 * 60 * 60 * 1_000 + 1
     const fakeTimer = timerFake()
+    const retention = retentionReconcileRecorder()
     let validates = 0
     let loads = 0
     try {
@@ -1414,6 +1443,7 @@ describe("caddyApplication", () => {
       const applicationR = caddyApplicationCreate({
         repository: { read: async () => createResult(snapshot("revision-retention-startup-retry")) },
         configOptions: { caddyAccessLogRoot: root },
+        retentionReconcile: retention.reconcile,
         initializeFromGeneratedConfig: true,
         clock: () => retentionNow,
         timer: fakeTimer.timer,
@@ -1441,16 +1471,8 @@ describe("caddyApplication", () => {
         '{"version":1,"state":"inactive","inactiveAt":0}',
       )
       fakeTimer.intervals[0]?.()
-      let quarantined = false
-      for (let attempt = 0; attempt < 20; attempt += 1) {
-        try {
-          quarantined = (await lstat(join(root, "quarantine", oldId))).isDirectory()
-        } catch {
-          quarantined = false
-        }
-        if (quarantined) break
-        await new Promise((resolve) => setTimeout(resolve, 0))
-      }
+      expect((await retention.settled(1)).success).toBe(true)
+      const quarantined = (await lstat(join(root, "quarantine", oldId))).isDirectory()
 
       expect(validates).toBe(1)
       expect(loads).toBe(0)
@@ -2482,21 +2504,43 @@ describe("caddyApplication", () => {
     expect(validations).toBe(1)
   })
 
+  test("rejects a non-function retention reconciler", () => {
+    expect(
+      caddyApplicationCreate({
+        repository: { read: async () => createResult(snapshot("revision-retention-option")) },
+        retentionReconcile: "projectAccessLogRetentionReconcile",
+      }),
+    ).toEqual({ success: false, op: "caddyApplicationCreate", errorMessage: "retentionReconcile must be a function" })
+  })
+
   test("serializes queue work", async () => {
     const queue = caddyApplicationQueueCreate()
+    const firstGate = deferred<void>()
+    const firstStarted = deferred<void>()
     let active = 0
     let maximum = 0
-    const work = async (delay: number) => {
+    let secondStarted = false
+    const work = async (value: number, gate?: Promise<void>) => {
       active += 1
       maximum = Math.max(maximum, active)
-      await new Promise((resolve) => setTimeout(resolve, delay))
+      if (gate !== undefined) {
+        firstStarted.resolve()
+        await gate
+      } else {
+        secondStarted = true
+      }
       active -= 1
-      return delay
+      return value
     }
 
-    const results = await Promise.all([queue.enqueue(() => work(5)), queue.enqueue(() => work(0))])
+    const first = queue.enqueue(() => work(5, firstGate.promise))
+    const second = queue.enqueue(() => work(0))
+    await firstStarted.promise
+    await Promise.resolve()
+    expect(secondStarted).toBe(false)
+    firstGate.resolve()
 
-    expect(results).toEqual([5, 0])
+    expect(await Promise.all([first, second])).toEqual([5, 0])
     expect(maximum).toBe(1)
   })
 })

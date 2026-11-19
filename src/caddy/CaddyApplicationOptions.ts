@@ -1,4 +1,5 @@
 import type { PromiseResult } from "#result"
+import type { ProjectAccessLogRetentionReconcileOptions } from "../access-log/projectAccessLogRetentionReconcile.js"
 import type { Project } from "../project/Project.js"
 import type { ProjectRepository } from "../project-store/ProjectRepository.js"
 import type { CaddyAdminLoadOptions } from "./CaddyAdminLoadOptions.js"
@@ -28,4 +29,6 @@ export type CaddyApplicationOptions = {
   validationTimeoutMs?: CaddyConfigValidateOptions["timeoutMs"]
   loadTimeoutMs?: CaddyAdminLoadOptions["timeoutMs"]
   initializeFromGeneratedConfig?: boolean
+  /** Access-log retention reconciliation; defaults to projectAccessLogRetentionReconcile. Tests inject hooks here. */
+  retentionReconcile?: (options: ProjectAccessLogRetentionReconcileOptions) => PromiseResult<true>
 }

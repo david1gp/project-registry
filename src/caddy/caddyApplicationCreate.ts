@@ -118,6 +118,7 @@ function caddyApplicationOptionsValues(
     "validationTimeoutMs",
     "loadTimeoutMs",
     "initializeFromGeneratedConfig",
+    "retentionReconcile",
   ]
   for (const key of Reflect.ownKeys(options)) {
     if (typeof key !== "string" || !names.includes(key)) throw new Error("invalid options")
@@ -333,6 +334,9 @@ function caddyApplicationOptionsValidate(options: unknown): Result<CaddyApplicat
   if (values.configReconcile !== undefined && !caddyApplicationCallable(values.configReconcile)) {
     return createResultError(op, "configReconcile must be a function")
   }
+  if (values.retentionReconcile !== undefined && !caddyApplicationCallable(values.retentionReconcile)) {
+    return createResultError(op, "retentionReconcile must be a function")
+  }
 
   let targets: CaddyApplicationOptions["targets"]
   if (values.targets !== undefined) {
@@ -386,6 +390,7 @@ function caddyApplicationOptionsValidate(options: unknown): Result<CaddyApplicat
     loadTimeoutMs: values.loadTimeoutMs as CaddyApplicationOptions["loadTimeoutMs"],
     initializeFromGeneratedConfig:
       values.initializeFromGeneratedConfig as CaddyApplicationOptions["initializeFromGeneratedConfig"],
+    retentionReconcile: values.retentionReconcile as CaddyApplicationOptions["retentionReconcile"],
   })
 }
 
@@ -397,6 +402,7 @@ export function caddyApplicationCreate(options: unknown): Result<CaddyApplicatio
   const applicationOptions = optionsR.data
 
   const clock = applicationOptions.clock ?? Date.now
+  const retentionReconcile = applicationOptions.retentionReconcile ?? projectAccessLogRetentionReconcile
   const timer = applicationOptions.timer ?? caddyTimerDefault()
   const queue = caddyApplicationQueueCreate()
   const maxRetries = applicationOptions.maxRetries ?? defaultMaxRetries
@@ -826,7 +832,7 @@ export function caddyApplicationCreate(options: unknown): Result<CaddyApplicatio
                 retentionFailed ||= retentionReconciliationDirty
                 continue
               }
-              const reconciliationR = await projectAccessLogRetentionReconcile({
+              const reconciliationR = await retentionReconcile({
                 root: accessLogRoot,
                 activeProjectIds,
                 now: latestSuccessfulCaddyLoad.now,

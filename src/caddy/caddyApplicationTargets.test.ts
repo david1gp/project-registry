@@ -5,7 +5,10 @@ import { join } from "node:path"
 import { createResult, createResultError } from "#result"
 import { projectAccessLogCaddyRetention } from "../access-log/projectAccessLogCaddyRetention.js"
 import { projectAccessLogId } from "../access-log/projectAccessLogId.js"
-import { projectAccessLogRetentionReconcile } from "../access-log/projectAccessLogRetentionReconcile.js"
+import {
+  type ProjectAccessLogRetentionReconcileOptions,
+  projectAccessLogRetentionReconcile,
+} from "../access-log/projectAccessLogRetentionReconcile.js"
 import type { CaddyApplicationOptions } from "./CaddyApplicationOptions.js"
 import { caddyApplicationCreate } from "./caddyApplicationCreate.js"
 
@@ -42,6 +45,11 @@ function deferred<T>() {
     resolve = done
   })
   return { promise, resolve }
+}
+
+/** Real retention reconciliation without fsync, so the test's duration does not depend on host I/O load. */
+function retentionReconcileNoSync(options: ProjectAccessLogRetentionReconcileOptions) {
+  return projectAccessLogRetentionReconcile({ ...options, filesystem: { syncDirectory: async () => undefined } })
 }
 
 function options(overrides: Partial<CaddyApplicationOptions> = {}): CaddyApplicationOptions {
@@ -401,12 +409,13 @@ describe("Caddy application targets", () => {
           await mkdir(directory, { recursive: true })
           await writeFile(join(directory, "access.jsonl"), "")
         }
-        await projectAccessLogRetentionReconcile({ root: logRoot, activeProjectIds: [], now: 0 })
+        await retentionReconcileNoSync({ root: logRoot, activeProjectIds: [], now: 0 })
       }
       const applicationR = caddyApplicationCreate(
         options({
           repository: { read: async () => createResult({ revision: "logs", projects }) as never },
           clock: () => projectAccessLogCaddyRetention.rollKeepDays * 24 * 60 * 60 * 1_000 + 1,
+          retentionReconcile: retentionReconcileNoSync,
           targets: {
             public: {
               ...targets.public,
