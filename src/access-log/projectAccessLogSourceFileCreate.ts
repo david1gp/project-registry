@@ -65,6 +65,8 @@ export type ProjectAccessLogSourceFileCreateOptions = {
   cursor?: ProjectAccessLogCursorCodec
   cursorLifetimeMs?: number
   clock?: () => number
+  /** Runs after the source files are listed and before any is read. Tests use it to rotate files deterministically. */
+  afterSourceFilesList?: () => Promise<void>
 }
 
 type Limits = {
@@ -922,6 +924,12 @@ export function projectAccessLogSourceFileCreate(
       clock: normalizedOptions.clock,
       lifetimeMs: normalizedOptions.cursorLifetimeMs,
     })
+  if (
+    normalizedOptions.afterSourceFilesList !== undefined &&
+    typeof normalizedOptions.afterSourceFilesList !== "function"
+  )
+    return sourceError("access-log.invalid-input", "access log source options are invalid")
+  const afterSourceFilesList = normalizedOptions.afterSourceFilesList
   const root = rootR.output
   const limits = limitsR.data
 
@@ -946,6 +954,7 @@ export function projectAccessLogSourceFileCreate(
         return createResult({ records: [], next: undefined, partial: false, malformedLines: 0 })
       const files = filesR.data.files
       try {
+        await afterSourceFilesList?.()
         const before = cursorR.data
         let beforeIndex = -1
         if (before !== undefined) {

@@ -1,5 +1,4 @@
 import { describe, expect, test } from "bun:test"
-import { randomBytes } from "node:crypto"
 import { appendFile, lstat, mkdir, mkdtemp, rename, rm, symlink, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { basename, dirname, join } from "node:path"
@@ -126,19 +125,21 @@ describe("projectAccessLogSourceFileCreate", () => {
     const fixture = await fixtureCreate()
     try {
       const archivePath = join(fixture.directory, "access-20260821.jsonl")
-      const noise = randomBytes(8 * 1024 * 1024)
-      for (let index = 1_023; index < noise.length; index += 1_024) noise[index] = 0x0a
-      const content = Buffer.concat([noise, Buffer.from(`${rawRecord(1)}\n`)])
-      await writeFile(`${archivePath}.gz`, gzipSync(content, { level: 0 }))
+      const content = `${rawRecord(1)}\n`
+      await writeFile(`${archivePath}.gz`, gzipSync(content))
       await writeFile(archivePath, content)
-      const sourceR = projectAccessLogSourceFileCreate(fixture.root)
+      const sourceR = projectAccessLogSourceFileCreate({
+        root: fixture.root,
+        // Caddy finishes the gzip transition after the plain archive was listed and before it is read.
+        afterSourceFilesList: () => rm(archivePath),
+      })
       expect(sourceR.success).toBe(true)
       if (!sourceR.success) return
 
-      const readPromise = sourceR.data.read(project, { limit: 1 })
-      await new Promise((resolve) => setTimeout(resolve, 5))
-      await rm(archivePath)
-      expect(await readPromise).toMatchObject({ success: false, code: "access-log.rotation-race" })
+      expect(await sourceR.data.read(project, { limit: 1 })).toMatchObject({
+        success: false,
+        code: "access-log.rotation-race",
+      })
     } finally {
       await rm(fixture.root, { force: true, recursive: true })
     }
