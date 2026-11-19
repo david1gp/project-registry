@@ -32,6 +32,7 @@ const internalProxyRoute = {
             {
               handler: "reverse_proxy",
               upstreams: [{ dial: "localhost:9119" }],
+              stream_close_delay: "10m",
               headers: {
                 request: {
                   set: {
@@ -88,13 +89,16 @@ const pathProxyRoute = {
               handler: "subroute",
               routes: [
                 {
-                  handle: [oidcHandler, { handler: "reverse_proxy", upstreams: [{ dial: "localhost:9119" }] }],
+                  handle: [
+                    oidcHandler,
+                    { handler: "reverse_proxy", upstreams: [{ dial: "localhost:9119" }], stream_close_delay: "10m" },
+                  ],
                 },
               ],
             },
           ],
         },
-        { handle: [{ handler: "reverse_proxy", upstreams: [{ dial: "localhost:9119" }] }] },
+        { handle: [{ handler: "reverse_proxy", upstreams: [{ dial: "localhost:9119" }], stream_close_delay: "10m" }] },
       ],
     },
   ],

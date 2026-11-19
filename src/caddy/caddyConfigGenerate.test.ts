@@ -628,6 +628,8 @@ describe("caddyConfigGenerate", () => {
       {
         handler: "reverse_proxy",
         upstreams: [{ dial: "localhost:4000" }],
+        // Keeps WebSockets (Convex clients) alive across config reloads.
+        stream_close_delay: "10m",
       },
     ])
   })

@@ -3,6 +3,7 @@ import { projectAccessLogCaddyRetention } from "../access-log/projectAccessLogCa
 import { devLeaseAccessLogPath } from "../dev/devLeaseAccessLogPath.js"
 import type { DevLeaseRecord } from "../dev/devLeaseRecordSchema.js"
 import type { CaddyConfig } from "./CaddyConfig.js"
+import { caddyProxyStreamCloseDelay } from "./caddyProxyStreamCloseDelay.js"
 
 const devLeaseAccessLogId = "dev-leases"
 const devLeaseAccessLoggerName = "http.log.access.dev-leases"
@@ -34,6 +35,7 @@ function leaseRoute(lease: DevLeaseRecord): Record<string, unknown> {
                 // 127.0.0.1, not localhost: the unit pins HOST=127.0.0.1 and a
                 // localhost dial could resolve to ::1 first and miss the server.
                 upstreams: [{ dial: `127.0.0.1:${lease.port}` }],
+                stream_close_delay: caddyProxyStreamCloseDelay,
               },
             ],
           },

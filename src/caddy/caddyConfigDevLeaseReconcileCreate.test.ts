@@ -46,6 +46,32 @@ describe("caddyConfigDevLeaseReconcileCreate", () => {
     expect(result.data).toBe(input)
   })
 
+  test("dev lease proxies keep WebSockets open across Caddy config reloads", async () => {
+    const reconcileR = caddyConfigDevLeaseReconcileCreate({
+      enabled: true,
+      leasesCurrent: async () => createResult([leaseCreate({ name: "akademie" })]),
+    })
+    expect(reconcileR.success).toBe(true)
+    if (!reconcileR.success) return
+
+    const result = await reconcileR.data(generatedConfig(), [])
+    expect(result.success).toBe(true)
+    if (!result.success) return
+    const proxies: Record<string, unknown>[] = []
+    const visit = (value: unknown): void => {
+      if (Array.isArray(value)) value.forEach(visit)
+      else if (value && typeof value === "object") {
+        const record = value as Record<string, unknown>
+        if (record.handler === "reverse_proxy") proxies.push(record)
+        Object.values(record).forEach(visit)
+      }
+    }
+    visit(result.data)
+    expect(proxies.map((proxy) => [proxy.upstreams, proxy.stream_close_delay])).toEqual([
+      [[{ dial: "127.0.0.1:4400" }], "10m"],
+    ])
+  })
+
   test("an empty lease table keeps the generated config byte-identical", async () => {
     const reconcileR = caddyConfigDevLeaseReconcileCreate({
       enabled: true,

@@ -11,6 +11,7 @@ import type { CaddyConfig } from "./CaddyConfig.js"
 import type { CaddyConfigOptions, OidcOptions } from "./caddyConfigOptionsSchema.js"
 import { caddyConfigOptionsSchema } from "./caddyConfigOptionsSchema.js"
 import { caddyDocsTemplate } from "./caddyDocsTemplate.js"
+import { caddyProxyStreamCloseDelay } from "./caddyProxyStreamCloseDelay.js"
 
 type CaddyProject = ProjectCanonical
 
@@ -190,6 +191,7 @@ function proxyHandler(caddy: ProjectCaddy): Record<string, unknown> {
   const proxy: Record<string, unknown> = {
     handler: "reverse_proxy",
     upstreams: [{ dial: `localhost:${caddy.port}` }],
+    stream_close_delay: caddyProxyStreamCloseDelay,
   }
 
   if (caddy.flushInterval !== undefined) proxy.flush_interval = caddy.flushInterval
