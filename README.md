@@ -44,6 +44,31 @@ and domain (`<user>-<project>.wonder1.de`), runs the package.json `dev` script w
 `PORT`/`HOST` set, and reads `.env.development` — never the preview port or
 `.env.preview`. Never run `bun run dev` on the preview port by hand.
 
+### Rootless container services
+
+A managed service can run a rootless Podman container as the service user
+(`projects`) instead of a bun process. The row command is the `podman run …`
+invocation (`{port}` is the registry port); the unit adds `--rm --replace
+--name proj-<project>-<service>`, readiness (`--sdnotify=conmon`), a delegated
+cgroup, journal logging, and an explicit `podman stop`/`rm`:
+
+```bash
+project-registry project edit <project> --owner shared --service default \
+  --service-container podman \
+  --service-command "podman run --publish 127.0.0.1:{port}:8080 --volume /projects/<project>/data:/data:Z localhost/<image>@sha256:<digest> <args>" \
+  --autostart
+```
+
+Container units keep `ProtectSystem=strict`, `ProtectHome=tmpfs`,
+`PrivateTmp=yes` and `/servers` hidden, but drop `NoNewPrivileges` (setuid
+`newuidmap` must write the user namespace maps) and bind the user's
+`/run/user/<uid>` (`XDG_RUNTIME_DIR`). The service user needs subuid/subgid
+ranges and lingering. Images live in its store
+(`/home/projects/.local/share/containers/storage`, runroot
+`/run/user/<uid>/containers`); load or build them there as that user. `svc
+start|stop|restart|logs` work like for every other managed service. See
+`docs/20261121_container_services.md`.
+
 ## Asynchronous history backup
 
 With `PROJECT_REGISTRY_GIT_PUSH=true`, daemon mutations commit locally and return
