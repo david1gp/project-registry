@@ -1,4 +1,5 @@
 import { createResult, createResultError, type Result } from "#result"
+import type { ProjectServiceManagedContainer } from "../project/projectServiceManagedContainers.js"
 import type { ProjectService } from "../project/projectServiceSchema.js"
 
 export type ProjectServicesManagedPatch = {
@@ -6,11 +7,13 @@ export type ProjectServicesManagedPatch = {
   clearCommand?: boolean
   envFile?: string
   clearEnvFile?: boolean
+  container?: ProjectServiceManagedContainer
+  clearContainer?: boolean
   autostart?: boolean
 }
 
 /**
- * Apply `--service-command`/`--service-env-file`/`--autostart` edits to one
+ * Apply `--service-command`/`--service-env-file`/`--service-container`/`--autostart` edits to one
  * service's managed `service` definition. A first definition needs an
  * explicit `--autostart`/`--no-autostart`; clears travel as `null` so the
  * daemon's deep merge removes them instead of restoring stored values. A
@@ -40,6 +43,7 @@ export function projectServicesManagedApply(
     }
     const managed: Record<string, unknown> = { autostart: patch.autostart, command: patch.command }
     if (patch.envFile !== undefined) managed.envFile = patch.envFile
+    if (patch.container !== undefined) managed.container = patch.container
     const worker = { id: serviceId, units: [], caddy: null, ownership: "registry", service: managed }
     return createResult([...services, worker as unknown as ProjectService])
   }
@@ -55,6 +59,8 @@ export function projectServicesManagedApply(
   if (patch.clearCommand === true) managed.command = null
   if (patch.envFile !== undefined) managed.envFile = patch.envFile
   if (patch.clearEnvFile === true) managed.envFile = null
+  if (patch.container !== undefined) managed.container = patch.container
+  if (patch.clearContainer === true) managed.container = null
   return createResult(
     services.map((service) =>
       service.id === serviceId ? ({ ...service, service: managed } as unknown as ProjectService) : service,

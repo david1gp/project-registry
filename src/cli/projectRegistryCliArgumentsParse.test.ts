@@ -167,6 +167,35 @@ describe("projectRegistryCliArgumentsParse", () => {
         managed: { clearCommand: true, autostart: false },
       },
     ],
+    [
+      [
+        "project",
+        "edit",
+        "scraper",
+        "--service",
+        "default",
+        "--service-command",
+        "podman run --publish 127.0.0.1:{port}:8080 localhost/scraper@sha256:abc",
+        "--service-container",
+        "podman",
+        "--autostart",
+      ],
+      {
+        kind: "project-edit",
+        name: "scraper",
+        service: "default",
+        caddy: {},
+        managed: {
+          command: "podman run --publish 127.0.0.1:{port}:8080 localhost/scraper@sha256:abc",
+          container: "podman",
+          autostart: true,
+        },
+      },
+    ],
+    [
+      ["project", "edit", "scraper", "--service", "default", "--clear-service-container"],
+      { kind: "project-edit", name: "scraper", service: "default", caddy: {}, managed: { clearContainer: true } },
+    ],
     [["user", "cloudflare-token", "set", "--token-stdin"], { kind: "user-cloudflare-token-set", tokenStdin: true }],
     [["--help"], { kind: "help" }],
     [["-V"], { kind: "version" }],
@@ -455,7 +484,7 @@ describe("projectRegistryCliArgumentsParse", () => {
     [["project", "list", "-f"], "Unknown option: -f."],
     [
       ["project", "edit", "archive", "--autostart"],
-      "Options --service-command, --service-env-file, and --autostart require --service.",
+      "Options --service-command, --service-env-file, --service-container, and --autostart require --service.",
     ],
     [
       ["project", "edit", "archive", "--service", "web", "--service-env-file", "../secrets/.env"],
@@ -468,6 +497,14 @@ describe("projectRegistryCliArgumentsParse", () => {
     [
       ["project", "edit", "archive", "--service", "web", "--autostart", "--no-autostart"],
       "Options --autostart and --no-autostart cannot be combined.",
+    ],
+    [
+      ["project", "edit", "archive", "--service", "web", "--service-container", "docker"],
+      "Option --service-container requires one of: podman.",
+    ],
+    [
+      ["project", "edit", "archive", "--service", "web", "--service-container", "podman", "--clear-service-container"],
+      "Options --service-container and --clear-service-container cannot be combined.",
     ],
     [["dev", "up", "site", "--port", "3000"], "Unknown command or invalid syntax: dev up site."],
     [

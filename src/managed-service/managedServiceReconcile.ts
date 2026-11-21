@@ -1,12 +1,15 @@
 import { join } from "node:path"
-import { createResult, type PromiseResult } from "#result"
+import { createResult, createResultError, type PromiseResult, type Result } from "#result"
 import type { DevProcessRunner } from "../dev/DevProcessRunner.js"
 import type { DevProjectFilesystem } from "../dev/DevProjectFilesystem.js"
 import type { Project } from "../project/Project.js"
 import type { ManagedServiceConfig } from "./ManagedServiceConfig.js"
 import type { ManagedServiceFilesystem } from "./ManagedServiceFilesystem.js"
 import { managedServiceCommandResolve } from "./managedServiceCommandResolve.js"
+import type { ManagedServiceContainerSpec } from "./ManagedServiceContainerSpec.js"
 import { managedServiceEntriesList } from "./managedServiceEntriesList.js"
+import { managedServicePasswdPath } from "./managedServicePasswdPath.js"
+import { managedServicePasswdUserIdParse } from "./managedServicePasswdUserIdParse.js"
 import { managedServiceSystemctl } from "./managedServiceSystemctl.js"
 import { managedServiceUnitMarker } from "./managedServiceUnitMarker.js"
 import { managedServiceUnitRender } from "./managedServiceUnitRender.js"
@@ -70,6 +73,17 @@ export async function managedServiceReconcile(
   // resolve or collides): removal never touches these.
   const keep = new Set<string>(listed.conflicts)
   const changed = new Set<string>()
+  // Container units need the service user's uid (/run/user/<uid>); resolved
+  // once, only when some row asks for a container.
+  let userIdR: Result<number> | undefined
+  async function userIdResolve(): Promise<Result<number>> {
+    try {
+      const passwd = await filesystem.read(managedServicePasswdPath)
+      return managedServicePasswdUserIdParse(passwd ?? "", config.user)
+    } catch (error) {
+      return createResultError("managedServiceReconcile", `${managedServicePasswdPath}: ${failureMessage(error)}`)
+    }
+  }
   for (const entry of listed.entries) {
     keep.add(entry.unit)
     const path = join(config.unitDirectory, entry.unit)
@@ -81,6 +95,22 @@ export async function managedServiceReconcile(
     if (!commandR.success) {
       summary.failures.push(`${entry.unit}: ${commandR.errorMessage}`)
       continue
+    }
+    let container: ManagedServiceContainerSpec | undefined
+    if (entry.managed.container !== undefined) {
+      userIdR ??= await userIdResolve()
+      if (!userIdR.success) {
+        summary.failures.push(`${entry.unit}: ${userIdR.errorMessage}`)
+        continue
+      }
+      const runtimeDirectory = `/run/user/${userIdR.data}`
+      container = {
+        engine: entry.managed.container,
+        name: entry.unit.replace(/\.service$/, ""),
+        userId: userIdR.data,
+        runtimeDirectory,
+        storageRoot: join(config.homeDirectory, ".local/share/containers/storage"),
+      }
     }
     const renderR = managedServiceUnitRender({
       owner: entry.owner,
@@ -98,6 +128,7 @@ export async function managedServiceReconcile(
       ...(commandR.data.envFile === undefined ? {} : { envFile: commandR.data.envFile }),
       command: commandR.data.command,
       args: commandR.data.args,
+      ...(container === undefined ? {} : { container }),
     })
     if (!renderR.success) {
       summary.failures.push(`${entry.unit}: ${renderR.errorMessage}`)

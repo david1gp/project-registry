@@ -1,3 +1,5 @@
+import type { ManagedServiceContainerSpec } from "./ManagedServiceContainerSpec.js"
+
 export type ManagedServiceUnitSpec = {
   owner: string
   project: string
@@ -17,4 +19,6 @@ export type ManagedServiceUnitSpec = {
   /** Absolute executable path or a bare name resolved through the unit PATH. */
   command: string
   args: readonly string[]
+  /** Rootless container service: `command`/`args` are a `podman run …` invocation. */
+  container?: ManagedServiceContainerSpec
 }

@@ -31,6 +31,17 @@ describe("projectServiceManagedSchema", () => {
     }
   })
 
+  test("accepts a podman container service only with an explicit command", () => {
+    const command = "podman run --publish 127.0.0.1:{port}:8080 localhost/app@sha256:abc -web"
+    expect(a.safeParse(projectServiceManagedSchema, { command, container: "podman", autostart: true }).success).toBe(
+      true,
+    )
+    expect(a.safeParse(projectServiceManagedSchema, { container: "podman", autostart: true }).success).toBe(false)
+    expect(a.safeParse(projectServiceManagedSchema, { command, container: "docker", autostart: true }).success).toBe(
+      false,
+    )
+  })
+
   test("a canonical row carries the service definition next to caddy and dev", () => {
     const parsed = a.safeParse(projectCanonicalSchema, {
       schemaVersion: 2,

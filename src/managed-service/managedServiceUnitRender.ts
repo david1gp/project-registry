@@ -1,6 +1,7 @@
 import { isAbsolute } from "node:path"
 import { createResult, createResultError, type Result } from "#result"
 import type { ManagedServiceUnitSpec } from "./ManagedServiceUnitSpec.js"
+import { managedServiceContainerArgvRender } from "./managedServiceContainerArgvRender.js"
 import { managedServiceUnitMarker } from "./managedServiceUnitMarker.js"
 
 // Values reach systemd unit syntax, not a shell. Everything rendered is
@@ -25,6 +26,13 @@ function absolutePathIsSafe(value: string): boolean {
  * user in its own slice with the registry row's port (workers get none); `/servers` and every
  * home except the service user's own stay invisible, and only the projects
  * root plus that home are writable.
+ *
+ * A container service (`spec.container`) runs rootless podman as that user:
+ * it keeps the read-only system and private /tmp but drops
+ * `NoNewPrivileges` (setuid `newuidmap`/`newgidmap` must gain privileges to
+ * write the user namespace maps), binds the user's `/run/user/<uid>` into the
+ * tmpfs home view, delegates the unit cgroup to podman, and stops the named
+ * container explicitly.
  */
 export function managedServiceUnitRender(spec: ManagedServiceUnitSpec): Result<string> {
   const op = "managedServiceUnitRender"
@@ -53,13 +61,33 @@ export function managedServiceUnitRender(spec: ManagedServiceUnitSpec): Result<s
   else if (bareCommandPattern.test(spec.command)) executable = ["/usr/bin/env", spec.command]
   else return createResultError(op, "service command must be absolute or a bare executable name")
 
+  const container = spec.container
+  let execLines = [`ExecStart=${[...executable, ...spec.args].map(specifierEscape).join(" ")}`]
+  if (container !== undefined) {
+    for (const path of [container.runtimeDirectory, container.storageRoot]) {
+      if (!absolutePathIsSafe(path)) return createResultError(op, `path ${path} is invalid`)
+    }
+    const argvR = managedServiceContainerArgvRender({ command: spec.command, args: spec.args, container })
+    if (!argvR.success) return { ...argvR, op }
+    const line = (argv: readonly string[]) => [...executable, ...argv].map(specifierEscape).join(" ")
+    execLines = [
+      `ExecStart=${line(argvR.data.start)}`,
+      `ExecStop=${line(argvR.data.stop)}`,
+      `ExecStopPost=-${line(argvR.data.stopPost)}`,
+    ]
+  }
+
   const home = spec.homeDirectory
   const homeUnderHome = home === "/home" || home.startsWith("/home/")
+  const bound = [...(homeUnderHome ? [home] : []), ...(container === undefined ? [] : [container.runtimeDirectory])]
+  const bindPaths = bound.length === 0 ? [] : [`BindPaths=${bound.map(specifierEscape).join(" ")}`]
+  const writablePaths = [spec.projectsRoot, home, ...(container === undefined ? [] : [container.runtimeDirectory])]
   const environment = [
     `PATH=${spec.pathValue}`,
     `HOME=${home}`,
     ...(spec.port === undefined ? [] : [`PORT=${spec.port}`]),
     "HOST=127.0.0.1",
+    ...(container === undefined ? [] : [`XDG_RUNTIME_DIR=${container.runtimeDirectory}`]),
     ...(spec.domains.length === 0 ? [] : [`__VITE_ADDITIONAL_SERVER_ALLOWED_HOSTS=${spec.domains.join(",")}`]),
   ]
   const lines = [
@@ -69,27 +97,36 @@ export function managedServiceUnitRender(spec: ManagedServiceUnitSpec): Result<s
     `Description=project-registry managed service ${spec.owner}/${spec.project} ${spec.service}`,
     "After=network-online.target",
     "Wants=network-online.target",
+    // The user runtime dir (/run/user/<uid>) must exist before podman runs;
+    // lingering keeps it, this pulls it in even without a login session.
+    ...(container === undefined
+      ? []
+      : [
+          `Requires=user-runtime-dir@${container.userId}.service`,
+          `After=user-runtime-dir@${container.userId}.service`,
+        ]),
     "",
     "[Service]",
-    "Type=simple",
+    ...(container === undefined ? ["Type=simple"] : ["Type=notify", "NotifyAccess=all"]),
     `User=${spec.user}`,
     `Group=${spec.group}`,
     `WorkingDirectory=${specifierEscape(spec.workingDirectory)}`,
     "UMask=0002",
     ...environment.map((entry) => `Environment=${specifierEscape(entry)}`),
     ...(spec.envFile === undefined ? [] : [`EnvironmentFile=-${specifierEscape(spec.envFile)}`]),
-    `ExecStart=${[...executable, ...spec.args].map(specifierEscape).join(" ")}`,
+    ...execLines,
     "Restart=on-failure",
     "RestartSec=5",
     // A systemd stop sends SIGTERM and bun exits 143 on it. Both are a
     // clean stop, never a failure; real crashes still restart above.
     "SuccessExitStatus=143 SIGTERM",
     `Slice=${spec.slice}`,
-    "NoNewPrivileges=yes",
+    ...(container === undefined ? [] : ["Delegate=yes", "KillMode=mixed", "TimeoutStopSec=60"]),
+    ...(container === undefined ? ["NoNewPrivileges=yes"] : []),
     "ProtectSystem=strict",
     "ProtectHome=tmpfs",
-    ...(homeUnderHome ? [`BindPaths=${specifierEscape(home)}`] : []),
-    `ReadWritePaths=${specifierEscape(spec.projectsRoot)} ${specifierEscape(home)}`,
+    ...bindPaths,
+    `ReadWritePaths=${writablePaths.map(specifierEscape).join(" ")}`,
     "InaccessiblePaths=-/servers",
     "PrivateTmp=yes",
     "",

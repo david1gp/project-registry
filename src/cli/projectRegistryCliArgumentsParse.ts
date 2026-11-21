@@ -2,6 +2,10 @@ import { createResult, createResultError, type Result } from "#result"
 import { projectDomainValidate } from "../project/projectDomainValidate.js"
 import { projectServiceDevCommandValidate } from "../project/projectServiceDevCommandValidate.js"
 import { projectServiceEnvFileValidate } from "../project/projectServiceEnvFileValidate.js"
+import {
+  type ProjectServiceManagedContainer,
+  projectServiceManagedContainers,
+} from "../project/projectServiceManagedContainers.js"
 import type { ProjectServiceOwnership } from "../project/projectServiceOwnershipSchema.js"
 import type { ProjectRegistryCliCaddyOptions } from "./ProjectRegistryCliCaddyOptions.js"
 import type { ProjectRegistryCliInvocation } from "./ProjectRegistryCliInvocation.js"
@@ -83,6 +87,7 @@ export function projectRegistryCliArgumentsParse(args: readonly string[]): Resul
   let devCommand: string | undefined
   let serviceCommand: string | undefined
   let serviceEnvFile: string | undefined
+  let serviceContainer: ProjectServiceManagedContainer | undefined
   let stateFile: string | undefined
   let stateDir: string | undefined
   let kind: "proxy" | "static" | undefined
@@ -130,6 +135,7 @@ export function projectRegistryCliArgumentsParse(args: readonly string[]): Resul
       "--clear-dev-command",
       "--clear-service-command",
       "--clear-service-env-file",
+      "--clear-service-container",
       "--autostart",
       "--no-autostart",
       "--follow",
@@ -178,6 +184,7 @@ export function projectRegistryCliArgumentsParse(args: readonly string[]): Resul
       "--dev-command",
       "--service-command",
       "--service-env-file",
+      "--service-container",
       "-n",
       "--state-file",
       "--state-dir",
@@ -334,6 +341,17 @@ export function projectRegistryCliArgumentsParse(args: readonly string[]): Resul
           )
         }
         serviceEnvFile = value
+        continue
+      }
+      if (option === "--service-container") {
+        const container = projectServiceManagedContainers.find((name) => name === value)
+        if (container === undefined) {
+          return createResultError(
+            op,
+            `Option --service-container requires one of: ${projectServiceManagedContainers.join(", ")}.`,
+          )
+        }
+        serviceContainer = container
         continue
       }
       if (option === "-n") {
@@ -506,12 +524,15 @@ export function projectRegistryCliArgumentsParse(args: readonly string[]): Resul
   const hasDevCommandOptions = devCommand !== undefined || clearDevCommand
   const clearServiceCommand = booleans.has("--clear-service-command")
   const clearServiceEnvFile = booleans.has("--clear-service-env-file")
+  const clearServiceContainer = booleans.has("--clear-service-container")
   const autostart = booleans.has("--autostart") ? true : booleans.has("--no-autostart") ? false : undefined
   const hasManagedOptions =
     serviceCommand !== undefined ||
     clearServiceCommand ||
     serviceEnvFile !== undefined ||
     clearServiceEnvFile ||
+    serviceContainer !== undefined ||
+    clearServiceContainer ||
     autostart !== undefined
   const follow = booleans.has("--follow") || booleans.has("-f")
   const hasNonServiceMutationOptions =
@@ -859,7 +880,7 @@ export function projectRegistryCliArgumentsParse(args: readonly string[]): Resul
     if (hasDevCommandOptions || devRoot !== undefined || hasManagedOptions || follow) {
       return createResultError(
         op,
-        "Options --dev-command, --service-command, --service-env-file, --autostart, and --root are not valid for project create; use project edit.",
+        "Options --dev-command, --service-command, --service-env-file, --service-container, --autostart, and --root are not valid for project create; use project edit.",
       )
     }
     return createResult({
@@ -907,11 +928,17 @@ export function projectRegistryCliArgumentsParse(args: readonly string[]): Resul
     if (serviceEnvFile !== undefined && clearServiceEnvFile) {
       return createResultError(op, "Options --service-env-file and --clear-service-env-file cannot be combined.")
     }
+    if (serviceContainer !== undefined && clearServiceContainer) {
+      return createResultError(op, "Options --service-container and --clear-service-container cannot be combined.")
+    }
     if (booleans.has("--autostart") && booleans.has("--no-autostart")) {
       return createResultError(op, "Options --autostart and --no-autostart cannot be combined.")
     }
     if (hasManagedOptions && service === undefined) {
-      return createResultError(op, "Options --service-command, --service-env-file, and --autostart require --service.")
+      return createResultError(
+        op,
+        "Options --service-command, --service-env-file, --service-container, and --autostart require --service.",
+      )
     }
     return createResult({
       command: {
@@ -929,6 +956,8 @@ export function projectRegistryCliArgumentsParse(args: readonly string[]): Resul
                 ...(clearServiceCommand ? { clearCommand: true } : {}),
                 ...(serviceEnvFile === undefined ? {} : { envFile: serviceEnvFile }),
                 ...(clearServiceEnvFile ? { clearEnvFile: true } : {}),
+                ...(serviceContainer === undefined ? {} : { container: serviceContainer }),
+                ...(clearServiceContainer ? { clearContainer: true } : {}),
                 ...(autostart === undefined ? {} : { autostart }),
               },
             }

@@ -132,4 +132,95 @@ describe("managedServiceUnitRender", () => {
       expect(managedServiceUnitRender({ ...spec, ...override }).success).toBe(false)
     }
   })
+
+  describe("rootless podman container services", () => {
+    const image = "localhost/scraper@sha256:bc3b024e7d50605e5ef5b3262a0c48f79c955f45d86d53ab42784fe47e691ad6"
+    const containerSpec: ManagedServiceUnitSpec = {
+      ...spec,
+      project: "scraper",
+      service: "default",
+      workingDirectory: "/projects/scraper",
+      envFile: undefined,
+      port: 11111,
+      domains: ["scraper.wonder1.de"],
+      command: "podman",
+      args: ["run", "--publish", "127.0.0.1:11111:8080", "--volume", "/projects/scraper/data:/data:Z", image, "-web"],
+      container: {
+        engine: "podman",
+        name: "proj-scraper-default",
+        userId: 994,
+        runtimeDirectory: "/run/user/994",
+        storageRoot: "/home/projects/.local/share/containers/storage",
+      },
+    }
+    const global = "--root /home/projects/.local/share/containers/storage --runroot /run/user/994/containers"
+
+    test("renders a quadlet-style notify unit with explicit storage, runtime dir and a named clean stop", () => {
+      const result = managedServiceUnitRender(containerSpec)
+      expect(result.success).toBe(true)
+      if (!result.success) return
+      const rendered = lines(result.data)
+      expect(rendered[0]).toBe(managedServiceUnitMarker)
+      expect(rendered).toEqual(
+        expect.arrayContaining([
+          "Requires=user-runtime-dir@994.service",
+          "After=user-runtime-dir@994.service",
+          "Type=notify",
+          "NotifyAccess=all",
+          "User=projects",
+          "Group=projects",
+          "Environment=XDG_RUNTIME_DIR=/run/user/994",
+          "Environment=HOME=/home/projects",
+          "Environment=PORT=11111",
+          `ExecStart=/usr/bin/env podman ${global} run --rm --replace --name proj-scraper-default --cgroups=split --sdnotify=conmon --detach --log-driver=passthrough --umask=0002 --publish 127.0.0.1:11111:8080 --volume /projects/scraper/data:/data:Z ${image} -web`,
+          `ExecStop=/usr/bin/env podman ${global} stop --ignore --time 30 proj-scraper-default`,
+          `ExecStopPost=-/usr/bin/env podman ${global} rm --force --ignore proj-scraper-default`,
+          "Delegate=yes",
+          "KillMode=mixed",
+          "TimeoutStopSec=60",
+          "Restart=on-failure",
+          "Slice=projects.slice",
+          "ProtectSystem=strict",
+          "ProtectHome=tmpfs",
+          "BindPaths=/home/projects /run/user/994",
+          "ReadWritePaths=/projects /home/projects /run/user/994",
+          "InaccessiblePaths=-/servers",
+          "PrivateTmp=yes",
+        ]),
+      )
+    })
+
+    test("drops NoNewPrivileges only for containers so setuid newuidmap can write the userns maps", () => {
+      const containerR = managedServiceUnitRender(containerSpec)
+      const plainR = managedServiceUnitRender(spec)
+      expect(containerR.success && plainR.success).toBe(true)
+      if (!containerR.success || !plainR.success) return
+      expect(containerR.data).not.toContain("NoNewPrivileges")
+      expect(containerR.data).not.toContain("Type=simple")
+      expect(plainR.data).toContain("NoNewPrivileges=yes")
+      expect(plainR.data).not.toContain("XDG_RUNTIME_DIR")
+      expect(plainR.data).not.toContain("Delegate=")
+      expect(plainR.data).not.toContain("ExecStop")
+    })
+
+    test("refuses non-podman commands and row options that the unit manages", () => {
+      const unsafe: Partial<ManagedServiceUnitSpec>[] = [
+        { command: "bun", args: ["run", "start"] },
+        { args: ["create", image] },
+        { args: ["run"] },
+        { args: ["run", "--name", "other", image] },
+        { args: ["run", "--name=other", image] },
+        { args: ["run", "-d", image] },
+        { args: ["run", "--rm", image] },
+        { args: ["run", "--log-driver=journald", image] },
+        { args: ["run", "--root", "/tmp/x", image] },
+        { container: { ...containerSpec.container!, name: "Bad Name" } },
+        { container: { ...containerSpec.container!, runtimeDirectory: "/run/user/../0" } },
+        { container: { ...containerSpec.container!, userId: -1 } },
+      ]
+      for (const override of unsafe) {
+        expect(managedServiceUnitRender({ ...containerSpec, ...override }).success).toBe(false)
+      }
+    })
+  })
 })

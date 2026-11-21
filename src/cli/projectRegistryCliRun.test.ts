@@ -1116,6 +1116,75 @@ describe("projectRegistryCliRun", () => {
     expect((bodies[0] as { services: Record<string, unknown>[] }).services[1]).not.toHaveProperty("service")
   })
 
+  test("sends a podman container definition and clears it with null", async () => {
+    const bodies: unknown[] = []
+    const requestFetch = async (_input: string | URL | Request, init?: RequestInit & { unix?: string }) => {
+      if (init?.method === "PATCH") {
+        bodies.push(typeof init.body === "string" ? JSON.parse(init.body) : undefined)
+        return Response.json({ success: true, data: mutation("edit") })
+      }
+      return Response.json({
+        success: true,
+        data: {
+          project: {
+            schemaVersion: 2,
+            owner: "shared",
+            name: "scraper",
+            services: [
+              {
+                id: "default",
+                units: [],
+                ownership: "registry",
+                caddy: { port: 11111, domains: ["scraper.example"] },
+                service: { autostart: true, container: "podman", command: "podman run localhost/scraper@sha256:abc" },
+              },
+            ],
+          },
+          revision: "current",
+        },
+      })
+    }
+    const options = { environment: { USER: "leo" }, requestFetch, stdout: () => {}, stderr: () => {} }
+    expect(
+      await projectRegistryCliRun(
+        [
+          "project",
+          "edit",
+          "scraper",
+          "--owner",
+          "shared",
+          "--service",
+          "default",
+          "--service-command",
+          "podman run --publish 127.0.0.1:{port}:8080 localhost/scraper@sha256:def",
+          "--service-container",
+          "podman",
+        ],
+        options,
+      ),
+    ).toBe(0)
+    expect(
+      await projectRegistryCliRun(
+        ["project", "edit", "scraper", "--owner", "shared", "--service", "default", "--clear-service-container"],
+        options,
+      ),
+    ).toBe(0)
+    expect(bodies).toHaveLength(2)
+    expect(bodies[0]).toMatchObject({
+      services: [
+        {
+          id: "default",
+          service: {
+            autostart: true,
+            container: "podman",
+            command: "podman run --publish 127.0.0.1:{port}:8080 localhost/scraper@sha256:def",
+          },
+        },
+      ],
+    })
+    expect(bodies[1]).toMatchObject({ services: [{ id: "default", service: { autostart: true, container: null } }] })
+  })
+
   test("adds a background worker service without a port or domain via --service-command", async () => {
     const bodies: unknown[] = []
     const requestFetch = async (_input: string | URL | Request, init?: RequestInit & { unix?: string }) => {

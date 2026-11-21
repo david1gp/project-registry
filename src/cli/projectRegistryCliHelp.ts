@@ -66,6 +66,10 @@ Project create/edit options:
   --clear-service-command    Remove the managed service command (edit with --service)
   --service-env-file <rel>   Managed service env file relative to the project directory (edit with --service)
   --clear-service-env-file   Remove the managed service env file (edit with --service)
+  --service-container <podman>
+                              Run the managed service command ('podman run …') as a rootless container of the
+                              service user (edit with --service); the unit adds --rm --replace --name and stop
+  --clear-service-container  Run the managed service command directly again (edit with --service)
   --autostart | --no-autostart
                               Enable/disable the managed service at boot; required for the first definition
   --flush-interval <number>  Reverse proxy flush interval (-1 for immediate)

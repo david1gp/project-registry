@@ -314,4 +314,66 @@ describe("managedServiceReconcile", () => {
       "proj-archive-ported.service: dev command placeholders need a port",
     ])
   })
+
+  test("a podman container row renders a rootless container unit for the service user's uid", async () => {
+    const calls: RunnerCall[] = []
+    const scraper = managedServiceProjectFixture("shared", "scraper", [
+      {
+        id: "default",
+        port: 11111,
+        service: {
+          autostart: true,
+          container: "podman",
+          command: "podman run --publish 127.0.0.1:{port}:8080 localhost/scraper@sha256:abc -web",
+        },
+      },
+    ])
+    const filesystem = managedServiceFilesystemFake({
+      "/etc/passwd": "root:x:0:0::/root:/bin/sh\nprojects:x:994:1007::/home/projects:/bin/bash\n",
+    })
+    const result = await managedServiceReconcile({
+      config: managedServiceConfigFixture,
+      projects: [scraper],
+      runner: managedServiceRunnerFake(calls),
+      filesystem,
+      projectFilesystem: managedServiceProjectFilesystemFake({ scraper: {} }),
+    })
+    expect(result.success).toBe(true)
+    if (!result.success) return
+    expect(result.data.failures).toEqual([])
+    const unit = filesystem.files.get(`${unitDirectory}/proj-scraper-default.service`) ?? ""
+    expect(unit).toContain("Environment=XDG_RUNTIME_DIR=/run/user/994")
+    expect(unit).toContain(
+      "--runroot /run/user/994/containers run --rm --replace --name proj-scraper-default --cgroups=split",
+    )
+    expect(unit).toContain("--publish 127.0.0.1:11111:8080 localhost/scraper@sha256:abc -web")
+    expect(unit).not.toContain("NoNewPrivileges")
+    expect(systemctlCalls(calls)).toEqual([
+      "systemctl daemon-reload",
+      "systemctl enable proj-scraper-default.service",
+      "systemctl restart proj-scraper-default.service",
+    ])
+  })
+
+  test("a container row whose service user is missing from passwd fails without writing a unit", async () => {
+    const scraper = managedServiceProjectFixture("shared", "scraper", [
+      {
+        id: "default",
+        port: 11111,
+        service: { autostart: true, container: "podman", command: "podman run localhost/scraper@sha256:abc" },
+      },
+    ])
+    const filesystem = managedServiceFilesystemFake({ "/etc/passwd": "root:x:0:0::/root:/bin/sh\n" })
+    const result = await managedServiceReconcile({
+      config: managedServiceConfigFixture,
+      projects: [scraper],
+      runner: managedServiceRunnerFake([]),
+      filesystem,
+      projectFilesystem: managedServiceProjectFilesystemFake({ scraper: {} }),
+    })
+    expect(result.success).toBe(true)
+    if (!result.success) return
+    expect(result.data.written).toEqual([])
+    expect(result.data.failures).toEqual(["proj-scraper-default.service: service user projects is not in passwd"])
+  })
 })

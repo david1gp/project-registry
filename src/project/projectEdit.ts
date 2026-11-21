@@ -94,7 +94,7 @@ function projectEditCanonicalPatch(input: Record<string, unknown>): Record<strin
 // metadata objects (`dev`, `service`) and for the optional fields inside
 // `service`; `caddy: null` keeps its own meaning (no route).
 const projectEditServiceClearableKeys = ["dev", "service"]
-const projectEditManagedServiceClearableKeys = ["command", "envFile"]
+const projectEditManagedServiceClearableKeys = ["command", "envFile", "container"]
 
 function projectEditServiceClearsApply(service: Record<string, unknown>): Record<string, unknown> {
   const cleared = { ...service }
