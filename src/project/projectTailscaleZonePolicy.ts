@@ -14,6 +14,7 @@ export const projectTailscaleZonePolicy: Readonly<Record<string, readonly string
   musa: ["covux-design.de"],
   tim: ["wonder1.de"],
   mit: ["wonder1.de"],
+  andres: ["wonder1.de"],
 }
 
 /**
