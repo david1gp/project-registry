@@ -11,6 +11,7 @@ describe("projectTailscaleZonePolicy", () => {
       musa: ["covux-design.de"],
       tim: ["wonder1.de"],
       mit: ["wonder1.de"],
+      andres: ["wonder1.de"],
     })
   })
 })
@@ -58,6 +59,10 @@ describe("projectTailscaleZoneClaimValidate", () => {
       data: "wonder1.de",
     })
     expect(projectTailscaleZoneClaimValidate("mit", "opencode-mit.wonder1.de")).toMatchObject({
+      success: true,
+      data: "wonder1.de",
+    })
+    expect(projectTailscaleZoneClaimValidate("andres", "t3code-andres.wonder1.de")).toMatchObject({
       success: true,
       data: "wonder1.de",
     })
