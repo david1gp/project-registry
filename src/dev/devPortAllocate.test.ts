@@ -63,6 +63,11 @@ describe("devPortAllocate", () => {
     expect(result.data).toBe(3002)
   })
 
+  test("skips host listening ports as well as tracked reservations", () => {
+    const result = devPortAllocate([], [], { from: 3000, to: 3002 }, [3000, 3001])
+    expect(result.success && result.data).toBe(3002)
+  })
+
   test("reports exhaustion when rows and leases cover the range", () => {
     const result = devPortAllocate([project("leo", "site", 3000)], [lease("akademie", 3001)], {
       from: 3000,

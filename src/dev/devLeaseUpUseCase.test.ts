@@ -32,6 +32,17 @@ function runnerCreate(
 ): DevProcessRunner {
   return async (command, args, input) => {
     calls.push({ command, args, input })
+    if (command === "ss") {
+      const start = calls.filter((call) => call.command === "systemd-run").at(-1)
+      const port = start?.args.find((arg) => arg.startsWith("--setenv=PORT="))?.split("=").at(-1)
+      return createResult({ exitCode: 0, stdout: port ? `LISTEN 0 128 127.0.0.1:${port} 0.0.0.0:* cgroup:/test/unit\n` : "", stderr: "" })
+    }
+    if (command === "systemctl" && args[0] === "show") return createResult({ exitCode: 0, stdout: "/test/unit\n", stderr: "" })
+    if (command === "systemctl" && args[0] === "is-active") {
+      if (calls.some((call) => call.command === "systemd-run")) return createResult({ exitCode: 0, stdout: "active\n", stderr: "" })
+      const result = behavior({ command, args, input })
+      return createResult(result.stdout === "" && result.exitCode === 0 ? { ...result, stdout: "active\n" } : result)
+    }
     return createResult(behavior({ command, args, input }))
   }
 }
@@ -215,6 +226,40 @@ describe("devLeaseUpUseCase", () => {
     expect(harness.regenerations).toBe(0)
   })
 
+  test("rejects a response from a foreign listener and stops the unit", async () => {
+    const harness = harnessCreate()
+    let started = false
+    const runner: DevProcessRunner = async (command, args, input) => {
+      harness.calls.push({ command, args, input })
+      if (command === "systemd-run") started = true
+      if (command === "ss") return createResult({ exitCode: 0, stdout: started ? "LISTEN 0 128 127.0.0.1:4400 0.0.0.0:* cgroup:/foreign\n" : "", stderr: "" })
+      if (command === "systemctl" && args[0] === "is-active") return createResult({ exitCode: 0, stdout: "active\n", stderr: "" })
+      if (command === "systemctl" && args[0] === "show") return createResult({ exitCode: 0, stdout: "/test/unit\n", stderr: "" })
+      return createResult({ exitCode: 0, stdout: "", stderr: "" })
+    }
+    const result = await devLeaseUpUseCase(harness.options({ runner }))
+    expect(result.success).toBe(false)
+    if (!result.success) expect(result.errorMessage).toContain("not owned exclusively")
+    expect(harness.tracking.state.leases).toEqual([])
+    expect(harness.calls.some((call) => call.command === "systemctl" && call.args[0] === "stop")).toBe(true)
+    expect(harness.regenerations).toBe(0)
+  })
+
+  test("rejects a dead unit even if a foreign server responds", async () => {
+    const harness = harnessCreate()
+    const runner: DevProcessRunner = async (command, args, input) => {
+      harness.calls.push({ command, args, input })
+      if (command === "systemctl" && args[0] === "is-active") return createResult({ exitCode: 3, stdout: "failed\n", stderr: "" })
+      return createResult({ exitCode: 0, stdout: "", stderr: "" })
+    }
+    const result = await devLeaseUpUseCase(harness.options({ runner }))
+    expect(result.success).toBe(false)
+    if (!result.success) expect(result.errorMessage).toContain("is not active")
+    expect(harness.fetchCalls).toBe(0)
+    expect(harness.tracking.state.leases).toEqual([])
+    expect(harness.calls.some((call) => call.command === "systemctl" && call.args[0] === "stop")).toBe(true)
+  })
+
   test("a health timeout stops the unit and deletes the lease", async () => {
     const harness = harnessCreate({
       now: 0,
@@ -291,7 +336,7 @@ describe("devLeaseUpUseCase", () => {
     expect(result.success).toBe(false)
     if (result.success) return
     expect(result.code).toBe("request.invalid")
-    expect(harness.calls).toEqual([])
+    expect(harness.calls.some((call) => call.command === "systemd-run")).toBe(false)
     expect(harness.tracking.state.leases).toEqual([])
   })
 
@@ -460,7 +505,7 @@ describe("devLeaseUpUseCase", () => {
     expect(result.errorMessage).toBe(
       "dev command for project tim/akademie is not configured (dev package.json has no dev script)",
     )
-    expect(harness.calls).toEqual([])
+    expect(harness.calls.some((call) => call.command === "systemd-run")).toBe(false)
   })
 
   test("a stale lease with a dead unit is replaced instead of touched", async () => {

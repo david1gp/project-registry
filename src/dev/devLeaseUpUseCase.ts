@@ -12,6 +12,7 @@ import { devCommandResolve } from "./devCommandResolve.js"
 import { devHostnameClaimValidate } from "./devHostnameClaimValidate.js"
 import type { DevLeaseRecord } from "./devLeaseRecordSchema.js"
 import { devPortAllocate } from "./devPortAllocate.js"
+import { devListeningSockets } from "./devListeningSockets.js"
 import { devRootDirectoryResolve } from "./devRootDirectoryResolve.js"
 import { devUnitAlive } from "./devUnitAlive.js"
 import { devUnitName } from "./devUnitName.js"
@@ -96,10 +97,15 @@ async function healthWait(options: {
   port: number
   timeoutMs: number
   intervalMs: number
+  runner: DevProcessRunner
+  unit: string
 }): PromiseResult<void> {
   const op = "devLeaseUp"
   const startedAt = options.clock()
   for (;;) {
+    const alive = await devUnitAlive({ runner: options.runner, unit: options.unit })
+    if (!alive.success) return alive
+    if (!alive.data) return createResultErrorCode(op, `dev unit ${options.unit} is not active`, "caddy.unavailable")
     try {
       const response = await options.fetch(`http://127.0.0.1:${options.port}/`)
       try {
@@ -108,6 +114,26 @@ async function healthWait(options: {
         // Any HTTP response proves the loopback server is up; an unreadable
         // body must not fail the health wait.
       }
+      let group: Awaited<ReturnType<DevProcessRunner>>
+      try {
+        group = await options.runner("systemctl", ["show", options.unit, "--property=ControlGroup", "--value"], "")
+      } catch {
+        return createResultErrorCode(op, `cannot determine cgroup for dev unit ${options.unit}`, "caddy.unavailable")
+      }
+      if (!group.success) return group
+      const cgroup = group.data.stdout.trim()
+      if (group.data.exitCode !== 0 || !cgroup.startsWith("/") || cgroup === "/") {
+        return createResultErrorCode(op, `cannot determine cgroup for dev unit ${options.unit}`, "caddy.unavailable")
+      }
+      const sockets = await devListeningSockets(options.runner)
+      if (!sockets.success) return sockets
+      const listeners = sockets.data.filter((socket) => socket.port === options.port)
+      if (listeners.length === 0 || listeners.some((socket) => socket.cgroup !== cgroup && !socket.cgroup?.startsWith(`${cgroup}/`))) {
+        return createResultErrorCode(op, `port ${options.port} is not owned exclusively by dev unit ${options.unit}`, "caddy.unavailable")
+      }
+      const stillAlive = await devUnitAlive({ runner: options.runner, unit: options.unit })
+      if (!stillAlive.success) return stillAlive
+      if (!stillAlive.data) return createResultErrorCode(op, `dev unit ${options.unit} is not active`, "caddy.unavailable")
       return createResult(undefined)
     } catch {
       if (options.clock() - startedAt >= options.timeoutMs) {
@@ -208,7 +234,9 @@ async function upInternal(options: DevLeaseUpUseCaseOptions, op: string): Promis
     ...(options.commandFilesystem === undefined ? {} : { filesystem: options.commandFilesystem }),
   })
   if (!directoryR.success) return directoryR
-  const portR = devPortAllocate(options.projects, base, options.portRange)
+  const socketsR = await devListeningSockets(options.runner)
+  if (!socketsR.success) return socketsR
+  const portR = devPortAllocate(options.projects, base, options.portRange, socketsR.data.map((socket) => socket.port))
   if (!portR.success) return portR
   const commandR = await devCommandResolve({
     directory: directoryR.data.directory,
@@ -280,6 +308,8 @@ async function upInternal(options: DevLeaseUpUseCaseOptions, op: string): Promis
     port: lease.port,
     timeoutMs: healthTimeoutMs,
     intervalMs: healthIntervalMs,
+    runner: options.runner,
+    unit: lease.unit,
   })
   if (!healthR.success) {
     await cleanup()
