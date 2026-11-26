@@ -75,6 +75,12 @@ describe("projectRegistryCliArgumentsParse", () => {
       { kind: "project-service-delete", name: "site", service: "api" },
     ],
     [["project", "fix-acl", "site"], { kind: "project-fix-acl", name: "site" }],
+    [["perms"], { kind: "perms" }],
+    [["perms", "--apply"], { kind: "perms", apply: true }],
+    [["perms", "--all"], { kind: "perms", all: true }],
+    [["perms", "--all", "--apply"], { kind: "perms", all: true, apply: true }],
+    [["perms", "site"], { kind: "perms", project: "site" }],
+    [["perms", "site", "--apply"], { kind: "perms", project: "site", apply: true }],
     [["delete", "--port", "4321"], { kind: "project-delete-by-port", port: 4321 }],
     [["delete", "--port=4321"], { kind: "project-delete-by-port", port: 4321 }],
     [["project", "history", "site"], { kind: "project-history", name: "site", limit: undefined }],
@@ -537,6 +543,19 @@ describe("projectRegistryCliArgumentsParse", () => {
     [["project", "create", "--no-dns", "--no-dns"], "Option --no-dns may only be provided once."],
     [["project", "access-logs", "site", "--no-dns"], "Unknown command or invalid syntax: project access-logs site."],
     [["project", "edit", "site", "--no-dns"], "Unknown command or invalid syntax: project edit site."],
+    [["project", "list", "--apply"], "Options --apply and --all are only valid for perms."],
+    [["dev", "ls", "--all"], "Options --apply and --all are only valid for perms."],
+    [["perms", "--apply", "--apply"], "Option --apply may only be provided once."],
+    [["perms", "site", "extra"], "Unknown command or invalid syntax: perms site extra."],
+    [["perms", "site", "--port", "3000"], "Unknown command or invalid syntax: perms site."],
+    [
+      ["perms", "Site"],
+      "Project names must start with a lowercase letter or digit and contain only lowercase letters, digits, and hyphens.",
+    ],
+    [
+      ["perms", "site", "--all"],
+      "Usage: project-registry perms [project] [--apply] or project-registry perms --all [--apply].",
+    ],
   ] as const)("rejects invalid arguments %p", (args, message) => {
     const result = projectRegistryCliArgumentsParse(args)
 

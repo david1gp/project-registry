@@ -106,6 +106,8 @@ export function projectRegistryCliArgumentsParse(args: readonly string[]): Resul
   let hasLabels = false
   let clearLabels = false
   let tokenStdin = false
+  let apply = false
+  let all = false
 
   for (let index = 0; index < args.length; index += 1) {
     const argument = args[index]!
@@ -142,6 +144,8 @@ export function projectRegistryCliArgumentsParse(args: readonly string[]): Resul
       "-f",
       "--no-dns",
       "--token-stdin",
+      "--apply",
+      "--all",
     ]
     // svc-only short/follow flags stay unknown everywhere else.
     const svcOnly = argument === "--follow" || argument === "-f" || argument === "-n" || argument.startsWith("-n=")
@@ -153,6 +157,8 @@ export function projectRegistryCliArgumentsParse(args: readonly string[]): Resul
       if (argument === "--clear-oidc-paths") clearOidcPaths = true
       if (argument === "--no-dns") noDns = true
       if (argument === "--token-stdin") tokenStdin = true
+      if (argument === "--apply") apply = true
+      if (argument === "--all") all = true
       continue
     }
 
@@ -476,6 +482,8 @@ export function projectRegistryCliArgumentsParse(args: readonly string[]): Resul
     return createResult({ command: { kind: "version", ...(verbose ? { verbose: true } : {}) }, json, socket })
   if (verbose) return createResultError(op, "Option --verbose requires --version or -V.")
   if (positionals.length === 0) return createResultError(op, "A command is required.")
+  if ((apply || all) && positionals[0] !== "perms")
+    return createResultError(op, "Options --apply and --all are only valid for perms.")
 
   const pairValues: Array<[string, string, keyof ProjectRegistryCliCaddyOptions]> = [
     ["--docs", "--no-docs", "docs"],
@@ -694,6 +702,48 @@ export function projectRegistryCliArgumentsParse(args: readonly string[]): Resul
   ) {
     if (!projectNamePattern.test(value)) return projectNameError(op)
     return createResult({ command: { kind: "project-fix-acl", name: value }, json, socket })
+  }
+  if (
+    subject === "perms" &&
+    value === undefined &&
+    extra.length === 0 &&
+    limit === undefined &&
+    !hasCaddyOptions &&
+    !hasDevCommandOptions &&
+    !hasManagedOptions &&
+    !follow &&
+    devRoot === undefined &&
+    flagName === undefined &&
+    service === undefined &&
+    ownership === undefined &&
+    !noDns &&
+    !hasLabelOptions &&
+    !hasFilterOptions &&
+    !tokenStdin &&
+    !hasStateOptions &&
+    !hasHttp &&
+    owner === undefined &&
+    toOwner === undefined &&
+    sourcePathRewrite === undefined &&
+    before === undefined &&
+    ttlMs === undefined
+  ) {
+    if (all && action !== undefined)
+      return createResultError(
+        op,
+        "Usage: project-registry perms [project] [--apply] or project-registry perms --all [--apply].",
+      )
+    if (action !== undefined && !projectNamePattern.test(action)) return projectNameError(op)
+    return createResult({
+      command: {
+        kind: "perms",
+        ...(action === undefined ? {} : { project: action }),
+        ...(all ? { all: true } : {}),
+        ...(apply ? { apply: true } : {}),
+      },
+      json,
+      socket,
+    })
   }
   if (
     subject === "project" &&

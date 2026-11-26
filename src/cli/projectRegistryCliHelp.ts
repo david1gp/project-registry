@@ -8,6 +8,7 @@ Commands:
   project delete <name> [--service <id>] [--owner <owner>]
   project move <name> --owner <from> --to-owner <to> [--source-path-rewrite <fromPrefix>=<toPrefix>]
   project fix-acl <name>
+  perms [project] [--all] [--apply]
   delete --port <port>
   project history <name> [--owner <owner>] [--limit <n>]
   project access-logs <name> [--owner <owner>] [--limit <n>] [--before <cursor>]
@@ -112,6 +113,16 @@ Split-DNS rollback (local admin command, no daemon round-trip):
                               refuses on tailnet mismatch or externally changed entries.
                               Auth from TAILSCALE_TAILNET and TAILSCALE_API_KEY
                               (or TAILSCALE_ACCESS_TOKEN); optional TAILSCALE_API_BASE.
+
+Shared-root permissions (local command, no daemon round-trip):
+  perms [project] [--apply]
+  perms --all [--apply]
+                              Repair the caller's own files under /projects and /adaptive:
+                              agent umask is 0077, so files created or copied there
+                              (never from /tmp) lose group access for other users.
+                              Defaults to the project of the current directory and
+                              to a dry run; --apply repairs. Exits 1 when a dry run
+                              finds repairs pending.
 
 Project names:
   Start with a lowercase letter or digit; use only lowercase letters, digits, and hyphens.

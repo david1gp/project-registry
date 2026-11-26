@@ -21,6 +21,7 @@ import { projectCliServiceRows } from "./projectCliServiceRows.js"
 import { projectRegistryCliArgumentsParse } from "./projectRegistryCliArgumentsParse.js"
 import { projectRegistryCliHelp } from "./projectRegistryCliHelp.js"
 import { projectRegistryCliOutputFormat } from "./projectRegistryCliOutputFormat.js"
+import { projectRegistryCliPerms } from "./projectRegistryCliPerms.js"
 import { projectRegistryCliRequest } from "./projectRegistryCliRequest.js"
 import { projectRegistryCliServiceLogs } from "./projectRegistryCliServiceLogs.js"
 import { projectRegistryCliSocketResolve } from "./projectRegistryCliSocketResolve.js"
@@ -38,6 +39,9 @@ type CliRunOptions = {
   stderr?: (text: string) => void
   tailscaleFetch?: TailscaleSplitDnsFetch
   tailscaleStateRead?: (path: string) => Promise<string>
+  permsCwd?: () => string
+  permsRoots?: readonly { root: string; group: string }[]
+  permsManagedRoots?: readonly string[]
   docsConfigRead?: (path: string) => Promise<string>
   docsCwd?: () => string
   docsRealpath?: (path: string) => Promise<string>
@@ -711,6 +715,28 @@ export async function projectRegistryCliRun(args: readonly string[], options: Cl
     }
     writeOut(outputR.data)
     return 0
+  }
+  if (invocation.command.kind === "perms") {
+    const command = invocation.command
+    const resultR = await projectRegistryCliPerms({
+      ...(command.project === undefined ? {} : { project: command.project }),
+      ...(command.all === true ? { all: true } : {}),
+      ...(command.apply === true ? { apply: true } : {}),
+      ...(options.permsCwd === undefined ? {} : { cwd: options.permsCwd() }),
+      ...(options.permsRoots === undefined ? {} : { roots: options.permsRoots }),
+      ...(options.permsManagedRoots === undefined ? {} : { managedRoots: options.permsManagedRoots }),
+    })
+    if (!resultR.success) {
+      errorWrite(resultR, invocation.json, writeError)
+      return 1
+    }
+    const outputR = projectRegistryCliOutputFormat(invocation, resultR.data)
+    if (!outputR.success) {
+      errorWrite({ ...outputR, code: "cli.protocol" }, invocation.json, writeError)
+      return 1
+    }
+    writeOut(outputR.data)
+    return resultR.data.applied || resultR.data.repairedCount === 0 ? 0 : 1
   }
   const socketR = projectRegistryCliSocketResolve(invocation.socket, environment)
   if (!socketR.success) {

@@ -144,6 +144,13 @@ function routeCheckRowLine(row: a.InferOutput<typeof routeCheckRowSchema>): stri
 }
 const backendVersionSchema = a.object({ version: a.string() })
 const splitDnsRollbackSchema = a.object({ stateFile: a.string(), restored: a.array(a.string()) })
+const permsSchema = a.object({
+  applied: a.boolean(),
+  checked: a.pipe(a.number(), a.integer(), a.minValue(0)),
+  repairedCount: a.pipe(a.number(), a.integer(), a.minValue(0)),
+  repaired: a.array(a.string()),
+  targets: a.array(a.string()),
+})
 const devLeaseSchema = a.looseObject({
   projectKey: a.object({ owner: a.string(), name: a.string() }),
   serviceId: a.optional(a.string()),
@@ -395,6 +402,11 @@ export function projectRegistryCliOutputFormat(
     }
     parsedData = parsed.output
   }
+  if (command.kind === "perms") {
+    const parsedR = dataParse(permsSchema, data, "perms repair")
+    if (!parsedR.success) return parsedR
+    parsedData = parsedR.data
+  }
   if (command.kind === "dev-ls") {
     const parsedR = dataParse(devListSchema, data, "dev server list")
     if (!parsedR.success) return parsedR
@@ -540,6 +552,17 @@ export function projectRegistryCliOutputFormat(
     const rollback = parsedData as a.InferOutput<typeof splitDnsRollbackSchema>
     if (rollback.restored.length === 0) return createResult("No split-DNS entries to restore.\n")
     return createResult(`restored ${rollback.restored.join(", ")} from ${rollback.stateFile}\n`)
+  }
+  if (command.kind === "perms") {
+    const perms = parsedData as a.InferOutput<typeof permsSchema>
+    const lines = perms.repaired.slice(0, 10).map((path) => `${perms.applied ? "repaired" : "needs repair"} ${path}`)
+    if (perms.repairedCount > perms.repaired.length)
+      lines.push(`... and ${perms.repairedCount - perms.repaired.length} more`)
+    const scope = perms.targets.length > 0 ? ` in ${perms.targets.join(", ")}` : ""
+    lines.push(
+      `${perms.applied ? "Repaired" : "Would repair"} ${perms.repairedCount} of ${perms.checked} owned path(s)${scope}`,
+    )
+    return createResult(`${lines.join("\n")}\n`)
   }
   if (command.kind === "dev-ls") {
     const listed = parsedData as a.InferOutput<typeof devListSchema>

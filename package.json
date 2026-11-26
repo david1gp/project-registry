@@ -116,6 +116,10 @@
     "./web-server/*.js": {
       "types": "./dist/web-server/*.d.ts",
       "import": "./dist/web-server/*.js"
+    },
+    "./perms/*.js": {
+      "types": "./dist/perms/*.d.ts",
+      "import": "./dist/perms/*.js"
     }
   },
   "files": [
