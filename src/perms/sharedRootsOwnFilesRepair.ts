@@ -9,11 +9,11 @@
 import { chmod, chown, lstat, readdir } from "node:fs/promises"
 import { join } from "node:path"
 import { createResult, createResultError } from "#result"
-import { sharedRootsPolicy } from "./sharedRootsPolicy.js"
+import { type SharedRootsPolicyEntry, sharedRootsPolicy } from "./sharedRootsPolicy.js"
 
 export type SharedRootsOwnFilesRepairOptions = {
   /** Defaults to sharedRootsPolicy. Tests inject a tmp root with the caller's primary group. */
-  roots?: readonly { root: string; group: string }[]
+  roots?: readonly SharedRootsPolicyEntry[]
   /** Must be one of the configured roots. */
   root?: string
   /** Restrict to top-level directory names (defaults to /projects scope when root is unset). */

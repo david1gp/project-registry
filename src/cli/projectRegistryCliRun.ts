@@ -2,6 +2,7 @@ import { readFile } from "node:fs/promises"
 import { basename, resolve } from "node:path"
 import * as a from "valibot"
 import { createResult, createResultError, type Result, type ResultErr } from "#result"
+import type { SharedRootsPolicyEntry } from "../perms/sharedRootsPolicy.js"
 import type { Project } from "../project/Project.js"
 import { type ProjectCanonical, projectCanonicalSchema } from "../project/projectCanonicalSchema.js"
 import { projectFilter } from "../project/projectFilter.js"
@@ -40,7 +41,7 @@ type CliRunOptions = {
   tailscaleFetch?: TailscaleSplitDnsFetch
   tailscaleStateRead?: (path: string) => Promise<string>
   permsCwd?: () => string
-  permsRoots?: readonly { root: string; group: string }[]
+  permsRoots?: readonly SharedRootsPolicyEntry[]
   permsManagedRoots?: readonly string[]
   docsConfigRead?: (path: string) => Promise<string>
   docsCwd?: () => string

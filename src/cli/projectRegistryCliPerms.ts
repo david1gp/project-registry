@@ -2,7 +2,7 @@ import { lstat } from "node:fs/promises"
 import { isAbsolute, join, relative, resolve, sep } from "node:path"
 import { createResult, createResultError, type Result } from "#result"
 import { sharedRootsOwnFilesRepair } from "../perms/sharedRootsOwnFilesRepair.js"
-import { sharedRootsPolicy } from "../perms/sharedRootsPolicy.js"
+import { type SharedRootsPolicyEntry, sharedRootsPolicy } from "../perms/sharedRootsPolicy.js"
 
 export type ProjectRegistryCliPermsResult = {
   applied: boolean
@@ -37,7 +37,7 @@ export async function projectRegistryCliPerms(options: {
   all?: boolean
   apply?: boolean
   cwd?: string
-  roots?: readonly { root: string; group: string }[]
+  roots?: readonly SharedRootsPolicyEntry[]
   managedRoots?: readonly string[]
 }): Promise<Result<ProjectRegistryCliPermsResult> & { hint?: string }> {
   const op = "projectRegistryCliPerms"
