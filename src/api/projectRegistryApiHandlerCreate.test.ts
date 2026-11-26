@@ -3728,6 +3728,22 @@ describe("dev servers API enabled lifecycle (D2)", () => {
     }
     const runner = async (command: string, args: readonly string[], input: string) => {
       calls.push({ command, args, input })
+      if (command === "ss") {
+        const start = calls.filter((call) => call.command === "systemd-run").at(-1)
+        const port = start?.args
+          .find((arg) => arg.startsWith("--setenv=PORT="))
+          ?.split("=")
+          .at(-1)
+        return createResult({
+          exitCode: 0,
+          stdout: port ? `LISTEN 0 128 127.0.0.1:${port} 0.0.0.0:* cgroup:/test/unit\n` : "",
+          stderr: "",
+        })
+      }
+      if (command === "systemctl" && args[0] === "show")
+        return createResult({ exitCode: 0, stdout: "/test/unit\n", stderr: "" })
+      if (command === "systemctl" && args[0] === "is-active" && calls.some((call) => call.command === "systemd-run"))
+        return createResult({ exitCode: 0, stdout: "active\n", stderr: "" })
       const behavior = options.runnerBehavior ?? (() => ({ exitCode: 0, stdout: "", stderr: "" }))
       return createResult(behavior({ command, args, input }))
     }
@@ -3908,7 +3924,7 @@ describe("dev servers API enabled lifecycle (D2)", () => {
 
     expect(started.response.status).toBe(400)
     expect(started.body).toMatchObject({ success: false, error: { code: "request.invalid" } })
-    expect(wired.calls).toEqual([])
+    expect(wired.calls).toEqual([{ command: "ss", args: ["-H", "-ltn", "--cgroup"], input: "" }])
   })
 
   test("up maps a symlink escape out of the dev root to 403, never 500", async () => {
